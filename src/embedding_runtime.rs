@@ -76,10 +76,7 @@ fn coreml_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
 
-#[cfg(all(
-    feature = "gpu-cuda",
-    any(target_os = "linux", target_os = "windows")
-))]
+#[cfg(all(feature = "gpu-cuda", any(target_os = "linux", target_os = "windows")))]
 fn cuda_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     use ort::execution_providers::CUDAExecutionProvider;
     Some(finalize_dispatch(
@@ -88,10 +85,7 @@ fn cuda_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     ))
 }
 
-#[cfg(not(all(
-    feature = "gpu-cuda",
-    any(target_os = "linux", target_os = "windows")
-)))]
+#[cfg(not(all(feature = "gpu-cuda", any(target_os = "linux", target_os = "windows"))))]
 fn cuda_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
@@ -155,14 +149,16 @@ pub fn configure_embedding_runtime() {
         return;
     };
 
-    let committed = ort::init()
-        .with_execution_providers([dispatch])
-        .commit();
+    let committed = ort::init().with_execution_providers([dispatch]).commit();
 
     if committed {
         eprintln!(
             "codanna: local embeddings configured for {provider_name}{}",
-            if strict { " (strict)" } else { " with CPU fallback" }
+            if strict {
+                " (strict)"
+            } else {
+                " with CPU fallback"
+            }
         );
     } else {
         eprintln!(
