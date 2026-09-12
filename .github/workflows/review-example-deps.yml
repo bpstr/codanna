@@ -1,0 +1,33 @@
+name: Review example dependencies
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-example-deps.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Install only locked dependencies without lifecycle scripts
+        working-directory: examples/typescript/react
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Export dependency tree
+        run: tar -czf "$RUNNER_TEMP/example-deps.tar.gz" -C examples/typescript/react node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-deps
+          path: ${{ runner.temp }}/example-deps.tar.gz
+          retention-days: 1
+          compression-level: 0
