@@ -3,7 +3,7 @@ name: Review workbench
 on:
   push:
     branches: [work/review-20260912]
-    paths: [.github/workflows/review-workbench.yml]
+    paths: [.github/workflows/review-workbench.yml, review.continuation-fixes.py]
 
 permissions:
   contents: read
@@ -21,7 +21,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Preserve reviewed continuation
-        run: cat review.continuation.part*.b64 > "$RUNNER_TEMP/continuation.b64"
+        run: |
+          cat review.continuation.part*.b64 > "$RUNNER_TEMP/continuation.b64"
+          cp review.continuation-fixes.py "$RUNNER_TEMP/continuation-fixes.py"
       - uses: actions/checkout@v6
         with:
           ref: 0d0a8f5e5678744ed7fd1764f70f537c2e331a07
@@ -58,6 +60,7 @@ jobs:
           Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').write_text('\n'.join(str(p) for p, _ in prepared if p.suffix == '.rs'))
           print(f'Applied {len(prepared)} verified source changes')
           PY
+          python3 "$RUNNER_TEMP/continuation-fixes.py"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
