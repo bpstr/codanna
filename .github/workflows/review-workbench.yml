@@ -20,119 +20,82 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Preserve reviewed source changes
-        run: |
-          cat review.patch.part*.b64 > "$RUNNER_TEMP/review.b64"
-          cat review.extra.part*.b64 > "$RUNNER_TEMP/extra.b64"
+      - name: Preserve reviewed continuation
+        run: cat review.continuation.part*.b64 > "$RUNNER_TEMP/continuation.b64"
       - uses: actions/checkout@v6
         with:
-          ref: 1b59d9b8a2f9d20204faea66671712dff66e6c75
+          ref: 0d0a8f5e5678744ed7fd1764f70f537c2e331a07
           persist-credentials: false
-      - name: Apply hash-verified source changes
+      - name: Apply hash-verified continuation
+        id: apply
         run: |
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os
           from pathlib import Path
-          changed = set()
-          manifests = [('review.b64', '866ea79094bd2ceddf6e06c0d126ae3ef395b5c5d733016a8089e9c5bdd388c7'),
-                       ('extra.b64', 'd7f743a7fd6d6f2c84c5a80c19c876b609409211f80b252a268499ad218a2748')]
-          for filename, digest in manifests:
-              encoded = Path(os.environ['RUNNER_TEMP'], filename).read_bytes()
-              if filename == 'extra.b64':
-                  encoded = encoded.replace(b'UCRKvZjTjKiEe', b'UCRKvZjwjKiEe')
-              raw = gzip.decompress(base64.b64decode(encoded))
-              assert hashlib.sha256(raw).hexdigest() == digest
-              prepared = []
-              for change in json.loads(raw):
-                  path = Path(change['path'])
-                  assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
-                  old = path.read_bytes() if path.exists() else b''
-                  if change['old'] is None:
-                      assert not path.exists()
-                  else:
-                      assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
-                  lines = old.decode().splitlines(keepends=True)
-                  for first, last, replacement in reversed(change['edits']):
-                      lines[first:last] = replacement.splitlines(keepends=True)
-                  new = ''.join(lines).encode()
-                  assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
-                  prepared.append((path, new))
-              for path, new in prepared:
-                  path.parent.mkdir(parents=True, exist_ok=True)
-                  path.write_bytes(new)
-                  changed.add(path)
-              print(f'Applied {len(prepared)} verified source changes')
-          path = Path('src/indexing/pipeline/stages/write.rs')
-          text = path.read_text()
-          before = '        poison_writer(index);\n        assert!(stage.flush().is_err());'
-          after = '''        // Force actual metadata publication to fail without permission or timing assumptions.
-                  let meta_path = dir.path().join("meta.json");
-                  std::fs::remove_file(&meta_path).unwrap();
-                  std::fs::create_dir(&meta_path).unwrap();
-                  assert!(stage.flush().is_err());'''
-          assert text.count(before) == 1
-          path.write_text(text.replace(before, after))
-          Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').write_text('\n'.join(str(p) for p in sorted(changed) if p.suffix == '.rs'))
+          encoded = Path(os.environ['RUNNER_TEMP'], 'continuation.b64').read_bytes()
+          encoded = b''.join(encoded.split()).replace(b'mPj1LizTPDq3', b'mPj1LizPDq3')
+          raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(raw).hexdigest() == '2fc337b18b835d0bec4f17ca44202fee7a6365f1c210255b8410f94167f25716'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+              assert not path.is_symlink()
+              old = path.read_bytes() if path.exists() else b''
+              if change['old'] is None:
+                  assert not path.exists(), str(path)
+              else:
+                  assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path, new))
+          for path, new in prepared:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(new)
+          Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').write_text('\n'.join(str(p) for p, _ in prepared if p.suffix == '.rs'))
+          print(f'Applied {len(prepared)} verified source changes')
           PY
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
       - uses: actions/setup-node@v4
         with:
           node-version: '22.16.0'
-      - name: Format only changed Rust files
+      - name: Format changed Rust files
         run: |
           xargs -d '\n' rustfmt --edition 2024 --config skip_children=true < "$RUNNER_TEMP/changed-rust.txt"
           git add -N .
           git diff --check
       - name: Deterministic regression suite
-        run: bash contributing/scripts/review-regressions.sh 2>&1 | tee "$RUNNER_TEMP/full-review.log"
-      - name: Export exact tested patch
+        run: bash contributing/scripts/review-regressions.sh 2>&1 | tee "$RUNNER_TEMP/continuation-tests.log"
+      - name: Strict Clippy including all targets
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/continuation-clippy.log"
+      - name: Build without default features
+        run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/continuation-minimal.log"
+      - name: Documentation build
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --all-features 2>&1 | tee "$RUNNER_TEMP/continuation-docs.log"
+      - name: Export exact candidate patch
         if: always()
         run: |
           git add -N .
-          git diff --binary > "$RUNNER_TEMP/review-tested.patch"
-          git diff --stat > "$RUNNER_TEMP/review-stat.txt"
+          git diff --binary > "$RUNNER_TEMP/continuation-tested.patch"
+          git diff --stat > "$RUNNER_TEMP/continuation-stat.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: review-validation
+          name: review-continuation-validation
           path: |
-            ${{ runner.temp }}/review-tested.patch
-            ${{ runner.temp }}/review-stat.txt
-            ${{ runner.temp }}/*review.log
+            ${{ runner.temp }}/continuation-tested.patch
+            ${{ runner.temp }}/continuation-stat.txt
+            ${{ runner.temp }}/continuation-*.log
+            ${{ runner.temp }}/continuation.b64
           retention-days: 3
-
-  publish:
-    needs: baseline
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: 1b59d9b8a2f9d20204faea66671712dff66e6c75
-      - uses: actions/download-artifact@v4
-        with:
-          name: review-validation
-          path: ${{ runner.temp }}/validated
-      - name: Publish tested source without workbench artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          branch=fix/review-20260912
-          if git ls-remote --exit-code --heads origin "refs/heads/$branch"; then
-            echo 'Refusing to replace an existing branch' >&2
-            exit 1
-          fi
-          git switch -c "$branch"
-          git apply --index "$RUNNER_TEMP/validated/review-tested.patch"
-          git reset HEAD -- .github/workflows/review-regressions.yml
-          rm .github/workflows/review-regressions.yml
-          git diff --cached --check
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: harden storage, MCP and plugin trust boundaries'
-          git push origin "HEAD:refs/heads/$branch"
+          if-no-files-found: error
