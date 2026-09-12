@@ -20,6 +20,11 @@ fn hardening_symbol_cache_from_index_visits_every_symbol() {
     }
     index.commit_batch().unwrap();
 
+    let empty = SymbolLookupCache::for_pending_relationships(&index, &[]).unwrap();
+    assert!(
+        empty.is_empty(),
+        "an empty resolution pass must not hydrate even an existing corpus"
+    );
     let cache = SymbolLookupCache::from_index(&index).unwrap();
     assert_eq!(cache.len(), 257);
     assert!(cache.get(SymbolId::new(257).unwrap()).is_some());

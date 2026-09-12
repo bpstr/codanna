@@ -404,7 +404,8 @@ pub use crate::parsing::CallerContext;
 /// In-memory symbol cache for O(1) lookups during Phase 2 resolution.
 ///
 /// Built during Phase 1 INDEX stage by retaining symbols after Tantivy write.
-/// Provides lock-free concurrent reads for parallel resolution.
+/// DashMap provides shard-locked concurrent reads for parallel resolution.
+/// Returned lookup values are owned snapshots; map entry guards stay local.
 ///
 /// Key design:
 /// - `by_id`: SymbolId → Symbol for direct lookups
@@ -870,6 +871,19 @@ impl PipelineSymbolCache for SymbolLookupCache {
 }
 
 impl SymbolLookupCache {
+    /// Do not hydrate a repository-wide cache when Phase 2 has no work.
+    /// A nonempty set still requires the complete corpus for cross-file resolution.
+    pub fn for_pending_relationships(
+        index: &crate::storage::DocumentIndex,
+        unresolved: &[UnresolvedRelationship],
+    ) -> PipelineResult<Self> {
+        if unresolved.is_empty() {
+            Ok(Self::new())
+        } else {
+            Self::from_index(index)
+        }
+    }
+
     /// Build cache from all symbols in a DocumentIndex.
     ///
     /// [PIPELINE API] Used for single-file indexing when we need a complete cache
@@ -878,8 +892,9 @@ impl SymbolLookupCache {
     /// Note: This queries Tantivy for all symbols, which is expensive for large indexes.
     /// For bulk indexing, prefer building the cache during INDEX stage.
     pub fn from_index(index: &crate::storage::DocumentIndex) -> PipelineResult<Self> {
-        // Get total count to pre-allocate
-        let count = index.document_count().unwrap_or(0) as usize;
+        // Relationships, imports and metadata are documents too. Reserve for
+        // symbols only, and never hide a failed cardinality query.
+        let count = index.count_symbols()?;
         let cache = Self::with_capacity(count);
 
         // Visit every symbol row without a fixed result cap. `get_all_symbols`

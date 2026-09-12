@@ -411,8 +411,10 @@ mod review_metadata_tests {
     #[test]
     fn hardening_review_metadata_corruption_survives_load_and_save_attempts() {
         let dir = tempfile::TempDir::new().unwrap();
-        let mut settings = Settings::default();
-        settings.index_path = dir.path().to_path_buf();
+        let settings = Settings {
+            index_path: dir.path().to_path_buf(),
+            ..Settings::default()
+        };
         let settings = Arc::new(settings);
         let facade = IndexFacade::new(settings.clone()).unwrap();
         let path = dir.path().join("index.meta");

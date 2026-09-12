@@ -281,7 +281,9 @@ impl UnifiedWatcher {
             // truth decides, not event kind -- a dir rename's to-side
             // arrives as Modify(Name), never Create.
             if path.is_dir() {
-                self.handle_created_directory(&path).await;
+                if let Err(error) = self.handle_created_directory(&path).await {
+                    tracing::error!("[watcher] created-directory discovery incomplete: {error}");
+                }
                 continue;
             }
 
@@ -363,16 +365,24 @@ impl UnifiedWatcher {
     /// traversable directory of the new subtree (ignore chains anchored
     /// at the root prune ignored trees), then route the files already
     /// inside through the normal debounce -> eligibility -> reindex path.
-    async fn handle_created_directory(&mut self, path: &Path) {
+    async fn handle_created_directory(&mut self, path: &Path) -> Result<(), WatchError> {
         if !self.handler_roots.iter().any(|r| path.starts_with(r)) {
-            return;
+            return Ok(());
         }
 
         let (dirs, files) = {
             let facade = self.facade.read().await;
             (
-                facade.discoverable_dirs(path),
-                facade.discoverable_files(path),
+                facade
+                    .discoverable_dirs(path)
+                    .map_err(|error| WatchError::EventError {
+                        details: error.to_string(),
+                    })?,
+                facade
+                    .discoverable_files(path)
+                    .map_err(|error| WatchError::EventError {
+                        details: error.to_string(),
+                    })?,
             )
         };
 
@@ -398,6 +408,7 @@ impl UnifiedWatcher {
         for file in files {
             self.debouncer.record(file);
         }
+        Ok(())
     }
 
     /// Recover from a full native-event queue by deriving state from the

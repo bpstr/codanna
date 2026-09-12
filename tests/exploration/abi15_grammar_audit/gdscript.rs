@@ -1,12 +1,12 @@
 //! GDScript grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::gdscript::audit::GdscriptParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "GDScript",
     file_extension: "gd",
-    grammar_json_path: "contributing/parsers/gdscript/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/gdscript/node-types.json"),
     example_file_path: "examples/gdscript/comprehensive.gd",
     output_dir: "contributing/parsers/gdscript",
 };

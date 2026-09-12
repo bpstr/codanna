@@ -14,9 +14,12 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { jsonForScript, secureHtml, openBrowser } from "../shared/safety.cjs";
+import { assertNode } from "../shared/runtime.cjs";
 import { readDump } from "./lib/dump.mjs";
 import { buildData, parseGroup, DEFAULT_KINDS, RELATIONS } from "./lib/adapter.mjs";
 import { readVendorSource, findNetworkPrimitives } from "./lib/vendor.mjs";
+
+assertNode();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);

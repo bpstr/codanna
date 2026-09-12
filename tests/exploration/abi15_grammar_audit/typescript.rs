@@ -1,12 +1,12 @@
 //! TypeScript grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::typescript::audit::TypeScriptParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "TypeScript",
     file_extension: "ts",
-    grammar_json_path: "contributing/parsers/typescript/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/typescript/node-types.json"),
     example_file_path: "examples/typescript/comprehensive.ts",
     output_dir: "contributing/parsers/typescript",
 };

@@ -468,8 +468,10 @@ mod review_path_tests {
         std::fs::write(workspace.join("src/good.rs"), "fn good() {} ").unwrap();
         std::fs::write(workspace.join("excluded.rs"), "fn excluded() {} ").unwrap();
         std::fs::write(temp.path().join("outside.rs"), "fn outside() {} ").unwrap();
-        let mut settings = Settings::default();
-        settings.workspace_root = Some(workspace.clone());
+        let mut settings = Settings {
+            workspace_root: Some(workspace.clone()),
+            ..Settings::default()
+        };
         settings.indexing.indexed_paths = vec!["src".into()];
         assert!(authorized_reindex_paths(&settings, Some(&["src/good.rs".into()])).is_ok());
         for escape in ["../outside.rs", "excluded.rs", "src/../../outside.rs"] {
@@ -495,8 +497,10 @@ mod review_path_tests {
         let secret = temp.path().join("secret.rs");
         std::fs::write(&secret, "fn secret() {} ").unwrap();
         std::os::unix::fs::symlink(&secret, workspace.join("link.rs")).unwrap();
-        let mut settings = Settings::default();
-        settings.workspace_root = Some(workspace);
+        let settings = Settings {
+            workspace_root: Some(workspace),
+            ..Settings::default()
+        };
         assert!(authorized_reindex_paths(&settings, Some(&["link.rs".into()])).is_err());
     }
 }

@@ -21,7 +21,9 @@ run_tests() {
 }
 
 cargo test --locked --all-features --no-run
-run_tests --lib hardening_review_
+status=0
+run_tests --lib hardening_review_ || status=1
+run_tests --test hardening_symbol_cache hardening_symbol_cache_ || status=1
 for module in \
   'documents::' \
   'parsing::factory::' \
@@ -29,9 +31,18 @@ for module in \
   'vector::storage::' \
   'plugins::resolver::' \
   'mcp::requests::' \
-  'indexing::pipeline::stages::write::'
+  'indexing::pipeline::stages::write::' \
+  'indexing::pipeline::stages::context::' \
+  'indexing::walker::'
 do
-  run_tests --lib "$module"
+  run_tests --lib "$module" || status=1
 done
-run_tests --test cli_tests test_serve_http_sessionless
-node --test tests/security/plugin-boundaries.test.cjs
+run_tests --test cli_tests test_serve_http_sessionless || status=1
+run_tests --test cli_tests test_review_cli_contracts || status=1
+run_tests --test parsers_tests test_typescript_alias_resolution || status=1
+run_tests --test parsers_tests test_typescript_pipeline_resolution || status=1
+run_tests --test integration_tests test_parse_command || status=1
+run_tests --test exploration_tests abi15_grammar_audit || status=1
+node --test tests/security/plugin-boundaries.test.cjs || status=1
+
+exit "$status"

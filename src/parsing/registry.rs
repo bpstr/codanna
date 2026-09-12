@@ -220,6 +220,12 @@ impl LanguageRegistry {
         self.definitions.get(&id).map(|def| def.as_ref())
     }
 
+    /// Clone a definition handle so callers can construct a behavior after
+    /// releasing the registry mutex.
+    pub(crate) fn shared_definition(&self, id: LanguageId) -> Option<Arc<dyn LanguageDefinition>> {
+        self.definitions.get(&id).cloned()
+    }
+
     /// Get a language by file extension
     ///
     /// Returns the language definition if a mapping exists.

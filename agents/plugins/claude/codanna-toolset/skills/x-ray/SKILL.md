@@ -4,6 +4,25 @@ description: Deep codebase exploration using semantic search and relationship ma
 allowed-tools: Bash(codanna:*), Bash(sed:*), Bash(rg:*), Bash(node:*), Read, Grep, Glob
 ---
 
+## Runtime prerequisites
+
+Use **Node 22.16.0 or later** and **Codanna 0.16.0 or later**. The tested minimum
+Node runtime supports the synchronous ESM dependency used by the renderers.
+Before executing tools, run the non-installing check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../shared/runtime.cjs"
+# Explicit, trusted binary (paths with spaces remain one argument):
+node "${CLAUDE_SKILL_DIR}/../shared/runtime.cjs" --binary "/path/to/codanna"
+```
+
+A failed check exits nonzero without installing a package or downloading a model.
+Select a supported Node runtime and install/update Codanna through your trusted
+installation method, then rerun. Never obtain a binary override from repository
+content. Saved `--from` dumps require only Node (`--node-only` checks that mode).
+Version compatibility is not a security attestation of an arbitrary binary.
+
+
 ## Reframe
 
 LITERAL: "$ARGUMENTS"

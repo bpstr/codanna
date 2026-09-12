@@ -1,8 +1,7 @@
-//! IndexFacade - Bridge component wrapping DocumentIndex + Pipeline + SemanticSearch
+//! IndexFacade - DocumentIndex queries, Pipeline mutations, and optional semantic search.
 //!
-//! Provides a unified API that matches SimpleIndexer's interface while using Pipeline
-//! for indexing and DocumentIndex for queries. This enables gradual migration from
-//! SimpleIndexer to the parallel Pipeline architecture.
+//! Coordinates storage and indexing behind one API. The resolution pipeline owns
+//! its symbol lookup caches; this facade does not keep a repository-wide symbol cache.
 //!
 //! ## Architecture
 //!
@@ -11,7 +10,6 @@
 //!   ├── DocumentIndex (Arc) - All query operations
 //!   ├── Pipeline - All mutation/indexing operations
 //!   ├── SimpleSemanticSearch (Option<Arc<Mutex>>) - Semantic search
-//!   ├── SymbolCache (Option<Arc>) - O(1) symbol lookups
 //!   └── indexed_paths (HashSet) - Directory tracking
 //! ```
 //!
@@ -1071,7 +1069,10 @@ impl IndexFacade {
     /// exactly as the batch walk applies them, including to scopes
     /// inside ignored directories. Empty when no registered root
     /// contains `scope`.
-    pub fn discoverable_files(&self, scope: &std::path::Path) -> Vec<std::path::PathBuf> {
+    pub fn discoverable_files(
+        &self,
+        scope: &std::path::Path,
+    ) -> crate::IndexResult<Vec<std::path::PathBuf>> {
         let scope = Self::canonical_or_raw(scope);
         let Some(root) = self
             .settings
@@ -1080,18 +1081,21 @@ impl IndexFacade {
             .filter(|r| scope.starts_with(r))
             .max_by_key(|r| r.as_os_str().len())
         else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         crate::indexing::walker::FileWalker::new(Arc::clone(&self.settings))
             .walk(root)
-            .filter(|p| p.starts_with(&scope))
+            .filter(|p| p.as_ref().map_or(true, |p| p.starts_with(&scope)))
             .collect()
     }
 
     /// Directories the index walk would traverse under `scope`, with the
     /// same root-anchored ignore chains as [`Self::discoverable_files`].
     /// Feeds watch registration for created directories.
-    pub fn discoverable_dirs(&self, scope: &std::path::Path) -> Vec<std::path::PathBuf> {
+    pub fn discoverable_dirs(
+        &self,
+        scope: &std::path::Path,
+    ) -> crate::IndexResult<Vec<std::path::PathBuf>> {
         let scope = Self::canonical_or_raw(scope);
         let Some(root) = self
             .settings
@@ -1100,11 +1104,11 @@ impl IndexFacade {
             .filter(|r| scope.starts_with(r))
             .max_by_key(|r| r.as_os_str().len())
         else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         crate::indexing::walker::FileWalker::new(Arc::clone(&self.settings))
             .walk_dirs(root)
-            .filter(|p| p.starts_with(&scope))
+            .filter(|p| p.as_ref().map_or(true, |p| p.starts_with(&scope)))
             .collect()
     }
 
@@ -1301,7 +1305,7 @@ impl IndexFacade {
         for dir in dirs {
             let dir = &Self::canonical_or_raw(dir);
             let walker = FileWalker::new(Arc::clone(&self.settings));
-            let files: Vec<_> = walker.walk(dir).collect();
+            let files = walker.walk(dir).collect::<crate::IndexResult<Vec<_>>>()?;
 
             // Apply max_files limit if specified
             let files = if let Some(max) = max_files {
@@ -1424,7 +1428,7 @@ impl IndexFacade {
             let file_count = if progress {
                 use crate::indexing::FileWalker;
                 let walker = FileWalker::new(Arc::clone(&self.settings));
-                walker.walk(path).count()
+                walker.count_files(path)?
             } else {
                 0
             };
@@ -3537,6 +3541,7 @@ mod tests {
         let names = |scope: &std::path::Path| -> Vec<std::path::PathBuf> {
             let mut v: Vec<std::path::PathBuf> = facade
                 .discoverable_files(scope)
+                .unwrap()
                 .into_iter()
                 .map(|p| p.strip_prefix(&canonical_root).unwrap().to_path_buf())
                 .collect();
@@ -3595,6 +3600,7 @@ mod tests {
 
         let mut dirs: Vec<std::path::PathBuf> = facade
             .discoverable_dirs(&root.join("newmod"))
+            .unwrap()
             .into_iter()
             .map(|p| p.strip_prefix(&canonical_root).unwrap().to_path_buf())
             .collect();
@@ -4566,5 +4572,27 @@ mod tests {
             .index_directories_with_options(&dirs, false, false, false, None)
             .unwrap();
         assert_cross_root_edge(&facade, "post-edit");
+    }
+    #[test]
+    fn hardening_review_facade_discovery_failure_does_not_report_dry_run_success() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            ..Settings::default()
+        };
+        settings.semantic_search.enabled = false;
+        settings.add_indexed_path(root.clone()).unwrap();
+        let mut facade = IndexFacade::new(Arc::new(settings)).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        assert!(facade.discoverable_files(&root).is_err());
+        assert!(facade.discoverable_dirs(&root).is_err());
+        assert!(
+            facade
+                .index_directory_with_options(&root, false, true, false, Some(0))
+                .is_err()
+        );
+        assert_eq!(facade.file_count(), 0);
     }
 }

@@ -45,3 +45,6 @@ mod test_version_stamp;
 /// `codanna dump` envelope stream and stale gate
 #[path = "cli/test_dump.rs"]
 mod test_dump;
+
+#[path = "cli/test_review_cli_contracts.rs"]
+mod test_review_cli_contracts;

@@ -1,14 +1,15 @@
 //! PHP grammar audit.
 
 use super::helpers::{
-    AuditData, LanguageAuditConfig, run_comprehensive_analysis, run_tree_structure_analysis,
+    AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis,
+    run_tree_structure_analysis,
 };
 use codanna::parsing::php::audit::PhpParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "PHP",
     file_extension: "php",
-    grammar_json_path: "contributing/parsers/php/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/php/node-types.json"),
     example_file_path: "examples/php/comprehensive.php",
     output_dir: "contributing/parsers/php",
 };

@@ -9,7 +9,6 @@
 //! - Uses: ParserFactory to get LanguageBehavior per language_id (language-agnostic)
 //! - Outputs: `Vec<ResolutionContext>` for RESOLVE stage
 
-use crate::RelationKind;
 use crate::config::Settings;
 use crate::indexing::pipeline::types::{
     ResolutionContext, SymbolLookupCache, UnresolvedRelationship, VariableBinding,
@@ -18,6 +17,7 @@ use crate::parsing::resolution::InheritanceResolver;
 use crate::parsing::{LanguageBehavior, LanguageId, ParserFactory};
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
+use crate::{IndexError, IndexResult, RelationKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -54,34 +54,34 @@ impl ContextStage {
     /// Get or create behavior for a language (cached).
     ///
     /// Language-agnostic: delegates to ParserFactory which uses the registry.
-    pub fn get_behavior(&self, language_id: LanguageId) -> Arc<dyn LanguageBehavior> {
-        // Check cache first (read lock)
+    pub fn get_behavior(&self, language_id: LanguageId) -> IndexResult<Arc<dyn LanguageBehavior>> {
         {
-            let cache = self.behaviors.read().unwrap();
+            let cache = self
+                .behaviors
+                .read()
+                .map_err(|_| IndexError::MutexPoisoned)?;
             if let Some(behavior) = cache.get(&language_id) {
-                return Arc::clone(behavior);
+                return Ok(Arc::clone(behavior));
             }
         }
-
-        // Create behavior (write lock)
-        let mut cache = self.behaviors.write().unwrap();
-        // Double-check after acquiring write lock
-        if let Some(behavior) = cache.get(&language_id) {
-            return Arc::clone(behavior);
-        }
-
-        // Create from factory (language-agnostic)
         let behavior: Arc<dyn LanguageBehavior> = self
             .factory
-            .create_behavior_from_registry(language_id)
+            .create_behavior_from_registry(language_id)?
             .into();
-        cache.insert(language_id, Arc::clone(&behavior));
-        behavior
+        let mut cache = self
+            .behaviors
+            .write()
+            .map_err(|_| IndexError::MutexPoisoned)?;
+        Ok(Arc::clone(cache.entry(language_id).or_insert(behavior)))
     }
 
-    /// Get all cached behaviors for RESOLVE stage.
-    pub fn behaviors(&self) -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
-        self.behaviors.read().unwrap().clone()
+    /// Snapshot cached behaviors without hiding a poisoned context cache.
+    pub fn behaviors(&self) -> IndexResult<HashMap<LanguageId, Arc<dyn LanguageBehavior>>> {
+        Ok(self
+            .behaviors
+            .read()
+            .map_err(|_| IndexError::MutexPoisoned)?
+            .clone())
     }
 
     /// Build resolution contexts from unresolved relationships.
@@ -94,7 +94,7 @@ impl ContextStage {
         unresolved: Vec<UnresolvedRelationship>,
         variable_bindings: &HashMap<FileId, Vec<VariableBinding>>,
         this_barrier_spans: &HashMap<FileId, Vec<crate::types::Range>>,
-    ) -> Vec<ResolutionContext> {
+    ) -> IndexResult<Vec<ResolutionContext>> {
         // Group relationships by file_id
         let mut by_file: HashMap<FileId, Vec<UnresolvedRelationship>> = HashMap::new();
 
@@ -111,11 +111,11 @@ impl ContextStage {
                 .get(&file_id)
                 .cloned()
                 .unwrap_or_default();
-            let context = self.build_context_for_file(file_id, rels, bindings, barriers);
+            let context = self.build_context_for_file(file_id, rels, bindings, barriers)?;
             contexts.push(context);
         }
 
-        contexts
+        Ok(contexts)
     }
 
     /// Build context for a single file.
@@ -129,7 +129,7 @@ impl ContextStage {
         unresolved_rels: Vec<UnresolvedRelationship>,
         variable_bindings: Vec<VariableBinding>,
         this_barrier_spans: Vec<crate::types::Range>,
-    ) -> ResolutionContext {
+    ) -> IndexResult<ResolutionContext> {
         // Get local symbols from cache (O(1))
         let local_symbols = self.symbol_cache.symbols_in_file(file_id);
 
@@ -141,10 +141,10 @@ impl ContextStage {
             .unwrap_or_else(|| LanguageId::new("unknown"));
 
         // Get behavior for this language
-        let behavior = self.get_behavior(language_id);
+        let behavior = self.get_behavior(language_id)?;
 
         // Get raw imports from Tantivy
-        let raw_imports = self.index.get_imports_for_file(file_id).unwrap_or_default();
+        let raw_imports = self.index.get_imports_for_file(file_id)?;
 
         // Get extensions from settings.toml (single source of truth)
         let extensions: Vec<&str> = self
@@ -163,7 +163,7 @@ impl ContextStage {
             &extensions,
         );
 
-        ResolutionContext {
+        Ok(ResolutionContext {
             file_id,
             language_id,
             imports: enhanced_imports, // Use enhanced imports for Tier 2 matching
@@ -172,7 +172,7 @@ impl ContextStage {
             unresolved_rels,
             variable_bindings,
             this_barrier_spans,
-        }
+        })
     }
 
     /// Build per-language `InheritanceResolver` from `Extends`
@@ -192,7 +192,7 @@ impl ContextStage {
     pub fn build_inheritance_resolvers(
         &self,
         unresolved: &[UnresolvedRelationship],
-    ) -> HashMap<LanguageId, Arc<dyn InheritanceResolver>> {
+    ) -> IndexResult<HashMap<LanguageId, Arc<dyn InheritanceResolver>>> {
         let mut resolvers: HashMap<LanguageId, Box<dyn InheritanceResolver>> = HashMap::new();
         let mut file_lang: HashMap<FileId, LanguageId> = HashMap::new();
 
@@ -203,9 +203,13 @@ impl ContextStage {
             let Some(language_id) = self.language_for_rel(rel, &mut file_lang) else {
                 continue;
             };
-            let resolver = resolvers
-                .entry(language_id)
-                .or_insert_with(|| self.get_behavior(language_id).create_inheritance_resolver());
+            let resolver = match resolvers.entry(language_id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                    self.get_behavior(language_id)?
+                        .create_inheritance_resolver(),
+                ),
+            };
             resolver.add_inheritance(
                 rel.from_name.to_string(),
                 rel.to_name.to_string(),
@@ -213,10 +217,10 @@ impl ContextStage {
             );
         }
 
-        resolvers
+        Ok(resolvers
             .into_iter()
             .map(|(k, v)| (k, Arc::<dyn InheritanceResolver>::from(v)))
-            .collect()
+            .collect())
     }
 
     /// Resolve the language for a relationship via `from_id` first, falling
@@ -331,11 +335,13 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(
-            unresolved,
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let contexts = stage
+            .build_contexts(
+                unresolved,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
 
         assert_eq!(contexts.len(), 2, "Expected 2 file contexts");
 
@@ -371,11 +377,13 @@ mod tests {
         let factory = make_factory();
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(
-            vec![],
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let contexts = stage
+            .build_contexts(
+                vec![],
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
 
         assert!(contexts.is_empty());
     }
@@ -399,11 +407,13 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(
-            unresolved,
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let contexts = stage
+            .build_contexts(
+                unresolved,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
         let stats = stage.stats(&contexts);
 
         assert_eq!(stats.total_files, 2);
@@ -419,6 +429,7 @@ mod tests {
         let cache = Arc::new(SymbolLookupCache::new());
         let factory = make_factory();
 
+        cache.insert(make_test_symbol(42, "caller", 1, LanguageId::new("rust")));
         let from_id = SymbolId::new(42).unwrap();
         let file_id = FileId::new(1).unwrap();
         let to_range = Range::new(10, 5, 10, 25);
@@ -434,11 +445,13 @@ mod tests {
         };
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(
-            vec![rel],
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let contexts = stage
+            .build_contexts(
+                vec![rel],
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
 
         assert_eq!(contexts.len(), 1);
         let ctx = &contexts[0];
@@ -481,7 +494,7 @@ mod tests {
         };
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let resolvers = stage.build_inheritance_resolvers(&[extends]);
+        let resolvers = stage.build_inheritance_resolvers(&[extends]).unwrap();
 
         let php_resolver = resolvers
             .get(&php)
@@ -511,14 +524,16 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let _contexts = stage.build_contexts(
-            unresolved,
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let _contexts = stage
+            .build_contexts(
+                unresolved,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
 
         // Check behaviors are cached
-        let behaviors = stage.behaviors();
+        let behaviors = stage.behaviors().unwrap();
         assert_eq!(
             behaviors.len(),
             2,
@@ -532,5 +547,52 @@ mod tests {
             behaviors.contains_key(&LanguageId::new("typescript")),
             "TypeScript behavior should be cached"
         );
+    }
+}
+
+#[cfg(test)]
+mod review_context_errors {
+    use super::*;
+    #[test]
+    fn hardening_review_context_rejects_unknown_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::default());
+        let index = Arc::new(DocumentIndex::new(dir.path(), &settings).unwrap());
+        let stage = ContextStage::new(
+            Arc::new(SymbolLookupCache::new()),
+            index,
+            Arc::new(ParserFactory::new(settings.clone())),
+            settings,
+        );
+        assert!(matches!(
+            stage.get_behavior(LanguageId::new("not-registered")),
+            Err(IndexError::UnknownLanguage { .. })
+        ));
+        assert!(stage.behaviors().unwrap().is_empty());
+        assert!(matches!(
+            stage.build_context_for_file(FileId::new(1).unwrap(), vec![], vec![], vec![]),
+            Err(IndexError::UnknownLanguage { .. })
+        ));
+    }
+    #[test]
+    fn hardening_review_context_poison_is_propagated() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::default());
+        let index = Arc::new(DocumentIndex::new(dir.path(), &settings).unwrap());
+        let stage = ContextStage::new(
+            Arc::new(SymbolLookupCache::new()),
+            index,
+            Arc::new(ParserFactory::new(settings.clone())),
+            settings,
+        );
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = stage.behaviors.write().unwrap();
+            panic!("isolated context cache failure fixture");
+        }));
+        assert!(matches!(stage.behaviors(), Err(IndexError::MutexPoisoned)));
+        assert!(matches!(
+            stage.get_behavior(LanguageId::new("rust")),
+            Err(IndexError::MutexPoisoned)
+        ));
     }
 }

@@ -168,7 +168,14 @@ impl WatchHandler for CodeFileHandler {
             // would discover (ignore chains included).
             let discoverable = {
                 let facade = self.facade.read().await;
-                !facade.discoverable_files(path).is_empty()
+                !facade
+                    .discoverable_files(path)
+                    .map_err(|error| WatchError::HandlerFailed {
+                        handler: "code discovery".to_owned(),
+                        path: path.to_path_buf(),
+                        reason: error.to_string(),
+                    })?
+                    .is_empty()
             };
             if !discoverable {
                 return Ok(WatchAction::None);

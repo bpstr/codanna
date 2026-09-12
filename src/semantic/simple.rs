@@ -534,15 +534,13 @@ impl SimpleSemanticSearch {
 
         let mut storage = SemanticVectorStorage::new(&staging_dir, dimension)?;
 
-        // Convert HashMap to Vec for batch save
-        let embeddings: Vec<(SymbolId, Vec<f32>)> = self
-            .embeddings
-            .iter()
-            .map(|(id, embedding)| (*id, embedding.clone()))
-            .collect();
-
-        // Save all embeddings
-        storage.save_batch(&embeddings)?;
+        // The storage batch owns only IDs and slice references, not a second
+        // Vec<f32> for every symbol. Publication semantics remain unchanged.
+        storage.save_batch_borrowed(
+            self.embeddings
+                .iter()
+                .map(|(id, vector)| (*id, vector.as_slice())),
+        )?;
         drop(storage);
 
         let staged_vec = staging_dir.join("segment_0.vec");
@@ -570,10 +568,10 @@ impl SimpleSemanticSearch {
 
         // Save language mappings as a JSON file (convert SymbolId to u32 for serialization)
         let languages_path = path.join("languages.json");
-        let languages_map: HashMap<u32, String> = self
+        let languages_map: HashMap<u32, &str> = self
             .symbol_languages
             .iter()
-            .map(|(id, lang)| (id.to_u32(), lang.clone()))
+            .map(|(id, lang)| (id.to_u32(), lang.as_str()))
             .collect();
         let languages_json = serde_json::to_string(&languages_map).map_err(|e| {
             SemanticSearchError::StorageError {
@@ -1187,5 +1185,36 @@ mod tests {
             .expect("malformed direct query must degrade instead of panicking");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod review_borrowed_persistence {
+    use super::*;
+    #[test]
+    fn hardening_review_borrowed_semantic_save_round_trips_vectors_and_languages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut search = SimpleSemanticSearch::new_empty(2, "prepared-fixture");
+        assert_eq!(
+            search.store_embeddings(vec![
+                (SymbolId::new(1).unwrap(), vec![1.0, 0.0], "rust".to_owned()),
+                (
+                    SymbolId::new(2).unwrap(),
+                    vec![0.0, 1.0],
+                    "typescript".to_owned()
+                ),
+            ]),
+            2
+        );
+        search.save(dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load_remote(dir.path()).unwrap();
+        assert_eq!(loaded.embeddings, search.embeddings);
+        assert_eq!(loaded.symbol_languages, search.symbol_languages);
+        search.remove_embeddings(&[SymbolId::new(1).unwrap()]);
+        search.save(dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load_remote(dir.path()).unwrap();
+        assert_eq!(loaded.embeddings.len(), 1);
+        assert_eq!(loaded.symbol_languages.len(), 1);
+        assert!(loaded.embeddings.contains_key(&SymbolId::new(2).unwrap()));
     }
 }

@@ -1,12 +1,12 @@
 //! Swift grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::swift::audit::SwiftParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Swift",
     file_extension: "swift",
-    grammar_json_path: "contributing/parsers/swift/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/swift/node-types.json"),
     example_file_path: "examples/swift/comprehensive.swift",
     output_dir: "contributing/parsers/swift",
 };

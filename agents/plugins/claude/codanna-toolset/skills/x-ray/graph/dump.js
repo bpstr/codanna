@@ -2,10 +2,13 @@
 // Returns symbols (id -> node record), out/inc adjacency (id -> relation ->
 // [ids], sorted by id), and the summary envelope's data.
 const fs = require('fs');
+const { assertNode, assertBinary } = require('../../shared/runtime.cjs');
 const { execFileSync } = require('child_process');
 
 /** Read the dump stream: one Envelope per line; begin / result* / summary. */
-function readDump({ from, binary, workingDir = process.cwd() }) {
+function readDump({ from, binary = 'codanna', workingDir = process.cwd() }) {
+  assertNode();
+  if (!from) assertBinary(binary, workingDir);
   const text = from
     ? fs.readFileSync(from, 'utf8')
     : execFileSync(binary, ["dump"], { cwd: workingDir, encoding: 'utf8', maxBuffer: 1 << 30, stdio: ['pipe', 'pipe', 'pipe'] });

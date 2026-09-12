@@ -216,9 +216,12 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(validated_bind).await?;
-    eprintln!("HTTP MCP server listening on http://{bind}");
-    eprintln!("MCP endpoint: http://{bind}/mcp");
-    eprintln!("Health check: http://{bind}/health");
+    // Report the actual socket, including an OS-assigned port for :0. Consumers
+    // must not reserve a port and release it before this server binds.
+    let bound = listener.local_addr()?;
+    eprintln!("HTTP MCP server listening on http://{bound}");
+    eprintln!("MCP endpoint: http://{bound}/mcp");
+    eprintln!("Health check: http://{bound}/health");
     eprintln!("Press Ctrl+C to stop the server");
 
     // Create server future

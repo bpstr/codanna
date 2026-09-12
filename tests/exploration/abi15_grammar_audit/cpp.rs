@@ -1,14 +1,15 @@
 //! C++ grammar audit.
 
 use super::helpers::{
-    AuditData, LanguageAuditConfig, run_comprehensive_analysis, run_tree_structure_analysis,
+    AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis,
+    run_tree_structure_analysis,
 };
 use codanna::parsing::cpp::audit::CppParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "C++",
     file_extension: "cpp",
-    grammar_json_path: "contributing/parsers/cpp/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/cpp/node-types.json"),
     example_file_path: "examples/cpp/comprehensive.cpp",
     output_dir: "contributing/parsers/cpp",
 };

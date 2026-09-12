@@ -38,7 +38,7 @@ fn build_behaviors_for(langs: &[LanguageId]) -> HashMap<LanguageId, Arc<dyn Lang
     let mut map = HashMap::new();
     for lang in langs {
         let behavior: Arc<dyn LanguageBehavior> =
-            Arc::from(factory.create_behavior_from_registry(*lang));
+            Arc::from(factory.create_behavior_from_registry(*lang).unwrap());
         map.insert(*lang, behavior);
     }
     map

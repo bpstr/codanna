@@ -291,7 +291,10 @@ impl Pipeline {
         }
 
         // Build symbol cache for resolution
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let symbol_cache = Arc::new(SymbolLookupCache::for_pending_relationships(
+            &index,
+            &unresolved,
+        )?);
 
         // Run Phase 2 resolution
         let phase2_stats = self.run_phase2(
@@ -701,7 +704,10 @@ impl Pipeline {
         }
         let semantic_path = self.settings.index_path.join("semantic");
 
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let symbol_cache = Arc::new(SymbolLookupCache::for_pending_relationships(
+            &index,
+            &pending.unresolved,
+        )?);
         let phase2_stats = self.run_phase2_maybe_bar(
             pending.unresolved,
             pending.variable_bindings,
@@ -876,7 +882,10 @@ impl Pipeline {
         // Seed the cache from the persisted index: the run-scoped cache
         // holds only this run's files, hiding unchanged files' symbols
         // and re-export aliases from resolution.
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let symbol_cache = Arc::new(SymbolLookupCache::for_pending_relationships(
+            &index,
+            &unresolved,
+        )?);
         let phase2_stats = self.run_phase2_maybe_bar(
             unresolved,
             variable_bindings,

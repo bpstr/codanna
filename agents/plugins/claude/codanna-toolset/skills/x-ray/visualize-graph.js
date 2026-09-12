@@ -11,13 +11,17 @@
  */
 
 const { execFileSync } = require('child_process');
+const { assertNode, assertBinary } = require('../shared/runtime.cjs');
+assertNode();
 const fs = require('fs');
 const path = require('path');
 const workingDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const { generateHTML } = require('./graph/render');
 const { saveArtifact, serveAndOpen } = require('./graph/publish');
 
+let binaryChecked = false;
 function runCodanna(subcommand, args) {
+  if (!binaryChecked) { assertBinary('codanna', workingDir); binaryChecked = true; }
   const argv = [...subcommand.split(" "), args, "--json"];
   try {
     const output = execFileSync("codanna", argv, {

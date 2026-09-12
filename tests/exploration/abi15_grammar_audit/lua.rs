@@ -1,12 +1,12 @@
 //! Lua grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::lua::audit::LuaParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Lua",
     file_extension: "lua",
-    grammar_json_path: "contributing/parsers/lua/node-types.json",
+    grammar: GrammarSource::Embedded(tree_sitter_lua::NODE_TYPES),
     example_file_path: "examples/lua/comprehensive.lua",
     output_dir: "contributing/parsers/lua",
 };

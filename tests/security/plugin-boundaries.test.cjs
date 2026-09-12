@@ -63,6 +63,7 @@ test('both dump readers execute a metacharacter-containing binary path as one ar
   try {
     const binary = path.join(temp, 'codanna ; printf injected > marker #');
     fs.writeFileSync(binary, '#!' + process.execPath + '\n' +
+      'if (process.argv[2] === "--version") { console.log("codanna 0.16.0"); process.exit(0); }\n' +
       'if (process.argv.slice(2).join() !== "dump") process.exit(7);\n' +
       'console.log(JSON.stringify({type:"summary", data:{fixture:true}}));\n', { mode: 0o700 });
     const cjs = require(path.join(skills, 'x-ray/graph/dump.js'));
@@ -93,5 +94,30 @@ test('disc CLI safely embeds hostile dump data in the final published HTML', () 
     const match = html.match(/window.VAULT_DATA=(.*);<\/script>/);
     assert.ok(match, 'published disc must retain data');
     assert.ok(JSON.stringify(JSON.parse(match[1])).includes('INJECTED'));
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+
+test('runtime prerequisites reject unsupported Node and accept tested minima', () => {
+  const runtime = require(path.join(skills, 'shared/runtime.cjs'));
+  for (const version of ['20.19.0', '22.15.9', '22.16.0-rc.1', 'invalid']) {
+    assert.throws(() => runtime.assertNode(version), /Node >= 22\.16\.0/);
+  }
+  for (const version of ['22.16.0', '22.17.0', '24.0.0']) runtime.assertNode(version);
+});
+
+test('runtime binary preflight is bounded, non-installing and rejects incompatible output', { skip: process.platform === 'win32' }, () => {
+  const runtime = require(path.join(skills, 'shared/runtime.cjs'));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'codanna-runtime-'));
+  try {
+    const binary = path.join(temp, 'trusted binary ; literal');
+    for (const [version, valid] of [['codanna 0.15.9', false], ['codanna 0.16.0-rc.1', false], ['codanna 0.16.0 (fixture)', true], ['unexpected output', false]]) {
+      fs.writeFileSync(binary, '#!' + process.execPath + '\n' +
+        'if (process.argv.slice(2).join() !== "--version") process.exit(7);\n' +
+        'console.log(' + JSON.stringify(version) + ');\n', { mode: 0o700 });
+      if (valid) assert.equal(runtime.assertBinary(binary, temp), '0.16.0');
+      else assert.throws(() => runtime.assertBinary(binary, temp), /require a release Codanna/);
+    }
+    assert.throws(() => runtime.assertBinary(path.join(temp, 'missing'), temp), /Nothing was installed/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });

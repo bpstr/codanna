@@ -99,8 +99,9 @@ impl Pipeline {
             defines.len()
         );
         if !defines.is_empty() {
-            let contexts = context_stage.build_contexts(defines, &HashMap::new(), &HashMap::new());
-            let behaviors = context_stage.behaviors();
+            let contexts =
+                context_stage.build_contexts(defines, &HashMap::new(), &HashMap::new())?;
+            let behaviors = context_stage.behaviors()?;
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
 
             for ctx in contexts {
@@ -136,10 +137,10 @@ impl Pipeline {
             // Sequencing invariant: populate per-language InheritanceResolvers from
             // Extends relationships BEFORE build_contexts(others) consumes the vec
             // and BEFORE any Calls resolution in this pass fires resolve_static_call.
-            let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others);
+            let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others)?;
             let contexts =
-                context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans);
-            let behaviors = context_stage.behaviors();
+                context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans)?;
+            let behaviors = context_stage.behaviors()?;
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors)
                 .with_inheritance_resolvers(inheritance_resolvers);
 

@@ -796,6 +796,7 @@ dependencies = [
  "dunce",
  "fastembed",
  "figment",
+ "fs4",
  "glob",
  "hex",
  "ignore",

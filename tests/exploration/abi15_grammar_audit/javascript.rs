@@ -1,12 +1,12 @@
 //! JavaScript grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::javascript::audit::JavaScriptParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "JavaScript",
     file_extension: "js",
-    grammar_json_path: "contributing/parsers/javascript/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/javascript/node-types.json"),
     example_file_path: "examples/javascript/comprehensive.js",
     output_dir: "contributing/parsers/javascript",
 };

@@ -35,15 +35,15 @@ impl ServeLockGuard {
             .truncate(false)
             .open(&lock_path)
             .map_err(ServeLockError::Io)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
+        match fs4::fs_std::FileExt::try_lock_exclusive(&file) {
+            Ok(true) => {}
+            Ok(false) => {
                 return Err(ServeLockError::AlreadyRunning {
                     pid: read_lock_pid(&lock_path).unwrap_or(0),
                     lock_path,
                 });
             }
-            Err(std::fs::TryLockError::Error(err)) => return Err(ServeLockError::Io(err)),
+            Err(err) => return Err(ServeLockError::Io(err)),
         }
         // Only a lock owner may change the diagnostic PID. Closing the handle
         // releases the lock even when writing fails, or the process crashes.

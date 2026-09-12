@@ -1,12 +1,12 @@
 //! Java grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::java::audit::JavaParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Java",
     file_extension: "java",
-    grammar_json_path: "contributing/parsers/java/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/java/node-types.json"),
     example_file_path: "examples/java/comprehensive.java",
     output_dir: "contributing/parsers/java",
 };

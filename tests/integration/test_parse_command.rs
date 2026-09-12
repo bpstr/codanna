@@ -126,11 +126,14 @@ fn run_parse_command(code: &str, lang_ext: &str, max_depth: Option<usize>) -> St
 
 /// Helper to parse JSONL output into Vec of JSON values
 fn parse_jsonl(output: &str) -> Vec<Value> {
-    output
+    let nodes: Vec<Value> = output
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("Invalid JSON"))
-        .collect()
+        .collect();
+    assert!(!nodes.is_empty(), "parse must emit at least its root node");
+    assert_eq!(nodes[0]["depth"], 0, "first emitted node is the root");
+    nodes
 }
 
 #[test]

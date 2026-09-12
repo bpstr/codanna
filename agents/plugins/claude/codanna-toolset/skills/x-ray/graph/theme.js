@@ -1,3 +1,4 @@
+require('../../shared/runtime.cjs').assertNode();
 const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // Shared theming for the x-ray pages: token CSS (dark default, light under
 // [data-theme="light"]), the runtime theme state + toggle button, and the

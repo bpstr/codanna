@@ -1,12 +1,12 @@
 //! Python grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::python::audit::PythonParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Python",
     file_extension: "py",
-    grammar_json_path: "contributing/parsers/python/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/python/node-types.json"),
     example_file_path: "examples/python/comprehensive.py",
     output_dir: "contributing/parsers/python",
 };
