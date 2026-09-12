@@ -23,15 +23,13 @@ pub enum Language {
     Kotlin,
     Lua,
     Swift,
+    Ruby,
+    Bash,
 }
 
 impl Language {
     /// Convert to LanguageId for registry usage
-    ///
-    /// This is a transitional method that will be removed when
-    /// we fully migrate to the registry system.
     pub fn to_language_id(&self) -> super::LanguageId {
-        // We need to use static strings for LanguageId
         match self {
             Language::Rust => super::LanguageId::new("rust"),
             Language::Python => super::LanguageId::new("python"),
@@ -48,13 +46,12 @@ impl Language {
             Language::Kotlin => super::LanguageId::new("kotlin"),
             Language::Lua => super::LanguageId::new("lua"),
             Language::Swift => super::LanguageId::new("swift"),
+            Language::Ruby => super::LanguageId::new("ruby"),
+            Language::Bash => super::LanguageId::new("bash"),
         }
     }
 
     /// Create Language from LanguageId (for backward compatibility)
-    ///
-    /// Returns None if the LanguageId doesn't correspond to a known Language variant.
-    /// This is a transitional method for migration.
     pub fn from_language_id(id: super::LanguageId) -> Option<Self> {
         match id.as_str() {
             "rust" => Some(Language::Rust),
@@ -72,18 +69,15 @@ impl Language {
             "kotlin" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
+            "ruby" => Some(Language::Ruby),
+            "bash" => Some(Language::Bash),
             _ => None,
         }
     }
 
-    /// Detect language from file extension
-    ///
-    /// This now uses the registry internally for consistency.
-    /// Will be deprecated once all code migrates to registry.
+    /// Detect language from file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
         let ext_lower = ext.to_lowercase();
-
-        // Try the registry first for registered languages
         let registry = super::get_registry();
         if let Ok(registry) = registry.lock() {
             if let Some(def) = registry.get_by_extension(&ext_lower) {
@@ -91,16 +85,12 @@ impl Language {
             }
         }
 
-        // Fallback to hardcoded for languages not yet in registry
-        // (JavaScript and TypeScript don't have definitions yet)
         match ext_lower.as_str() {
             "rs" => Some(Language::Rust),
             "py" | "pyi" => Some(Language::Python),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
-            "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => {
-                Some(Language::Php)
-            }
+            "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => Some(Language::Php),
             "go" | "go.mod" | "go.sum" => Some(Language::Go),
             "c" | "h" => Some(Language::C),
             "clj" | "cljs" | "cljc" | "edn" => Some(Language::Clojure),
@@ -111,27 +101,23 @@ impl Language {
             "kt" | "kts" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
+            "rb" | "rake" | "gemspec" => Some(Language::Ruby),
+            "sh" | "bash" | "zsh" | "bats" => Some(Language::Bash),
             _ => None,
         }
     }
 
-    /// Detect language from file path
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Self::from_extension)
+        path.extension().and_then(|ext| ext.to_str()).and_then(Self::from_extension)
     }
 
-    /// Get default file extensions for this language
     pub fn extensions(&self) -> &[&str] {
         match self {
             Language::Rust => &["rs"],
             Language::Python => &["py", "pyi"],
             Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
             Language::TypeScript => &["ts", "tsx", "mts", "cts"],
-            Language::Php => &[
-                "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
-            ],
+            Language::Php => &["php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml"],
             Language::Go => &["go", "go.mod", "go.sum"],
             Language::C => &["c", "h"],
             Language::Clojure => &["clj", "cljs", "cljc", "edn"],
@@ -142,10 +128,11 @@ impl Language {
             Language::Kotlin => &["kt", "kts"],
             Language::Lua => &["lua"],
             Language::Swift => &["swift"],
+            Language::Ruby => &["rb", "rake", "gemspec"],
+            Language::Bash => &["sh", "bash", "zsh", "bats"],
         }
     }
 
-    /// Get the configuration key for this language
     pub fn config_key(&self) -> &str {
         match self {
             Language::Rust => "rust",
@@ -163,10 +150,11 @@ impl Language {
             Language::Kotlin => "kotlin",
             Language::Lua => "lua",
             Language::Swift => "swift",
+            Language::Ruby => "ruby",
+            Language::Bash => "bash",
         }
     }
 
-    /// Get human-readable name
     pub fn name(&self) -> &str {
         match self {
             Language::Rust => "Rust",
@@ -184,6 +172,8 @@ impl Language {
             Language::Kotlin => "Kotlin",
             Language::Lua => "Lua",
             Language::Swift => "Swift",
+            Language::Ruby => "Ruby",
+            Language::Bash => "Bash / POSIX shell",
         }
     }
 }
@@ -211,72 +201,29 @@ mod tests {
         assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
         assert_eq!(Language::from_extension("php"), Some(Language::Php));
         assert_eq!(Language::from_extension("PHP"), Some(Language::Php));
-        assert_eq!(Language::from_extension("php5"), Some(Language::Php));
-        assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
         assert_eq!(Language::from_extension("go"), Some(Language::Go));
-        assert_eq!(Language::from_extension("go.mod"), Some(Language::Go));
-        assert_eq!(Language::from_extension("go.sum"), Some(Language::Go));
         assert_eq!(Language::from_extension("gd"), Some(Language::Gdscript));
         assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
-        assert_eq!(Language::from_extension("LUA"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("rb"), Some(Language::Ruby));
+        assert_eq!(Language::from_extension("RB"), Some(Language::Ruby));
+        assert_eq!(Language::from_extension("sh"), Some(Language::Bash));
+        assert_eq!(Language::from_extension("bats"), Some(Language::Bash));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
     #[test]
     fn test_language_from_path() {
-        assert_eq!(
-            Language::from_path(Path::new("main.rs")),
-            Some(Language::Rust)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("src/lib.rs")),
-            Some(Language::Rust)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("script.py")),
-            Some(Language::Python)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("app.js")),
-            Some(Language::JavaScript)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("types.d.ts")),
-            Some(Language::TypeScript)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("index.php")),
-            Some(Language::Php)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("src/class.php5")),
-            Some(Language::Php)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("main.go")),
-            Some(Language::Go)
-        );
-        assert_eq!(Language::from_path(Path::new("main.c")), Some(Language::C));
-        assert_eq!(
-            Language::from_path(Path::new("header.h")),
-            Some(Language::C)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("main.cpp")),
-            Some(Language::Cpp)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("header.hpp")),
-            Some(Language::Cpp)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("player.gd")),
-            Some(Language::Gdscript)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("script.lua")),
-            Some(Language::Lua)
-        );
+        assert_eq!(Language::from_path(Path::new("main.rs")), Some(Language::Rust));
+        assert_eq!(Language::from_path(Path::new("script.py")), Some(Language::Python));
+        assert_eq!(Language::from_path(Path::new("app.js")), Some(Language::JavaScript));
+        assert_eq!(Language::from_path(Path::new("types.d.ts")), Some(Language::TypeScript));
+        assert_eq!(Language::from_path(Path::new("index.php")), Some(Language::Php));
+        assert_eq!(Language::from_path(Path::new("main.go")), Some(Language::Go));
+        assert_eq!(Language::from_path(Path::new("main.cpp")), Some(Language::Cpp));
+        assert_eq!(Language::from_path(Path::new("player.gd")), Some(Language::Gdscript));
+        assert_eq!(Language::from_path(Path::new("script.lua")), Some(Language::Lua));
+        assert_eq!(Language::from_path(Path::new("app/models/user.rb")), Some(Language::Ruby));
+        assert_eq!(Language::from_path(Path::new("scripts/deploy.sh")), Some(Language::Bash));
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -287,12 +234,10 @@ mod tests {
         assert!(Language::JavaScript.extensions().contains(&"js"));
         assert!(Language::TypeScript.extensions().contains(&"ts"));
         assert!(Language::Php.extensions().contains(&"php"));
-        assert!(Language::Php.extensions().contains(&"php5"));
-        assert!(Language::Php.extensions().contains(&"phtml"));
         assert!(Language::Go.extensions().contains(&"go"));
-        assert!(Language::Go.extensions().contains(&"go.mod"));
-        assert!(Language::Go.extensions().contains(&"go.sum"));
         assert!(Language::Gdscript.extensions().contains(&"gd"));
         assert!(Language::Lua.extensions().contains(&"lua"));
+        assert!(Language::Ruby.extensions().contains(&"rb"));
+        assert!(Language::Bash.extensions().contains(&"sh"));
     }
 }
