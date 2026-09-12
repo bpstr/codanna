@@ -1,4 +1,6 @@
 //! Opt-in companion CLI; never changes Codanna's existing indexes.
+#[path = "../knowledge/agent.rs"]
+mod agent;
 #[path = "../knowledge/architecture.rs"]
 mod architecture;
 #[path = "../knowledge/context.rs"]
@@ -93,6 +95,28 @@ enum Action {
         #[arg(long, default_value_t = 20)]
         hubs: usize,
     },
+    /// Reverse-dependency impact map for changed files, including cross-repository risk.
+    Impact {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long)]
+        repo: String,
+        #[arg(long = "file", required = true)]
+        files: Vec<String>,
+        #[arg(long, default_value_t = 3)]
+        max_depth: usize,
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+    },
+    /// Conservative zero-incoming-edge dead-code candidates. Never proof of deletion safety.
+    DeadCode {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
 }
 fn parse_root(value: &str) -> Result<(String, String), String> {
     let (repo, path) = value.split_once('=').ok_or("expected REPO=PATH")?;
@@ -103,12 +127,7 @@ fn run() -> knowledge::Result<()> {
     let cli = Cli::parse();
     let mut exit_failure = false;
     let result = match cli.command {
-        Action::Index {
-            root,
-            repo,
-            dump,
-            out,
-        } => {
+        Action::Index { root, repo, dump, out } => {
             let input = knowledge::io::input(&root, &repo, dump.as_deref())?;
             let graph = knowledge::links::build(&input)?;
             let out = out.unwrap_or_else(|| root.join(".codanna/knowledge.json"));
@@ -120,61 +139,22 @@ fn run() -> knowledge::Result<()> {
             let node = graph.resolve(&entity)?;
             serde_json::json!({"node":node,"incoming":graph.edges.iter().filter(|e|e.to==node.id).collect::<Vec<_>>(),"outgoing":graph.edges.iter().filter(|e|e.from==node.id).collect::<Vec<_>>(),"unresolved":graph.unresolved.iter().filter(|r|r.from==node.id).collect::<Vec<_>>(),"limitations":graph.limitations})
         }
-        Action::Context {
-            graph,
-            query,
-            repo,
-            files,
-            entities,
-            max_bytes,
-            max_nodes,
-            max_depth,
-        } => {
+        Action::Context { graph, query, repo, files, entities, max_bytes, max_nodes, max_depth } => {
             let graph = knowledge::io::load(&graph)?;
-            serde_json::to_value(context::get(
-                &graph,
-                &context::Request {
-                    query,
-                    repo,
-                    files,
-                    entities,
-                    max_bytes,
-                    max_nodes,
-                    max_depth,
-                },
-            )?)?
+            serde_json::to_value(context::get(&graph, &context::Request { query, repo, files, entities, max_bytes, max_nodes, max_depth })?)?
         }
-        Action::Path {
-            graph,
-            source,
-            target,
-            max_depth,
-        } => {
+        Action::Path { graph, source, target, max_depth } => {
             let graph = knowledge::io::load(&graph)?;
             serde_json::to_value(context::path(&graph, &source, &target, max_depth)?)?
         }
         Action::Serve { graph } => return service::serve(&graph),
-        Action::Workspace {
-            graphs,
-            openapi_repo,
-            openapi_path,
-            out,
-        } => {
-            let loaded = graphs
-                .iter()
-                .map(|p| knowledge::io::load(p))
-                .collect::<knowledge::Result<Vec<_>>>()?;
+        Action::Workspace { graphs, openapi_repo, openapi_path, out } => {
+            let loaded = graphs.iter().map(|p| knowledge::io::load(p)).collect::<knowledge::Result<Vec<_>>>()?;
             let mut graph = contracts::merge(loaded)?;
             match (openapi_repo, openapi_path) {
                 (Some(repo), Some(path)) => {
-                    let text = String::from_utf8(knowledge::io::read_bounded(
-                        &path,
-                        knowledge::MAX_FILE_BYTES as u64,
-                    )?)?;
-                    let relative = path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .ok_or("invalid OpenAPI filename")?;
+                    let text = String::from_utf8(knowledge::io::read_bounded(&path, knowledge::MAX_FILE_BYTES as u64)?)?;
+                    let relative = path.file_name().and_then(|s| s.to_str()).ok_or("invalid OpenAPI filename")?;
                     contracts::add_openapi(&mut graph, &repo, relative, &text)?;
                 }
                 (None, None) => {}
@@ -183,11 +163,7 @@ fn run() -> knowledge::Result<()> {
             knowledge::io::save(&graph, &out)?;
             serde_json::json!({"repositories":graph.repositories.keys().collect::<Vec<_>>(),"nodes":graph.nodes.len(),"edges":graph.edges.len(),"unresolved":graph.unresolved.len(),"snapshot":out})
         }
-        Action::Check {
-            graph,
-            roots,
-            fail_on_review,
-        } => {
+        Action::Check { graph, roots, fail_on_review } => {
             let graph = knowledge::io::load(&graph)?;
             let roots: BTreeMap<_, _> = roots.into_iter().collect();
             let report = drift::check(&graph, &roots)?;
@@ -198,23 +174,28 @@ fn run() -> knowledge::Result<()> {
             let graph = knowledge::io::load(&graph)?;
             serde_json::to_value(architecture::analyze(&graph, hubs)?)?
         }
+        Action::Impact { graph, repo, files, max_depth, max_nodes } => {
+            let graph = knowledge::io::load(&graph)?;
+            let index = agent::AnalysisIndex::new(&graph);
+            serde_json::to_value(index.impact(&graph, &agent::ImpactRequest { repo, files, max_depth, max_nodes })?)?
+        }
+        Action::DeadCode { graph, repo, limit } => {
+            let graph = knowledge::io::load(&graph)?;
+            let index = agent::AnalysisIndex::new(&graph);
+            serde_json::to_value(index.dead_code(&graph, &agent::DeadCodeRequest { repo, limit })?)?
+        }
     };
     let mut out = std::io::stdout().lock();
     serde_json::to_writer(&mut out, &result)?;
     writeln!(out)?;
-    if exit_failure {
-        return Err("knowledge drift policy failed".into());
-    }
+    if exit_failure { return Err("knowledge drift policy failed".into()); }
     Ok(())
 }
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
-            {
+            if error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe) {
                 return std::process::ExitCode::SUCCESS;
             }
             eprintln!("knowledge: {error}");
