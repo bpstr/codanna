@@ -3,6 +3,7 @@
 mod context;
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
+#[allow(dead_code)]
 #[path = "../knowledge/service.rs"]
 mod service;
 
