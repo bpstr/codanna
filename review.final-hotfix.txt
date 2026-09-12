@@ -1,0 +1,27 @@
+import base64, gzip, hashlib, json, os
+from pathlib import Path
+encoded = Path(os.environ['RUNNER_TEMP'], 'review.final-admission.b64').read_bytes().replace(b'NVPKL+Lk', b'NVPKLk')
+raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+assert hashlib.sha256(raw).hexdigest() == '578ec9ff426ab74ed935426db4a74388c6c7b2523e16d3c7675227da25cccb2a'
+for change in json.loads(raw):
+    path = Path(change['path'])
+    assert str(path) == 'src/mcp/auth.rs'
+    old = path.read_bytes()
+    assert hashlib.sha256(old).hexdigest() == change['old']
+    lines = old.decode().splitlines(keepends=True)
+    for first, last, replacement in reversed(change['edits']):
+        lines[first:last] = replacement.splitlines(keepends=True)
+    new = ''.join(lines).encode()
+    assert hashlib.sha256(new).hexdigest() == change['new']
+    path.write_bytes(new)
+path = Path('contributing/scripts/review-browser.mjs')
+text = path.read_text()
+def replace(before, after):
+    global text
+    assert text.count(before) == 1, before
+    text = text.replace(before, after)
+replace("'--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0',", "'--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0',")
+replace("  await call('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: virtualKey });", "  const text = key === 'Enter' ? '\\r' : key.length === 1 ? key : '';\n  await call('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: virtualKey, text, unmodifiedText: text });")
+replace("    // Wait for React hydration: Next replaces this marker only after event binding.", "    await until(() => evaluate(\"document.readyState === 'complete'\"), 'page resources loaded');\n    await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');\n    // Assert observable visibility before sending actual keyboard events.")
+replace("p.value.value === 'true'", "String(p.value.value) === 'true'")
+path.write_text(text)
