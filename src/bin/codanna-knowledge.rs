@@ -3,8 +3,8 @@
 mod knowledge;
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 use std::io::Write;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(about = "Evidence-linked code and documentation snapshots", version)]
@@ -37,7 +37,12 @@ enum Action {
 
 fn run() -> knowledge::Result<()> {
     let result = match Cli::parse().command {
-        Action::Index { root, repo, dump, out } => {
+        Action::Index {
+            root,
+            repo,
+            dump,
+            out,
+        } => {
             let input = knowledge::io::input(&root, &repo, dump.as_deref())?;
             let graph = knowledge::links::build(&input)?;
             let out = out.unwrap_or_else(|| root.join(".codanna/knowledge.json"));
@@ -60,7 +65,12 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            if error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe) { return std::process::ExitCode::SUCCESS; }
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
+            {
+                return std::process::ExitCode::SUCCESS;
+            }
             eprintln!("knowledge: {error}");
             std::process::ExitCode::FAILURE
         }
