@@ -1,0 +1,56 @@
+name: Publish validated review fixes
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-publish-final.yml]
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Verify exact successful source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/bpstr/codanna/actions/runs/34716809955 > "$RUNNER_TEMP/run.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path(os.environ['RUNNER_TEMP'], 'run.json').read_text())
+          assert run['head_sha'] == 'e1e9d77ae3673225f9ea5c0289da464143b8168f'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['path'] == '.github/workflows/review-final-check.yml'
+          PY
+      - uses: actions/checkout@v6
+        with:
+          ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-final-checks
+          run-id: 34716809955
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/validated
+      - name: Publish only tested source, without force-pushing
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=fix/review-20260912
+          base=acbc9470c2f6e211975d2cd89cf4e16c07196166
+          actual=$(git ls-remote --exit-code origin "refs/heads/$branch" | cut -f1)
+          test "$actual" = "$base"
+          echo 'a5b6a80fe40e08019d475a2270f507b8b93378e8585ba724073f832d290d53ba  candidate.patch' | (cd "$RUNNER_TEMP/validated" && sha256sum --check)
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/validated/candidate.patch"
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          test -z "$(git diff --cached --name-only -- 'review.final*')"
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: complete review hardening with incremental persistence and scoped sessions'
+          git push origin "HEAD:refs/heads/$branch"
