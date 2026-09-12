@@ -1,0 +1,30 @@
+name: Review native dependency
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-native-deps.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: offline-build-deps
+          run-id: 34714304132
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/input
+      - name: Export only native library build outputs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native"
+          tar -xzf "$RUNNER_TEMP/input/build-deps.tar.gz" -C "$RUNNER_TEMP/native" --wildcards 'target/debug/build/ort-sys-*/out/*'
+          find "$RUNNER_TEMP/native" -type f -printf '%P %s\n'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ort-native
+          path: ${{ runner.temp }}/native
+          retention-days: 1
