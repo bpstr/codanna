@@ -1,0 +1,121 @@
+name: Finish reviewed documentation
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-doc-finish.yml]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 8173043ffbe8ce6192ba82123f73fd2083f1fbee
+          persist-credentials: false
+      - name: Correct only verified stale source documentation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          def replace(path, before, after):
+              p = Path(path)
+              text = p.read_text()
+              assert text.count(before) == 1, (path, before[:80])
+              p.write_text(text.replace(before, after))
+          replace('src/parsing/language.rs',
+              '// Fallback to hardcoded for languages not yet in registry\n        // (JavaScript and TypeScript don\'t have definitions yet)',
+              '// Compatibility fallback when registry access or extension lookup fails.\n        // JavaScript and TypeScript are registered; completeness tests guard parity.')
+          replace('src/parsing/language_behavior.rs',
+              '//! - `SimpleIndexer`: Uses behaviors to process symbols without language-specific code',
+              '//! - `Pipeline`: Uses behaviors during symbol configuration and relationship resolution')
+          replace('src/parsing/language_behavior.rs',
+              '//! 3. Register both in `ParserFactory`\n//! 4. (Future) Register in the language registry for auto-discovery',
+              '//! 3. Provide a `LanguageDefinition` and register it in the language registry\n//! 4. Update compatibility language metadata and defaults; run the factory completeness tests\n//!\n//! `ParserFactory` delegates parser/behavior construction to the registry. A new\n//! language does not need another parser-construction match arm in the factory.')
+          replace('src/parsing/java/behavior.rs',
+              '//! TODO: Implement methods after exploring actual Java AST with tree-sitter.',
+              '//! Configures Java symbols, imports, visibility, and receiver/type resolution.\n//! Remaining unsupported cases are documented at their individual methods.')
+          replace('src/parsing/java/parser.rs',
+              '//! Scaffolding created based on Kotlin parser structure.\n//! TODO: Implement methods after exploring actual Java AST with tree-sitter.',
+              '//! Extracts declarations, imports, calls, and inheritance from Java syntax trees.\n//! Remaining unsupported extraction cases are documented at their methods.')
+          replace('src/parsing/java/parser.rs',
+              '    /// Extract raw source text for a node\n',
+              '    /// Extract raw source text for a node from the same UTF-8 source used to parse it.\n    /// The tree-sitter byte range must lie within `code` on character boundaries;\n    /// Rust string indexing checks those boundaries. This is not an API for an\n    /// arbitrary node paired with unrelated or modified source text.\n')
+          replace('src/parsing/java/resolution.rs',
+              '//! TODO: Implement methods after exploring actual Java AST with tree-sitter.',
+              '//! Resolves scoped symbols and inheritance through Java-specific contexts.\n//! Unimplemented type-inference cases remain documented at their methods.')
+          replace('src/parsing/registry.rs',
+              '//! - Auto-discovers all available language parsers at startup\n//! - Integrates with settings.toml for enable/disable control\n//! - Provides zero-cost lookups (returning references)\n//! - Enables adding new languages without modifying core code',
+              '//! - Registers compiled language definitions at startup\n//! - Integrates with settings.toml for enable/disable control\n//! - Returns borrowed definitions through keyed lookups\n//! - Centralizes parser/behavior construction; compatibility catalogs are checked by tests')
+          replace('src/parsing/registry.rs',
+              '/// Uses &\'static str for zero-cost comparisons and storage.',
+              '/// Stores a borrowed static string; equality and hashing compare its contents.')
+          replace('src/indexing/pipeline/types.rs',
+              '/// Built during Phase 1 INDEX stage by retaining symbols after Tantivy write.',
+              '/// Bulk indexing populates the cache during Phase 1. The single-file lane\n/// reuses a generation-checked cache and refreshes changed files, rebuilding\n/// from the index when its generation or owner no longer matches.')
+          replace('src/indexing/pipeline/types.rs',
+              '/// Identity-ordered entry in the `by_name` candidate lists. Derived\n/// `Ord` compares file_path, then start_line, then id',
+              '/// Identity-ordered entry in the `by_name` candidate lists. Its\n/// `Ord` implementation compares file_path, then start_line, then id')
+          replace('src/indexing/pipeline/types.rs',
+              '/// Memory: ~500 bytes/symbol, 600K symbols ≈ 300MB',
+              '/// Symbol-resolution lookup maps with shard-locked concurrent access.\n///\n/// Memory depends on symbol payloads, candidate lists, and map capacity; this\n/// API does not promise a fixed bytes-per-symbol allocation. Public lookup\n/// methods return owned snapshots and do not expose DashMap guards.')
+          replace('src/semantic/simple.rs',
+              '    /// Get the number of indexed embeddings\n    /// Returns true when a local fastembed model is available for query embedding.',
+              '    /// Returns true when a local fastembed model is available for query embedding.')
+          replace('src/semantic/simple.rs',
+              '    pub fn embedding_count(&self) -> usize {',
+              '    /// Get the number of indexed embeddings.\n    pub fn embedding_count(&self) -> usize {')
+          PY
+          git diff --check
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: review-final
+          cache-on-failure: true
+      - name: Compile and execute documentation examples
+        run: cargo test --locked --doc --all-features 2>&1 | tee "$RUNNER_TEMP/doc-tests.log"
+      - name: Build public documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --all-features 2>&1 | tee "$RUNNER_TEMP/doc-build.log"
+      - name: Export checked documentation patch
+        run: git diff --binary > "$RUNNER_TEMP/documentation.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-documentation-finish
+          path: |
+            ${{ runner.temp }}/documentation.patch
+            ${{ runner.temp }}/doc-tests.log
+            ${{ runner.temp }}/doc-build.log
+          retention-days: 3
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 8173043ffbe8ce6192ba82123f73fd2083f1fbee
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-documentation-finish
+          path: ${{ runner.temp }}/checked
+      - name: Append documentation fixes without overwriting concurrent work
+        run: |
+          branch=fix/review-20260912
+          base=8173043ffbe8ce6192ba82123f73fd2083f1fbee
+          actual=$(git ls-remote --exit-code origin "refs/heads/$branch" | cut -f1)
+          test "$actual" = "$base"
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/checked/documentation.patch"
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'docs: align language and cache contracts with reviewed implementation'
+          git push origin "HEAD:refs/heads/$branch"
