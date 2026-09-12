@@ -92,7 +92,9 @@ pub fn serve(path: &Path) -> knowledge::Result<()> {
         analysis,
         tool_router: KnowledgeServer::tool_router(),
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     runtime.block_on(async move {
         let service = server.serve(rmcp::transport::stdio()).await?;
         service.waiting().await?;
@@ -106,24 +108,66 @@ mod tests {
     fn server() -> KnowledgeServer {
         let graph = Arc::new(knowledge::Graph::default());
         let analysis = Arc::new(agent::AnalysisIndex::new(&graph));
-        KnowledgeServer { graph, analysis, tool_router: KnowledgeServer::tool_router() }
+        KnowledgeServer {
+            graph,
+            analysis,
+            tool_router: KnowledgeServer::tool_router(),
+        }
     }
     #[tokio::test]
     async fn tools_are_registered_and_context_limits_are_enforced() {
         let server = server();
         assert_eq!(server.tool_router.list_all().len(), 3);
-        assert!(server.get_change_context(Parameters(context::Request::default())).await.is_ok());
-        assert!(server.get_change_context(Parameters(context::Request { max_bytes: 1, ..context::Request::default() })).await.is_err());
+        assert!(
+            server
+                .get_change_context(Parameters(context::Request::default()))
+                .await
+                .is_ok()
+        );
+        assert!(
+            server
+                .get_change_context(Parameters(context::Request {
+                    max_bytes: 1,
+                    ..context::Request::default()
+                }))
+                .await
+                .is_err()
+        );
     }
     #[tokio::test]
     async fn analysis_tools_validate_requests() {
         let server = server();
-        assert!(server.get_change_impact(Parameters(agent::ImpactRequest { repo: "missing".into(), files: vec!["src/a.rs".into()], max_depth: 2, max_nodes: 20 })).await.is_err());
-        assert!(server.find_dead_code(Parameters(agent::DeadCodeRequest { repo: None, limit: 0 })).await.is_err());
+        assert!(
+            server
+                .get_change_impact(Parameters(agent::ImpactRequest {
+                    repo: "missing".into(),
+                    files: vec!["src/a.rs".into()],
+                    max_depth: 2,
+                    max_nodes: 20
+                }))
+                .await
+                .is_err()
+        );
+        assert!(
+            server
+                .find_dead_code(Parameters(agent::DeadCodeRequest {
+                    repo: None,
+                    limit: 0
+                }))
+                .await
+                .is_err()
+        );
     }
     #[test]
     fn request_schema_is_strict() {
-        assert!(serde_json::from_str::<context::Request>("{\"repo\":null,\"bogus\":true}").is_err());
-        assert!(serde_json::from_str::<agent::ImpactRequest>("{\"repo\":\"x\",\"files\":[],\"bogus\":true}").is_err());
+        assert!(
+            serde_json::from_str::<context::Request>("{\"repo\":null,\"bogus\":true}").is_err()
+        );
+        assert!(
+            serde_json::from_str::<agent::ImpactRequest>(
+                "{\"repo\":\"x\",\"files\":[],\"bogus\":true}"
+            )
+            .is_err()
+        );
     }
 }
