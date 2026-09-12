@@ -91,8 +91,8 @@ impl Language {
             }
         }
 
-        // Fallback to hardcoded for languages not yet in registry
-        // (JavaScript and TypeScript don't have definitions yet)
+        // Compatibility fallback when registry access or extension lookup fails.
+        // JavaScript and TypeScript are registered; completeness tests guard parity.
         match ext_lower.as_str() {
             "rs" => Some(Language::Rust),
             "py" | "pyi" => Some(Language::Python),

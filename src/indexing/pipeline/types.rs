@@ -403,7 +403,9 @@ pub use crate::parsing::CallerContext;
 
 /// In-memory symbol cache for O(1) lookups during Phase 2 resolution.
 ///
-/// Built during Phase 1 INDEX stage by retaining symbols after Tantivy write.
+/// Bulk indexing populates the cache during Phase 1. The single-file lane
+/// reuses a generation-checked cache and refreshes changed files, rebuilding
+/// from the index when its generation or owner no longer matches.
 /// DashMap provides shard-locked concurrent reads for parallel resolution.
 /// Returned lookup values are owned snapshots; map entry guards stay local.
 ///
@@ -412,8 +414,8 @@ pub use crate::parsing::CallerContext;
 /// - `by_name`: name → `Vec<SymbolId>` for candidate resolution
 /// - `by_file_id`: FileId → `Vec<SymbolId>` for local symbol lookup
 ///
-/// Identity-ordered entry in the `by_name` candidate lists. Derived
-/// `Ord` compares file_path, then start_line, then id — the id arm only
+/// Identity-ordered entry in the `by_name` candidate lists. Its
+/// `Ord` implementation compares file_path, then start_line, then id — the id arm only
 /// breaks ties within one run; the identity prefix is what holds across
 /// runs (ids are session-scoped).
 #[derive(Debug, PartialEq, Eq)]
@@ -438,7 +440,11 @@ impl PartialOrd for NameCandidate {
     }
 }
 
-/// Memory: ~500 bytes/symbol, 600K symbols ≈ 300MB
+/// Symbol-resolution lookup maps with shard-locked concurrent access.
+///
+/// Memory depends on symbol payloads, candidate lists, and map capacity; this
+/// API does not promise a fixed bytes-per-symbol allocation. Public lookup
+/// methods return owned snapshots and do not expose DashMap guards.
 ///
 /// `by_name` candidates stay sorted by symbol identity
 /// (file_path, start_line, id): insertion order is parse-completion

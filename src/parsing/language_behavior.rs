@@ -12,7 +12,7 @@
 //!
 //! - `LanguageParser`: Handles AST parsing for each language
 //! - `ParserFactory`: Creates parser-behavior pairs
-//! - `SimpleIndexer`: Uses behaviors to process symbols without language-specific code
+//! - `Pipeline`: Uses behaviors during symbol configuration and relationship resolution
 //!
 //! # Example Usage
 //!
@@ -54,8 +54,11 @@
 //!
 //! 1. Create a parser implementing `LanguageParser`
 //! 2. Create a behavior implementing `LanguageBehavior`
-//! 3. Register both in `ParserFactory`
-//! 4. (Future) Register in the language registry for auto-discovery
+//! 3. Provide a `LanguageDefinition` and register it in the language registry
+//! 4. Update compatibility language metadata and defaults; run the factory completeness tests
+//!
+//! `ParserFactory` delegates parser/behavior construction to the registry. A new
+//! language does not need another parser-construction match arm in the factory.
 
 use crate::parsing::paths::{strip_extension, strip_source_root};
 use crate::parsing::resolution::{

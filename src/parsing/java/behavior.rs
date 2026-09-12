@@ -2,7 +2,8 @@
 //!
 //! Provides language-specific behaviors for Java.
 //!
-//! TODO: Implement methods after exploring actual Java AST with tree-sitter.
+//! Configures Java symbols, imports, visibility, and receiver/type resolution.
+//! Remaining unsupported cases are documented at their individual methods.
 
 use crate::parsing::{
     Import, InheritanceResolver, LanguageBehavior, ResolutionScope,

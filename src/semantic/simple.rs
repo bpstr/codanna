@@ -452,7 +452,6 @@ impl SimpleSemanticSearch {
             .collect())
     }
 
-    /// Get the number of indexed embeddings
     /// Returns true when a local fastembed model is available for query embedding.
     /// Returns false for remote-mode instances that require an external backend.
     pub fn has_local_model(&self) -> bool {
@@ -469,6 +468,7 @@ impl SimpleSemanticSearch {
         self.metadata.as_ref().is_some_and(|m| m.is_remote())
     }
 
+    /// Get the number of indexed embeddings.
     pub fn embedding_count(&self) -> usize {
         self.embeddings.len()
     }

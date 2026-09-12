@@ -2,8 +2,8 @@
 //!
 //! Provides symbol extraction for Java using tree-sitter.
 //!
-//! Scaffolding created based on Kotlin parser structure.
-//! TODO: Implement methods after exploring actual Java AST with tree-sitter.
+//! Extracts declarations, imports, calls, and inheritance from Java syntax trees.
+//! Remaining unsupported extraction cases are documented at their methods.
 
 use crate::parsing::Import;
 use crate::parsing::parser::check_recursion_depth;
@@ -102,7 +102,10 @@ impl JavaParser {
             .register_handled_node(node.kind(), node.kind_id());
     }
 
-    /// Extract raw source text for a node
+    /// Extract raw source text for a node from the same UTF-8 source used to parse it.
+    /// The tree-sitter byte range must lie within `code` on character boundaries;
+    /// Rust string indexing checks those boundaries. This is not an API for an
+    /// arbitrary node paired with unrelated or modified source text.
     fn text_for_node<'a>(&self, code: &'a str, node: Node) -> &'a str {
         &code[node.byte_range()]
     }
