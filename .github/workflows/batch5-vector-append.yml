@@ -1,0 +1,92 @@
+name: Batch 5 vector append recovery
+
+on:
+  push:
+    branches:
+      - hardening/vector-append-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/vector-append-recovery
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Implement crash-safe append recovery
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("src/vector/storage.rs")
+          s = path.read_text()
+
+          old = '''        Self::validate_physical_layout(&mmap, dimension, vector_count)?;\n\n        Ok(Self {\n            path,\n            mmap: Some(mmap),\n'''
+          new = '''        let expected_len = Self::expected_file_size(dimension, vector_count)?;\n        if mmap.len() < expected_len {\n            return Err(VectorStorageError::InvalidFormat(format!(\n                "Vector file is truncated: header expects {expected_len} bytes, file contains {} bytes",\n                mmap.len()\n            )));\n        }\n\n        // The header count is the commit marker for append batches. If a process\n        // dies after syncing payload bytes but before publishing the new count,\n        // the bytes beyond the committed layout are an uncommitted tail. Recover\n        // the last known-good generation instead of permanently rejecting it.\n        let mmap = if mmap.len() > expected_len {\n            drop(mmap);\n            drop(file);\n            let file = OpenOptions::new().write(true).open(&path)?;\n            file.set_len(expected_len as u64)?;\n            file.sync_all()?;\n            drop(file);\n            let file = File::open(&path)?;\n            // SAFETY: same invariant as above; writes always invalidate maps first.\n            unsafe { MmapOptions::new().map(&file)? }\n        } else {\n            mmap\n        };\n        Self::validate_physical_layout(&mmap, dimension, vector_count)?;\n\n        Ok(Self {\n            path,\n            mmap: Some(mmap),\n'''
+          if old not in s:
+              raise SystemExit("open layout marker missing")
+          s = s.replace(old, new, 1)
+
+          old = '''        self.invalidate_cache();\n        self.append_vectors(vectors)?;\n        self.update_metadata(vectors.len())?;\n        Ok(())\n'''
+          new = '''        let new_count = self\n            .vector_count\n            .checked_add(vectors.len())\n            .filter(|count| *count <= u32::MAX as usize)\n            .ok_or_else(|| {\n                VectorStorageError::InvalidFormat(\n                    "Vector count exceeds storage format capacity".to_string(),\n                )\n            })?;\n\n        self.invalidate_cache();\n        self.append_vectors(vectors)?;\n\n        // Payload is durable before the header publishes the new count. If header\n        // publication fails, roll back to the previously committed file length.\n        if let Err(err) = self.update_header_count(new_count) {\n            let _ = self.truncate_to_count(self.vector_count);\n            return Err(err);\n        }\n        self.vector_count = new_count;\n        Ok(())\n'''
+          if old not in s:
+              raise SystemExit("write_batch marker missing")
+          s = s.replace(old, new, 1)
+
+          old = '''        writer.flush()?;\n        Ok(())\n    }\n\n    /// Updates metadata after writing vectors.\n    fn update_metadata(&mut self, vector_count: usize) -> Result<(), VectorStorageError> {\n        self.vector_count += vector_count;\n        self.update_header_count()?;\n        Ok(())\n    }\n'''
+          new = '''        writer.flush()?;\n        writer.get_ref().sync_all()?;\n        Ok(())\n    }\n'''
+          if old not in s:
+              raise SystemExit("append/update_metadata marker missing")
+          s = s.replace(old, new, 1)
+
+          old = '''    fn validate_physical_layout(\n        mmap: &Mmap,\n        dimension: VectorDimension,\n        vector_count: usize,\n    ) -> Result<(), VectorStorageError> {\n        let payload_bytes = dimension\n            .get()\n            .checked_mul(BYTES_PER_F32)\n            .and_then(|bytes| bytes.checked_add(BYTES_PER_ID))\n            .ok_or_else(|| {\n                VectorStorageError::InvalidFormat(\n                    "Vector record size overflows address space".to_string(),\n                )\n            })?;\n        let expected = vector_count\n            .checked_mul(payload_bytes)\n            .and_then(|bytes| bytes.checked_add(HEADER_SIZE))\n            .ok_or_else(|| {\n                VectorStorageError::InvalidFormat(\n                    "Vector file size overflows address space".to_string(),\n                )\n            })?;\n\n        if mmap.len() != expected {\n'''
+          new = '''    fn expected_file_size(\n        dimension: VectorDimension,\n        vector_count: usize,\n    ) -> Result<usize, VectorStorageError> {\n        let payload_bytes = dimension\n            .get()\n            .checked_mul(BYTES_PER_F32)\n            .and_then(|bytes| bytes.checked_add(BYTES_PER_ID))\n            .ok_or_else(|| {\n                VectorStorageError::InvalidFormat(\n                    "Vector record size overflows address space".to_string(),\n                )\n            })?;\n        vector_count\n            .checked_mul(payload_bytes)\n            .and_then(|bytes| bytes.checked_add(HEADER_SIZE))\n            .ok_or_else(|| {\n                VectorStorageError::InvalidFormat(\n                    "Vector file size overflows address space".to_string(),\n                )\n            })\n    }\n\n    fn validate_physical_layout(\n        mmap: &Mmap,\n        dimension: VectorDimension,\n        vector_count: usize,\n    ) -> Result<(), VectorStorageError> {\n        let expected = Self::expected_file_size(dimension, vector_count)?;\n\n        if mmap.len() != expected {\n'''
+          if old not in s:
+              raise SystemExit("physical layout marker missing")
+          s = s.replace(old, new, 1)
+
+          old = '''    fn update_header_count(&self) -> Result<(), VectorStorageError> {\n        use std::io::{Seek, SeekFrom};\n'''
+          new = '''    fn truncate_to_count(&self, count: usize) -> Result<(), VectorStorageError> {\n        let expected = Self::expected_file_size(self.dimension, count)?;\n        let file = OpenOptions::new().write(true).open(&self.path)?;\n        file.set_len(expected as u64)?;\n        file.sync_all()?;\n        Ok(())\n    }\n\n    fn update_header_count(&self, count: usize) -> Result<(), VectorStorageError> {\n        use std::io::{Seek, SeekFrom};\n'''
+          if old not in s:
+              raise SystemExit("header helper marker missing")
+          s = s.replace(old, new, 1)
+          s = s.replace('file.write_all(&(self.vector_count as u32).to_le_bytes())?;\n        file.flush()?;', 'file.write_all(&(count as u32).to_le_bytes())?;\n        file.flush()?;\n        file.sync_all()?;', 1)
+
+          old_test = '''    fn hardening_open_rejects_orphan_vector_tail() {'''
+          if old_test not in s:
+              raise SystemExit("orphan-tail test missing")
+          s = s.replace(old_test, '''    fn hardening_open_recovers_uncommitted_vector_tail() {''', 1)
+          old_assert = '''        let err = MmapVectorStorage::open(&temp_dir, segment)\n            .expect_err("unpublished appended vector must be rejected");\n        assert!(err.to_string().contains("inconsistent"));\n'''
+          new_assert = '''        let mut reopened = MmapVectorStorage::open(&temp_dir, segment)\n            .expect("unpublished appended tail should roll back to committed header count");\n        assert_eq!(reopened.vector_count(), 1);\n        assert_eq!(reopened.read_all_vectors().unwrap(), data);\n        assert_eq!(\n            reopened.file_size().unwrap() as usize,\n            MmapVectorStorage::expected_file_size(dimension, 1).unwrap()\n        );\n'''
+          if old_assert not in s:
+              raise SystemExit("orphan-tail assertion missing")
+          s = s.replace(old_assert, new_assert, 1)
+
+          marker = '''    #[test]\n    fn hardening_open_rejects_header_count_beyond_file() {\n'''
+          extra_test = '''    #[test]\n    fn hardening_open_recovers_partial_uncommitted_tail() {\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];\n        let refs: Vec<_> = data.iter().map(|(id, v)| (*id, v.as_slice())).collect();\n        storage.write_batch(&refs).unwrap();\n        drop(storage);\n\n        let path = temp_dir.path().join("segment_0.vec");\n        let mut file = OpenOptions::new().append(true).open(&path).unwrap();\n        file.write_all(&[0xAA, 0xBB, 0xCC]).unwrap();\n        file.sync_all().unwrap();\n        drop(file);\n\n        let mut reopened = MmapVectorStorage::open(&temp_dir, segment)\n            .expect("partial uncommitted append must recover committed generation");\n        assert_eq!(reopened.read_all_vectors().unwrap(), data);\n        assert_eq!(\n            reopened.file_size().unwrap() as usize,\n            MmapVectorStorage::expected_file_size(dimension, 1).unwrap()\n        );\n    }\n\n'''
+          if "hardening_open_recovers_partial_uncommitted_tail" not in s:
+              if marker not in s:
+                  raise SystemExit("test insertion marker missing")
+              s = s.replace(marker, extra_test + marker, 1)
+
+          path.write_text(s)
+
+      - name: Format and test append recovery
+        run: |
+          cargo fmt --all
+          cargo test vector::storage::tests::hardening_open_recovers --lib
+          cargo test vector::storage::tests --lib
+          cargo clippy --lib --all-features -- -D warnings
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs
+          git commit -m "hardening: make vector appends crash recoverable"
+          git push origin HEAD:hardening/vector-append-recovery
