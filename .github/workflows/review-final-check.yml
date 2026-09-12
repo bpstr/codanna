@@ -3,9 +3,7 @@ name: Review final checks
 on:
   push:
     branches: [work/review-20260912]
-    paths:
-      - .github/workflows/review-final-check.yml
-      - 'review.final*.py'
+    paths: [.github/workflows/review-final-check.yml, 'review.final*.py']
 
 permissions:
   contents: read
@@ -32,11 +30,38 @@ jobs:
           ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
           persist-credentials: false
       - name: Apply verified changes
+        id: apply
         run: |
           python3 "$RUNNER_TEMP/review.final-driver.py"
-          if [[ -f "$RUNNER_TEMP/review.final-adjust.py" ]]; then
-            python3 "$RUNNER_TEMP/review.final-adjust.py"
-          fi
+          python3 "$RUNNER_TEMP/review.final-adjust.py"
+          cargo fmt --all
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          encoded = b''.join(p.read_bytes() for p in sorted(Path(os.environ['RUNNER_TEMP']).glob('review.final-wire.part*.b64')))
+          raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(raw).hexdigest() == '30d92eab7350e90216b11a3c84805b01fa43fb1dbb9e86379c411c57c6afe845'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+              assert not path.is_symlink()
+              old = path.read_bytes() if path.exists() else b''
+              if change['old'] is None:
+                  assert not path.exists(), str(path)
+              else:
+                  assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path, new))
+          for path, new in prepared:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(new)
+          print(f'Applied {len(prepared)} wire/browser changes')
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
@@ -57,19 +82,47 @@ jobs:
       - name: Full Rust tests with locked dependencies
         run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
       - name: Strict Clippy
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
       - name: No default features
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/no-default.log"
       - name: Documentation
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps --all-features 2>&1 | tee "$RUNNER_TEMP/docs.log"
       - name: Plugin regressions
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: node --test tests/security/*.test.cjs 2>&1 | tee "$RUNNER_TEMP/node.log"
+      - uses: pnpm/action-setup@v4
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        with:
+          version: 10.12.1
+      - name: Locked example dependencies and reviewed-page types
+        id: example
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        working-directory: examples/typescript/react
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          node node_modules/typescript/bin/tsc -p tsconfig.review.json --noEmit --pretty false
+      - name: Chromium reflow and accessibility witness
+        if: ${{ !cancelled() && steps.example.outcome == 'success' }}
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+          REVIEW_BROWSER_OUTPUT: ${{ runner.temp }}/browser
+        run: |
+          cd examples/typescript/react
+          node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3040 > "$RUNNER_TEMP/next.log" 2>&1 &
+          next_pid=$!
+          trap 'kill "$next_pid" 2>/dev/null || true' EXIT
+          cd ../../..
+          for attempt in {1..90}; do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3040/examples/mail > /dev/null; then break; fi
+            kill -0 "$next_pid"
+            sleep 1
+          done
+          node contributing/scripts/review-browser.mjs 2>&1 | tee "$RUNNER_TEMP/browser.log"
       - name: Export candidate
         if: always()
         run: |
@@ -81,6 +134,7 @@ jobs:
           name: review-final-checks
           path: |
             ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/browser
             ${{ runner.temp }}/candidate.patch
             ${{ runner.temp }}/review.final*.b64
           retention-days: 3
