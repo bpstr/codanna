@@ -1,20 +1,23 @@
 name: Full Test Suite
 on:
-  # Only run on PRs to main
   pull_request:
     branches: [main]
-
-  # Manual trigger for testing
   workflow_dispatch:
-
-  # Nightly run to catch issues early
   schedule:
-    - cron: '0 0 * * *'  # Midnight UTC daily
-
-  # Run on version tags
+    - cron: '0 0 * * *'
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,54 +27,50 @@ jobs:
   test:
     name: Full Test Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Fail if takes longer than 30 minutes
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           cache-all-crates: true
-
-      # Fast checks first
       - name: Check formatting
-        run: cargo fmt --check
-
+        run: cargo fmt --all -- --check
       - name: Clippy with project rules
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      # Verify no-default-features compiles (check only, no linking needed)
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Check no-default-features
-        run: cargo check --no-default-features
-
-      # Run tests (implicitly builds debug binary and all test targets)
-      - name: Run tests
-        run: cargo test --verbose
-
-      # CLI smoke tests using the debug binary built by cargo test
+        run: cargo check --locked --no-default-features
+      - name: Run default-feature tests
+        run: cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/default-tests.log"
+      - name: Run all-feature tests
+        run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/all-feature-tests.log"
       - name: Verify CLI commands
         run: |
           ./target/debug/codanna --help
           ./target/debug/codanna index --help
           ./target/debug/codanna retrieve --help
-
-      # Documentation
       - name: Check docs build
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --locked --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-rust-test-logs
+          path: |
+            ${{ runner.temp }}/default-tests.log
+            ${{ runner.temp }}/all-feature-tests.log
+          retention-days: 7
+          if-no-files-found: ignore
 
-  # Windows runs in windows-witness.yml (dispatch + nightly), decoupled
-  # so this chain waits only on gates. It rejoins here as a
-  # `uses:` job (workflow_call) when promoted to a gate.
-
-  # Release build and size check -- only on version tags
+  # Windows is exercised separately in windows-witness.yml.
   release-check:
     name: Release Build Check
     if: startsWith(github.ref, 'refs/tags/v')
@@ -79,24 +78,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release"
+          shared-key: release
           cache-on-failure: true
-
       - name: Build release binary
-        run: cargo build --release
-
+        run: cargo build --locked --release
       - name: Check binary size
         run: |
           ls -lh target/release/codanna
-          size=$(stat -c%s target/release/codanna 2>/dev/null || stat -f%z target/release/codanna)
+          size=$(stat -c%s target/release/codanna)
           echo "Binary size: $size bytes"
-          if [ $size -gt 50000000 ]; then  # 50MB limit
+          if [ "$size" -gt 50000000 ]; then
             echo "::warning::Binary larger than 50MB"
           fi
