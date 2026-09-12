@@ -1,0 +1,43 @@
+name: Apply upstream 130 patch
+on:
+  push:
+    branches: [hardening/upstream-130-buffered-writes]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/upstream-130-buffered-writes
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply focused patch
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/vector/storage.rs')
+          s = p.read_text()
+          s = s.replace('use std::io::{self, Write};', 'use std::io::{self, BufWriter, Write};', 1)
+          old = '''        // Write vectors\n        for (id, vector) in vectors {\n            // Write vector ID\n            file.write_all(&id.to_bytes())?;\n\n            // Write vector data\n            for &value in vector {\n                file.write_all(&value.to_le_bytes())?;\n            }\n        }\n\n        file.flush()?;\n'''
+          new = '''        // Buffer payload writes: without a buffer a 384-dimensional vector\n        // becomes 385 separate write_all calls. Flush before the caller\n        // publishes the updated header count so the existing crash ordering\n        // remains intact.\n        let mut writer = BufWriter::new(file);\n        for (id, vector) in vectors {\n            writer.write_all(&id.to_bytes())?;\n            for &value in vector {\n                writer.write_all(&value.to_le_bytes())?;\n            }\n        }\n        writer.flush()?;\n'''
+          if old not in s:
+              raise SystemExit('append vector payload block not found')
+          p.write_text(s.replace(old, new, 1))
+      - name: Format
+        run: cargo fmt --all
+      - name: Test vector storage
+        run: cargo test vector::storage --all-features
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/zz-patch-upstream-130.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/vector/storage.rs .github/workflows/zz-patch-upstream-130.yml
+          git commit -m "perf: buffer vector payload writes"
+          git push origin HEAD:hardening/upstream-130-buffered-writes
