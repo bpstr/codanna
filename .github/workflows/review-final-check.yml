@@ -1,20 +1,15 @@
 name: Review final checks
-
 on:
   push:
     branches: [work/review-20260912]
     paths: [.github/workflows/review-final-check.yml, 'review.final*.py']
-
 permissions:
   contents: read
-
 defaults:
   run:
     shell: bash
-
 env:
   CARGO_TERM_COLOR: never
-
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -24,7 +19,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Preserve verified source manifests
-        run: cp review.final*.b64 review.final*.py "$RUNNER_TEMP/"
+        run: cp review.final*.b64 review.final*.py review.final*.txt "$RUNNER_TEMP/"
       - uses: actions/checkout@v6
         with:
           ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
@@ -62,6 +57,7 @@ jobs:
               path.write_bytes(new)
           print(f'Applied {len(prepared)} wire/browser changes')
           PY
+          python3 "$RUNNER_TEMP/review.final-hotfix.txt"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
@@ -81,6 +77,9 @@ jobs:
           cargo clean -p codanna
       - name: Full Rust tests with locked dependencies
         run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
+      - name: Default-feature Rust suite
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        run: cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/default-tests.log"
       - name: Strict Clippy
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
