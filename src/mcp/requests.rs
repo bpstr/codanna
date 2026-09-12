@@ -154,21 +154,52 @@ mod tests {
 
     #[test]
     fn unknown_keys_reject_across_request_structs() {
-        assert!(serde_json::from_value::<FindSymbolRequest>(json!({"name": "x", "bogus": 1})).is_err());
+        assert!(
+            serde_json::from_value::<FindSymbolRequest>(json!({"name": "x", "bogus": 1})).is_err()
+        );
         assert!(serde_json::from_value::<GetCallsRequest>(json!({"bogus": 1})).is_err());
         assert!(serde_json::from_value::<FindCallersRequest>(json!({"langg": "rust"})).is_err());
-        assert!(serde_json::from_value::<AnalyzeImpactRequest>(json!({"symbol_name": "x", "depths": 2})).is_err());
-        assert!(serde_json::from_value::<SearchSymbolsRequest>(json!({"query": "q", "kindd": "function"})).is_err());
-        assert!(serde_json::from_value::<SemanticSearchRequest>(json!({"query": "q", "treshold": 0.5})).is_err());
-        assert!(serde_json::from_value::<SemanticSearchWithContextRequest>(json!({"query": "q", "x": 1})).is_err());
+        assert!(
+            serde_json::from_value::<AnalyzeImpactRequest>(
+                json!({"symbol_name": "x", "depths": 2})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SearchSymbolsRequest>(
+                json!({"query": "q", "kindd": "function"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SemanticSearchRequest>(json!({"query": "q", "treshold": 0.5}))
+                .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SemanticSearchWithContextRequest>(
+                json!({"query": "q", "x": 1})
+            )
+            .is_err()
+        );
         assert!(serde_json::from_value::<GetIndexInfoRequest>(json!({"bogus": 1})).is_err());
-        assert!(serde_json::from_value::<SearchDocumentsRequest>(json!({"query": "q", "collections": "a"})).is_err());
-        assert!(serde_json::from_value::<SearchContextRequest>(json!({"query": "q", "memory_limit": 5})).is_err());
+        assert!(
+            serde_json::from_value::<SearchDocumentsRequest>(
+                json!({"query": "q", "collections": "a"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SearchContextRequest>(
+                json!({"query": "q", "memory_limit": 5})
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn search_context_defaults_are_small() {
-        let req: SearchContextRequest = serde_json::from_value(json!({"query": "status bar"})).unwrap();
+        let req: SearchContextRequest =
+            serde_json::from_value(json!({"query": "status bar"})).unwrap();
         assert_eq!(req.code_limit, 5);
         assert_eq!(req.document_limit, 5);
         assert_eq!(req.conversation_limit, 5);
@@ -176,9 +207,11 @@ mod tests {
 
     #[test]
     fn depth_aliases_max_depth() {
-        let req: AnalyzeImpactRequest = serde_json::from_value(json!({"symbol_name": "x", "depth": 2})).expect("alias applies");
+        let req: AnalyzeImpactRequest =
+            serde_json::from_value(json!({"symbol_name": "x", "depth": 2})).expect("alias applies");
         assert_eq!(req.max_depth, 2);
-        let req: AnalyzeImpactRequest = serde_json::from_value(json!({"symbol_name": "x"})).expect("default applies");
+        let req: AnalyzeImpactRequest =
+            serde_json::from_value(json!({"symbol_name": "x"})).expect("default applies");
         assert_eq!(req.max_depth, 3);
     }
 
