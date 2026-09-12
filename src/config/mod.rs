@@ -423,8 +423,6 @@ impl Settings {
         if config_path.exists() {
             figment = figment.merge(Toml::file(config_path));
         }
-        figment
-            .merge(Env::prefixed("CI_").split("__"))
-            .extract()
+        figment.merge(Env::prefixed("CI_").split("__")).extract()
     }
 }
