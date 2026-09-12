@@ -182,7 +182,14 @@ impl SimpleSemanticSearch {
 
         let embedding = embeddings.into_iter().next().unwrap();
 
-        // Validate dimensions
+        // Non-finite values make cosine ranking undefined and historically
+        // could panic sorting through partial_cmp(...).unwrap(). Reject them
+        // at the ingestion boundary instead of letting corruption propagate.
+        if embedding.iter().any(|value| !value.is_finite()) {
+            return Err(SemanticSearchError::EmbeddingError(
+                "Embedding contains non-finite values".to_string(),
+            ));
+        }
         if embedding.len() != self.dimensions {
             return Err(SemanticSearchError::EmbeddingError(format!(
                 "Embedding dimension mismatch: expected {}, got {}",
@@ -219,7 +226,8 @@ impl SimpleSemanticSearch {
         let mut count = 0;
         let mut dropped = 0usize;
         for (symbol_id, embedding, language) in items {
-            if embedding.len() == self.dimensions {
+            if embedding.len() == self.dimensions && embedding.iter().all(|value| value.is_finite())
+            {
                 self.embeddings.insert(symbol_id, embedding);
                 self.symbol_languages.insert(symbol_id, language);
                 count += 1;
@@ -272,7 +280,7 @@ impl SimpleSemanticSearch {
                 }
             })
             .collect();
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
         similarities.truncate(limit);
         Ok(similarities)
     }
@@ -319,7 +327,7 @@ impl SimpleSemanticSearch {
             .into_iter()
             .map(|(id, emb)| (*id, cosine_similarity(query_embedding, emb)))
             .collect();
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
         similarities.truncate(limit);
         Ok(similarities)
     }
@@ -358,7 +366,7 @@ impl SimpleSemanticSearch {
             .collect();
 
         // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Return top results
         similarities.truncate(limit);
@@ -417,7 +425,7 @@ impl SimpleSemanticSearch {
             .collect();
 
         // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Return top results
         similarities.truncate(limit);
