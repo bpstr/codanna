@@ -1,0 +1,63 @@
+name: Language bootstrap
+on:
+  push:
+    branches: ['feature/languages-ruby-bash']
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/languages-ruby-bash
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Wire languages into registry and factory
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/parsing/registry.rs')
+          s = p.read_text()
+          s = s.replace('            "typescript" => "typescript",\n', '            "typescript" => "typescript",\n            "ruby" => "ruby",\n            "bash" => "bash",\n')
+          s = s.replace('    super::swift::register(registry);\n', '    super::swift::register(registry);\n    super::ruby_bash::register(registry);\n')
+          p.write_text(s)
+
+          p = Path('src/parsing/factory.rs')
+          s = p.read_text()
+          s = s.replace('    LanguageId, LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior,\n', '    LanguageId, LanguageParser, LightweightBehavior, LightweightParser, LuaBehavior, LuaParser,\n    PhpBehavior, PhpParser, PythonBehavior,\n')
+          legacy = '''            Language::Swift => {\n                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;\n                Ok(Box::new(parser))\n            }\n'''
+          legacy_new = legacy + '''            Language::Ruby => {\n                Ok(Box::new(LightweightParser::ruby().map_err(IndexError::General)?))\n            }\n            Language::Bash => {\n                Ok(Box::new(LightweightParser::bash().map_err(IndexError::General)?))\n            }\n'''
+          if s.count(legacy) != 1:
+              raise SystemExit('legacy Swift arm not found exactly once')
+          s = s.replace(legacy, legacy_new)
+          paired = '''            Language::Swift => {\n                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;\n                ParserWithBehavior {\n                    parser: Box::new(parser),\n                    behavior: Box::new(SwiftBehavior::new()),\n                }\n            }\n'''
+          paired_new = paired + '''            Language::Ruby => ParserWithBehavior {\n                parser: Box::new(LightweightParser::ruby().map_err(IndexError::General)?),\n                behavior: Box::new(LightweightBehavior::ruby()),\n            },\n            Language::Bash => ParserWithBehavior {\n                parser: Box::new(LightweightParser::bash().map_err(IndexError::General)?),\n                behavior: Box::new(LightweightBehavior::bash()),\n            },\n'''
+          if s.count(paired) != 1:
+              raise SystemExit('paired Swift arm not found exactly once')
+          s = s.replace(paired, paired_new)
+          s = s.replace('            Language::TypeScript,\n', '            Language::TypeScript,\n            Language::Ruby,\n            Language::Bash,\n')
+          p.write_text(s)
+
+          p = Path('src/parsing/mod.rs')
+          s = p.read_text().replace('pub mod util;\n', '')
+          p.write_text(s)
+          PY
+      - name: Refresh lockfile and validate parsers
+        run: |
+          cargo check --all-targets --all-features
+          cargo fmt --all
+          cargo test ruby_bash --lib
+      - name: Commit generated integration
+        run: |
+          rm .github/workflows/language-bootstrap.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock src/parsing Cargo.toml .github/workflows/language-bootstrap.yml
+          git commit -m 'feat(parsing): wire Ruby and Bash into Codanna'
+          git push origin HEAD:feature/languages-ruby-bash
