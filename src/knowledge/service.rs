@@ -9,6 +9,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 struct KnowledgeServer {
     graph: Arc<knowledge::Graph>,
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
