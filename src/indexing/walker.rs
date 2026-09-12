@@ -7,7 +7,7 @@
 //! - Hidden file handling
 
 use crate::Settings;
-use crate::parsing::get_registry;
+use crate::parsing::{generic_pack, get_registry};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,7 +54,8 @@ impl FileWalker {
         // Get enabled extensions from the registry
         let enabled_extensions = self.get_enabled_extensions();
 
-        // Build and filter the walker
+        // Build and filter the walker. Generic language detection is a pure table lookup.
+        let settings = self.settings.clone();
         Self::configured_builder(root)
             .build()
             .filter_map(Result::ok) // Skip files we can't access
@@ -71,7 +72,6 @@ impl FileWalker {
                     }
                 }
 
-                // Check if this file extension is enabled
                 if let Some(extension) = path.extension() {
                     if let Some(ext_str) = extension.to_str() {
                         if enabled_extensions.iter().any(|ext| ext == ext_str) {
@@ -80,7 +80,7 @@ impl FileWalker {
                     }
                 }
 
-                None
+                generic_pack::detect_path(path, &settings).map(|_| path.to_path_buf())
             })
     }
 

@@ -5,13 +5,13 @@
 //! extracts only high-confidence structure and imports; it does not invent
 //! call, inheritance, receiver-type, or implementation edges.
 
+use crate::Settings;
+use crate::SymbolKind as CodannaSymbolKind;
 use crate::indexing::pipeline::types::{
     ParsedFile, PipelineError, PipelineResult, RawImport, RawSymbol,
 };
 use crate::parsing::LanguageId;
 use crate::types::Range;
-use crate::Settings;
-use crate::SymbolKind as CodannaSymbolKind;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tree_sitter_language_pack::{ProcessConfig, StructureItem, StructureKind, SymbolInfo};
