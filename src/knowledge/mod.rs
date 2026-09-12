@@ -147,7 +147,10 @@ impl Graph {
         }
         for unresolved in &self.unresolved {
             if !self.nodes.contains_key(&unresolved.from)
-                || unresolved.candidates.iter().any(|id| !self.nodes.contains_key(id))
+                || unresolved
+                    .candidates
+                    .iter()
+                    .any(|id| !self.nodes.contains_key(id))
             {
                 return Err("dangling unresolved reference".into());
             }
@@ -157,7 +160,10 @@ impl Graph {
     }
 
     fn validate_span(&self, span: &Span) -> Result<()> {
-        let hash = self.repositories.get(&span.repo).and_then(|r| r.files.get(&span.path));
+        let hash = self
+            .repositories
+            .get(&span.repo)
+            .and_then(|r| r.files.get(&span.path));
         if hash != Some(&span.hash) || span.start_line == 0 || span.end_line < span.start_line {
             return Err("invalid evidence span or source hash".into());
         }
@@ -166,11 +172,27 @@ impl Graph {
 
     pub fn normalize(&mut self) {
         self.edges.sort_by(|a, b| {
-            (&a.from, &a.to, &a.relation, &a.basis, &a.method, a.evidence.start_line)
-                .cmp(&(&b.from, &b.to, &b.relation, &b.basis, &b.method, b.evidence.start_line))
+            (
+                &a.from,
+                &a.to,
+                &a.relation,
+                &a.basis,
+                &a.method,
+                a.evidence.start_line,
+            )
+                .cmp(&(
+                    &b.from,
+                    &b.to,
+                    &b.relation,
+                    &b.basis,
+                    &b.method,
+                    b.evidence.start_line,
+                ))
         });
         self.edges.dedup();
-        self.unresolved.sort_by(|a, b| (&a.from, &a.reference, &a.reason).cmp(&(&b.from, &b.reference, &b.reason)));
+        self.unresolved.sort_by(|a, b| {
+            (&a.from, &a.reference, &a.reason).cmp(&(&b.from, &b.reference, &b.reason))
+        });
         self.unresolved.dedup();
         self.limitations.sort();
         self.limitations.dedup();
@@ -184,7 +206,15 @@ impl Graph {
         match candidates.as_slice() {
             [node] => Ok(node),
             [] => Err(format!("no entity matches {query:?}").into()),
-            _ => Err(format!("ambiguous entity {query:?}; use an id: {}", candidates.iter().map(|n| n.id.as_str()).collect::<Vec<_>>().join(", ")).into()),
+            _ => Err(format!(
+                "ambiguous entity {query:?}; use an id: {}",
+                candidates
+                    .iter()
+                    .map(|n| n.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .into()),
         }
     }
 }
@@ -194,15 +224,27 @@ pub fn valid_hash(hash: &str) -> bool {
 }
 
 pub fn validate_repo(repo: &str) -> Result<()> {
-    if repo.is_empty() || repo.len() > 128 || !repo.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)) {
-        return Err("repository id must contain 1..128 ASCII letters, digits, dots, dashes or underscores".into());
+    if repo.is_empty()
+        || repo.len() > 128
+        || !repo
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
+        return Err(
+            "repository id must contain 1..128 ASCII letters, digits, dots, dashes or underscores"
+                .into(),
+        );
     }
     Ok(())
 }
 
 pub fn validate_path(path: &str) -> Result<()> {
-    if path.is_empty() || path.contains(['\\', ':', '\0']) || path.starts_with('/')
-        || path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    if path.is_empty()
+        || path.contains(['\\', ':', '\0'])
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err(format!("unsafe repository-relative path: {path:?}").into());
     }
