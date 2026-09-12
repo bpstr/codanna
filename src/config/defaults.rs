@@ -41,6 +41,9 @@ pub(super) fn default_batch_size() -> usize {
 pub(super) fn default_batches_per_commit() -> usize {
     10 // Commit every 10 batches (~50K symbols)
 }
+pub(super) fn default_max_file_size_bytes() -> u64 {
+    32 * 1024 * 1024 // 32 MiB: source files larger than this are almost always generated artifacts
+}
 pub(super) fn default_true() -> bool {
     true
 }
