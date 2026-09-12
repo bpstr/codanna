@@ -1,0 +1,115 @@
+name: Review reconnect witness
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-reconnect-check.yml]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: cp review.reconnect.b64 "$RUNNER_TEMP/"
+      - uses: actions/checkout@v6
+        with:
+          ref: d818173ef7b3e297d9577cad6991e488eae44e13
+          persist-credentials: false
+      - name: Apply checked test-only changes
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          raw = gzip.decompress(base64.b64decode(Path(os.environ['RUNNER_TEMP'], 'review.reconnect.b64').read_bytes()))
+          assert hashlib.sha256(raw).hexdigest() == 'ceae1e10b700384224dbfa3414b362cb019131738dce425be809bc0a976ad477'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert str(path) in ['src/mcp/network.rs', 'Cargo.toml', 'Cargo.lock']
+              old = path.read_bytes()
+              assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path, new))
+          for path, new in prepared:
+              path.write_bytes(new)
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: review-final
+          cache-on-failure: true
+      - name: Format and strict lint
+        run: |
+          cargo fmt --all
+          git diff --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Ten parallel HTTP and TLS reconnect repetitions
+        run: |
+          for attempt in {1..10}; do
+            cargo test --locked --all-features --lib mcp::network::tests:: -- --nocapture --test-threads=2 2>&1 | tee "$RUNNER_TEMP/reconnect-$attempt.log"
+            grep -q 'test result: ok. 2 passed;' "$RUNNER_TEMP/reconnect-$attempt.log"
+          done
+      - name: Complete hardening command with normal parallelism
+        run: cargo test --locked hardening_ --all-features -- --nocapture 2>&1 | tee "$RUNNER_TEMP/hardening.log"
+      - name: Full default suite
+        run: cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/default-tests.log"
+      - name: Full all-feature suite
+        run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/all-feature-tests.log"
+      - name: No-default-features and documentation
+        run: |
+          cargo check --locked --no-default-features
+          RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps --all-features
+      - name: Export tested source
+        run: git diff --binary > "$RUNNER_TEMP/reconnect.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-reconnect-validation
+          path: |
+            ${{ runner.temp }}/reconnect.patch
+            ${{ runner.temp }}/*tests.log
+            ${{ runner.temp }}/reconnect-*.log
+            ${{ runner.temp }}/hardening.log
+          retention-days: 3
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: d818173ef7b3e297d9577cad6991e488eae44e13
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-reconnect-validation
+          path: ${{ runner.temp }}/checked
+      - name: Append tested fixture without overwriting concurrent work
+        run: |
+          branch=fix/review-20260912
+          base=d818173ef7b3e297d9577cad6991e488eae44e13
+          actual=$(git ls-remote --exit-code origin "refs/heads/$branch" | cut -f1)
+          test "$actual" = "$base"
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/checked/reconnect.patch"
+          git diff --cached --check
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: observe server SSE closure and require fresh replay identities'
+          git push origin "HEAD:refs/heads/$branch"
