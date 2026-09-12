@@ -15,7 +15,7 @@ struct Cli {
     #[arg(long, global = true)]
     index: Option<PathBuf>,
     /// Explicit privacy/retrieval scope, shared by both clients (for example assign).
-    #[arg(long, global = true)]
+    #[arg(long)]
     workspace: String,
     #[command(subcommand)]
     command: Command,
@@ -70,12 +70,13 @@ async fn main() -> Result<()> {
     let create = matches!(&cli.command, Command::Import { .. });
     let store = store::Store::open(&path, create)?;
     let output = match cli.command {
-        Command::Import { provider, file } => {
-            store.import(&cli.workspace, provider, &file)?
-        }
-        Command::Search { query, limit, role, provider } => {
-            store.search(&cli.workspace, &query, limit, role.as_deref(), provider)?
-        }
+        Command::Import { provider, file } => store.import(&cli.workspace, provider, &file)?,
+        Command::Search {
+            query,
+            limit,
+            role,
+            provider,
+        } => store.search(&cli.workspace, &query, limit, role.as_deref(), provider)?,
         Command::Read { id } => store.read(&cli.workspace, &id)?,
         Command::Forget { source_id } => {
             store.forget(&cli.workspace, &source_id)?;
