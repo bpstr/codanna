@@ -125,13 +125,16 @@ fn provider_dispatch(
 }
 
 #[cfg(feature = "gpu-embeddings")]
-fn commit_runtime_provider(dispatch: ExecutionProviderDispatch) -> bool {
-    ort::init().with_execution_providers([dispatch]).commit()
+fn commit_runtime_provider(dispatch: ExecutionProviderDispatch) -> Result<bool, String> {
+    ort::init()
+        .with_execution_providers([dispatch])
+        .commit()
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(not(feature = "gpu-embeddings"))]
-fn commit_runtime_provider(_dispatch: ExecutionProviderDispatch) -> bool {
-    false
+fn commit_runtime_provider(_dispatch: ExecutionProviderDispatch) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Configure the process-wide ONNX Runtime environment for local embeddings.
@@ -165,21 +168,27 @@ pub fn configure_embedding_runtime() {
         return;
     };
 
-    let committed = commit_runtime_provider(dispatch);
-
-    if committed {
-        eprintln!(
-            "codanna: local embeddings configured for {provider_name}{}",
-            if strict {
-                " (strict)"
-            } else {
-                " with CPU fallback"
-            }
-        );
-    } else {
-        eprintln!(
-            "codanna: ONNX Runtime was already initialized before embedding provider selection; existing runtime configuration is unchanged"
-        );
+    match commit_runtime_provider(dispatch) {
+        Ok(true) => {
+            eprintln!(
+                "codanna: local embeddings configured for {provider_name}{}",
+                if strict {
+                    " (strict)"
+                } else {
+                    " with CPU fallback"
+                }
+            );
+        }
+        Ok(false) => {
+            eprintln!(
+                "codanna: ONNX Runtime was already initialized before embedding provider selection; existing runtime configuration is unchanged"
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "codanna: failed to configure {provider_name} embedding provider: {error}; using the existing ONNX Runtime configuration"
+            );
+        }
     }
 }
 
