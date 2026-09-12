@@ -202,7 +202,7 @@ impl ServerHandler for CodeIntelligenceServer {
                         sink.notify_resource_updated(crate::mcp::notifications::resource_uri(&path)).await
                     }
                     Ok(_) => sink.notify_resource_list_changed().await,
-                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Lagged(_)) => sink.notify_resource_list_changed().await,
                     Err(RecvError::Closed) => break,
                 },
             };
@@ -307,36 +307,26 @@ impl CodeIntelligenceServer {
                     McpError::invalid_params("paths must be an array of strings", None)
                 })?),
             };
-        // Reject rather than build an unbounded queue of full reindexes. Move
-        // the owned guard to a blocking worker; do not block a Tokio executor.
-        let mut indexer = self.facade.clone().try_write_owned().map_err(|_| {
-            McpError::internal_error("Index is busy; retry the reindex request", None)
-        })?;
-        let (reindexed, symbols) = tokio::task::spawn_blocking(move || {
+        let (reindexed, symbols) = crate::runtime::mutate(&self.facade, move |indexer| {
             let paths = authorized_reindex_paths(indexer.settings(), requested.as_deref())?;
+            let sources = crate::indexing::walker::FileWalker::new(Arc::clone(indexer.settings()))
+                .snapshot(&paths, 100_000, 10_000, 128 * 1024 * 1024)
+                .map_err(|error| {
+                    McpError::invalid_params(format!("Reindex preflight failed: {error}"), None)
+                })?;
             let mut count = 0;
             let mut pending = crate::indexing::pipeline::PendingResolution::default();
-            for path in paths {
-                if path.is_file() {
-                    match indexer.index_file(&path).map_err(|_| {
+            for source in sources {
+                match indexer
+                    .index_prepared_file(source, &mut pending)
+                    .map_err(|_| {
                         McpError::internal_error(
-                            "Reindex failed; earlier paths may have been updated",
+                            "Reindex failed; earlier files may have been updated",
                             None,
                         )
                     })? {
-                        crate::IndexingResult::Indexed(_) => count += 1,
-                        crate::IndexingResult::Cached(_) => {}
-                    }
-                } else {
-                    let stats = indexer
-                        .index_directory_deferred(&path, false, &mut pending)
-                        .map_err(|_| {
-                            McpError::internal_error(
-                                "Reindex failed; earlier paths may have been updated",
-                                None,
-                            )
-                        })?;
-                    count += stats.files_indexed;
+                    crate::IndexingResult::Indexed(_) => count += 1,
+                    crate::IndexingResult::Cached(_) => {}
                 }
             }
             indexer.resolve_deferred(pending).map_err(|_| {
@@ -355,28 +345,30 @@ impl CodeIntelligenceServer {
 
     /// Handle index-stats request
     async fn handle_index_stats(&self) -> Result<CustomResult, McpError> {
-        let indexer = self.facade.read().await;
+        crate::runtime::read(&self.facade, move |indexer| {
+            let semantic = if let Some(metadata) = indexer.get_semantic_metadata() {
+                let live_count = indexer.semantic_search_embedding_count();
+                serde_json::json!({
+                    "enabled": true,
+                    "model": metadata.model_name,
+                    "embeddings": live_count,
+                    "dimensions": metadata.dimension
+                })
+            } else {
+                serde_json::json!({
+                    "enabled": false
+                })
+            };
 
-        let semantic = if let Some(metadata) = indexer.get_semantic_metadata() {
-            let live_count = indexer.semantic_search_embedding_count();
-            serde_json::json!({
-                "enabled": true,
-                "model": metadata.model_name,
-                "embeddings": live_count,
-                "dimensions": metadata.dimension
-            })
-        } else {
-            serde_json::json!({
-                "enabled": false
-            })
-        };
-
-        Ok(CustomResult(serde_json::json!({
-            "symbols": indexer.symbol_count(),
-            "files": indexer.file_count(),
-            "relationships": indexer.relationship_count(),
-            "semantic": semantic
-        })))
+            Ok(CustomResult(serde_json::json!({
+                "symbols": indexer.symbol_count(),
+                "files": indexer.file_count(),
+                "relationships": indexer.relationship_count(),
+                "semantic": semantic
+            })))
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     /// Send a custom notification to the connected client
@@ -431,6 +423,12 @@ fn authorized_reindex_paths(
             .map(|path| resolve(path))
             .collect::<Result<Vec<_>, _>>()?
     };
+    if roots.len() > 64 {
+        return Err(McpError::invalid_params(
+            "At most 64 configured reindex roots are supported",
+            None,
+        ));
+    }
     let Some(requested) = requested else {
         return Ok(roots);
     };
@@ -502,5 +500,58 @@ mod review_path_tests {
             ..Settings::default()
         };
         assert!(authorized_reindex_paths(&settings, Some(&["link.rs".into()])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod final_catalog_tests {
+    use super::*;
+    #[test]
+    fn hardening_final_tool_catalog_matches_generated_schemas_and_guidance() {
+        use crate::mcp::catalog::ToolKind;
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            ..Settings::default()
+        };
+        let expected = ToolKind::ALL
+            .iter()
+            .map(|kind| kind.name().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let server =
+            CodeIntelligenceServer::new(IndexFacade::new(Arc::new(settings.clone())).unwrap());
+        let tools = server.tool_router.list_all();
+        let actual = tools
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(tools.len(), ToolKind::ALL.len());
+        for tool in tools {
+            let kind = ToolKind::parse(&tool.name).unwrap();
+            assert_eq!(kind.name(), tool.name.as_ref());
+            let json = serde_json::to_value(&tool).unwrap();
+            let properties = json
+                .pointer("/inputSchema/properties")
+                .and_then(|v| v.as_object())
+                .unwrap();
+            for key in properties.keys() {
+                assert!(
+                    kind.params().0.contains(&key.as_str()),
+                    "{key} missing from {} vocabulary",
+                    kind.name()
+                );
+            }
+            for key in kind.params().0 {
+                let alias = (*key == "depth" && kind == ToolKind::AnalyzeImpact)
+                    || (*key == "symbol_id" && kind == ToolKind::FindSymbol);
+                assert!(
+                    alias || properties.contains_key(*key),
+                    "{} has stale argument {key}",
+                    kind.name()
+                );
+            }
+            assert!(settings.guidance.templates.contains_key(kind.name()));
+        }
     }
 }

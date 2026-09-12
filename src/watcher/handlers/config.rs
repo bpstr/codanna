@@ -41,8 +41,13 @@ impl ConfigFileHandler {
     /// Compute diff between current and previous indexed_paths.
     async fn compute_diff(&self) -> Result<(Vec<PathBuf>, Vec<PathBuf>), WatchError> {
         // Reload config
-        let new_config =
-            Settings::load_from(&self.settings_path).map_err(|e| WatchError::ConfigError {
+        let path = self.settings_path.clone();
+        let new_config = crate::runtime::blocking(move || Settings::load_from(&path))
+            .await
+            .map_err(|e| WatchError::ConfigError {
+                reason: e.to_string(),
+            })?
+            .map_err(|e| WatchError::ConfigError {
                 reason: format!("Failed to reload config: {e}"),
             })?;
 

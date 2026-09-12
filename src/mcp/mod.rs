@@ -22,6 +22,8 @@ pub(crate) mod auth;
 pub mod client;
 pub mod http_server;
 pub mod https_server;
+#[cfg(feature = "http-server")]
+pub(crate) mod network;
 pub mod notifications;
 pub mod requests;
 pub mod server;
@@ -32,3 +34,5 @@ pub mod tools;
 pub use requests::*;
 pub use server::{CodeIntelligenceServer, format_relative_time};
 pub use stale_server::StaleIndexServer;
+
+pub mod catalog;

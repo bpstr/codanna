@@ -22,7 +22,7 @@ pub enum IndexProgress<'a> {
 /// Smaller batches reduce memory pressure and provide smoother progress.
 const EMBEDDING_BATCH_SIZE: usize = 64;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
@@ -334,7 +334,7 @@ pub struct DocumentStore {
     chunker: Box<dyn Chunker>,
 
     /// Embedding generator (optional).
-    embedding_generator: Option<Box<dyn EmbeddingGenerator>>,
+    embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
 
     /// Vector dimension.
     dimension: VectorDimension,
@@ -432,7 +432,7 @@ impl DocumentStore {
         )?;
 
         self.vector_storage = Some(vector_storage);
-        self.embedding_generator = Some(generator);
+        self.embedding_generator = Some(Arc::from(generator));
 
         // Load cluster data if available
         self.load_cluster_data()?;
@@ -710,6 +710,28 @@ impl DocumentStore {
     }
 
     /// Search for chunks matching a query.
+    pub(crate) fn query_snapshot(&self) -> DocumentQuery {
+        // Only clone reader/model handles under the store guard. No files are opened
+        // and no vector payloads or file-state corpus are copied here.
+        DocumentQuery(Self {
+            base_path: self.base_path.clone(),
+            index: self.index.clone(),
+            reader: self.reader.clone(),
+            schema: self.schema,
+            writer: Mutex::new(None),
+            vector_storage: None,
+            cluster_assignments: HashMap::new(),
+            centroids: Vec::new(),
+            file_states: HashMap::new(),
+            collection_ids: HashMap::new(),
+            next_chunk_id: self.next_chunk_id,
+            chunker: Box::new(HybridChunker::new()),
+            embedding_generator: self.embedding_generator.clone(),
+            dimension: self.dimension,
+            heap_size: self.heap_size,
+        })
+    }
+
     pub fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
         if query.text.is_empty() {
             return Ok(Vec::new());
@@ -1425,6 +1447,20 @@ struct PersistedState {
 struct ClusterData {
     centroids: Vec<Vec<f32>>,
     assignments: HashMap<u32, u32>,
+}
+
+/// Read-only query ownership, independent of the mutable document writer.
+pub(crate) struct DocumentQuery(DocumentStore);
+impl DocumentQuery {
+    pub(crate) fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
+        if self.0.embedding_generator.is_some() {
+            self.0.vector_storage = Some(MmapVectorStorage::open(
+                self.0.base_path.join("vectors"),
+                SegmentOrdinal::new(0),
+            )?);
+        }
+        self.0.search(query)
+    }
 }
 
 #[cfg(test)]

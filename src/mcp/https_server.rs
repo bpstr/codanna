@@ -7,22 +7,17 @@
 pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
     use crate::IndexPersistence;
     use crate::indexing::facade::IndexFacade;
-    use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
+    use crate::mcp::notifications::NotificationBroadcaster;
     use crate::watcher::HotReloadWatcher;
     use anyhow::Context;
-    use axum::Router;
     use axum_server::tls_rustls::RustlsConfig;
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    };
-    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock;
     use tokio_util::sync::CancellationToken;
 
-    let auth = crate::mcp::auth::NetworkAuth::from_env()?;
+    let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
     let validated_bind = crate::mcp::auth::validate_bind(&bind, true)?;
 
     // Initialize logging with config
@@ -37,12 +32,13 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     let settings = Arc::new(config.clone());
     let persistence = IndexPersistence::new(config.index_path.clone());
 
-    let facade = if persistence.exists() {
+    let mut facade = if persistence.exists() {
         persistence.load_facade(settings.clone())?
     } else {
         crate::log_event!("https", "starting", "no existing index");
         IndexFacade::new(settings.clone())?
     };
+    auth.restrict_facade(&mut facade)?;
     let indexer = Arc::new(RwLock::new(facade));
 
     // Create cancellation token for graceful shutdown
@@ -50,6 +46,9 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
     // Load document store once (shared between MCP server and watcher)
     let document_store_arc = crate::documents::load_from_settings(&config);
+    if let Some(store) = &document_store_arc {
+        auth.validate_documents(&*store.read().await)?;
+    }
     if document_store_arc.is_some() {
         tracing::debug!(target: "mcp", "document store loaded for MCP server");
     }
@@ -164,47 +163,15 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         crate::log_event!("hot-reload", "started", "polling every {watch_interval}s");
     }
 
-    // Create streamable HTTP service for MCP connections
-    // Important: We share the SAME indexer instance across all connections
-    // to ensure hot reload works properly. The indexer is already Arc<RwLock<_>>
-    // so it's safe to share across connections.
-    let indexer_for_service = indexer.clone();
-    let config_for_service = Arc::new(config.clone());
-
-    // Session identity/peer state must never be shared across clients.
-    let mcp_service = StreamableHttpService::new(
-        move || {
-            let server = CodeIntelligenceServer::new_with_facade(
-                indexer_for_service.clone(),
-                config_for_service.clone(),
-            )
-            .with_broadcaster(broadcaster.clone());
-            Ok(match &document_store_arc {
-                Some(store) => server.with_document_store_arc(store.clone()),
-                None => server,
-            })
-        },
-        LocalSessionManager::default().into(),
-        {
-            let cfg = StreamableHttpServerConfig::default()
-                .with_cancellation_token(ct.child_token())
-                .with_sse_keep_alive(Some(Duration::from_secs(15)))
-                .with_sse_retry(None)
-                .with_legacy_session_mode(true)
-                .with_json_response(false);
-            let cfg = match config.mcp.allowed_hosts.clone() {
-                Some(hosts) => cfg.with_allowed_hosts(hosts),
-                None => cfg,
-            };
-            match config.mcp.allowed_origins.clone() {
-                Some(origins) => cfg.with_allowed_origins(origins),
-                None => cfg,
-            }
-        },
-    );
-
-    let router =
-        crate::mcp::auth::network_router(Router::new().nest_service("/mcp", mcp_service), auth);
+    let router = crate::mcp::network::NetworkService::new(
+        indexer,
+        Arc::new(config.clone()),
+        document_store_arc,
+        broadcaster,
+        ct.clone(),
+        auth,
+    )
+    .router;
 
     // Get or create TLS certificates
     let (cert_pem, key_pem) = get_or_create_certificate(&bind)
@@ -216,20 +183,18 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         .await
         .context("Failed to configure TLS")?;
 
-    // Parse bind address
-    let addr: SocketAddr = validated_bind;
-
-    eprintln!("HTTPS MCP server listening on https://{bind}");
-    eprintln!("MCP endpoint: https://{bind}/mcp");
-    eprintln!("Health check: https://{bind}/health");
-    eprintln!();
-    eprintln!("Using self-signed certificate. Clients will show security warnings.");
-    eprintln!("To trust the certificate, visit https://{bind} in your browser first");
-    eprintln!();
+    // Bind once and report the actual port, including an OS-assigned :0 socket.
+    let listener = std::net::TcpListener::bind(validated_bind)?;
+    let bound = listener.local_addr()?;
+    eprintln!("HTTPS MCP server listening on https://{bound}");
+    eprintln!("MCP endpoint: https://{bound}/mcp");
+    eprintln!("Health check: https://{bound}/health");
+    eprintln!(
+        "Using a self-signed certificate. Configure your client to trust its CA/certificate."
+    );
     eprintln!("Press Ctrl+C to stop the server");
-
-    // Serve with TLS
-    let server = axum_server::bind_rustls(addr, tls_config).serve(router.into_make_service());
+    let server =
+        axum_server::from_tcp_rustls(listener, tls_config)?.serve(router.into_make_service());
 
     // Handle graceful shutdown
     tokio::select! {

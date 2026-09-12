@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "next-env.d.ts",
+    "src/app/(app)/examples/mail/page.tsx",
+    "src/app/demo/page.tsx",
+    "src/components/theming/ThemeCustomizer.tsx"
+  ],
+  "exclude": ["node_modules"]
+}

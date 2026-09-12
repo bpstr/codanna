@@ -11,7 +11,7 @@ use tantivy::{
 use super::{DocumentIndex, SearchResult};
 
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
-fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
+pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
     Some(match kind {
         "Calls" => RelationKind::Calls,
         "CalledBy" => RelationKind::CalledBy,
@@ -748,13 +748,13 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
 
-        // Use TopDocs to get all file_info documents
-        // Note: Adjust limit if you have more than 100k files
-        let collector = TopDocs::with_limit(100_000).order_by_score();
-        let top_docs = searcher.search(&query, &collector)?;
-
-        let mut paths = Vec::new();
-        for (_score, doc_address) in top_docs {
+        let mut addresses: Vec<_> = searcher
+            .search(&query, &tantivy::collector::DocSetCollector)?
+            .into_iter()
+            .collect();
+        addresses.sort_unstable();
+        let mut paths = Vec::with_capacity(addresses.len());
+        for doc_address in addresses {
             let doc: Document = searcher.doc(doc_address)?;
 
             // Extract file_path field

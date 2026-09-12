@@ -100,6 +100,117 @@ impl FileWalker {
             })
     }
 
+    /// Read an authorized, bounded inventory before a network mutation starts.
+    /// Every visited entry counts, even when its extension is not indexable.
+    /// Prepared bytes are consumed directly by the pipeline; it cannot rewalk a
+    /// changed directory or reopen a swapped symlink after this preflight.
+    pub(crate) fn snapshot(
+        &self,
+        roots: &[PathBuf],
+        max_entries: usize,
+        max_files: usize,
+        max_bytes: usize,
+    ) -> IndexResult<Vec<crate::indexing::pipeline::FileContent>> {
+        use crate::indexing::{file_info::calculate_hash, pipeline::FileContent};
+        use std::{collections::HashSet, io::Read};
+        let fail = |path: &Path, message: String| IndexError::Discovery {
+            path: path.to_path_buf(),
+            reason: message,
+        };
+        let extensions = self.get_enabled_extensions()?;
+        let mut files = Vec::new();
+        let mut seen = HashSet::new();
+        let mut entries = 0usize;
+        let mut bytes = 0usize;
+        for root in roots {
+            for entry in Self::configured_builder(root).build() {
+                entries += 1;
+                if entries > max_entries {
+                    return Err(fail(root, "reindex entry budget exceeded".into()));
+                }
+                let entry = checked_entry(entry, root)?;
+                let Some(kind) = entry.file_type() else {
+                    return Err(fail(entry.path(), "missing file type".into()));
+                };
+                if kind.is_symlink() {
+                    return Err(fail(
+                        entry.path(),
+                        "reindex does not follow symlinks".into(),
+                    ));
+                }
+                if !kind.is_file()
+                    || entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with('.'))
+                {
+                    continue;
+                }
+                if !entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| extensions.iter().any(|x| x == e))
+                {
+                    continue;
+                }
+                let path = entry
+                    .path()
+                    .canonicalize()
+                    .map_err(|e| fail(entry.path(), e.to_string()))?;
+                if !roots.iter().any(|root| path.starts_with(root)) {
+                    return Err(fail(&path, "source escaped authorized roots".into()));
+                }
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                if files.len() == max_files {
+                    return Err(fail(&path, "reindex file budget exceeded".into()));
+                }
+                let file = std::fs::File::open(&path).map_err(|e| fail(&path, e.to_string()))?;
+                let opened = file.metadata().map_err(|e| fail(&path, e.to_string()))?;
+                let named =
+                    std::fs::symlink_metadata(&path).map_err(|e| fail(&path, e.to_string()))?;
+                if !opened.is_file() || !named.is_file() {
+                    return Err(fail(&path, "source changed type during preflight".into()));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+                        return Err(fail(
+                            &path,
+                            "source changed identity during preflight".into(),
+                        ));
+                    }
+                }
+                let remaining = max_bytes.saturating_sub(bytes).min(32 * 1024 * 1024);
+                let mut content = String::new();
+                file.take(remaining as u64 + 1)
+                    .read_to_string(&mut content)
+                    .map_err(|e| fail(&path, e.to_string()))?;
+                if content.len() > remaining {
+                    return Err(fail(&path, "reindex source byte budget exceeded".into()));
+                }
+                if path
+                    .canonicalize()
+                    .map_err(|e| fail(&path, e.to_string()))?
+                    != path
+                {
+                    return Err(fail(
+                        &path,
+                        "source changed containment during preflight".into(),
+                    ));
+                }
+                bytes += content.len();
+                let hash = calculate_hash(&content);
+                files.push(FileContent::new(path, content, hash));
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
     fn get_enabled_extensions(&self) -> IndexResult<Vec<String>> {
         let registry = get_registry()
             .lock()
@@ -287,6 +398,92 @@ mod tests {
             walker
                 .walk_dirs(dir.path())
                 .collect::<IndexResult<Vec<_>>>()
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn hardening_final_reindex_snapshot_budgets_count_unindexable_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("one.rs"), "pub fn one() {}\n").unwrap();
+        std::fs::write(root.join("two.rs"), "pub fn two() {}\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "not indexed").unwrap();
+        let walker = FileWalker::new(Arc::new(Settings::default()));
+        for (entries, files, bytes, expected) in [
+            (2, 10, 1024, "entry"),
+            (10, 1, 1024, "file"),
+            (10, 10, 1, "byte"),
+        ] {
+            let error = walker
+                .snapshot(std::slice::from_ref(&root), entries, files, bytes)
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let sources = walker.snapshot(&[root.clone(), root], 20, 2, 1024).unwrap();
+        assert_eq!(
+            sources.len(),
+            2,
+            "overlapping roots cannot duplicate source work"
+        );
+    }
+    #[test]
+    fn hardening_final_reindex_consumes_captured_bytes_and_resolves_cross_file_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let source = root.join("src");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("a.rs"), "pub fn caller() { target(); }\n").unwrap();
+        std::fs::write(source.join("b.rs"), "pub fn target() {}\n").unwrap();
+        let settings = Arc::new(Settings {
+            workspace_root: Some(root.clone()),
+            index_path: root.join("index"),
+            ..Settings::default()
+        });
+        let sources = FileWalker::new(Arc::clone(&settings))
+            .snapshot(std::slice::from_ref(&source), 10, 2, 1024)
+            .unwrap();
+        std::fs::write(
+            source.join("b.rs"),
+            "pub fn replaced_after_preflight() {}\n",
+        )
+        .unwrap();
+        let mut facade = crate::indexing::facade::IndexFacade::new(settings).unwrap();
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        for file in sources {
+            facade.index_prepared_file(file, &mut pending).unwrap();
+        }
+        facade.resolve_deferred(pending).unwrap();
+        assert!(
+            facade
+                .find_symbols_by_name("replaced_after_preflight", None)
+                .is_empty()
+        );
+        let caller = facade.find_symbols_by_name("caller", None).remove(0);
+        let target = facade.find_symbols_by_name("target", None).remove(0);
+        assert!(
+            facade
+                .get_called_functions(caller.id)
+                .iter()
+                .any(|symbol| symbol.id == target.id)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn hardening_final_snapshot_rejects_symlink_before_any_index_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.rs"), "fn secret() {}").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.rs"), root.join("escape.rs"))
+            .unwrap();
+        assert!(
+            FileWalker::new(Arc::new(Settings::default()))
+                .snapshot(&[root], 10, 10, 1024)
                 .is_err()
         );
     }

@@ -7,6 +7,7 @@ use crate::indexing::file_info::calculate_hash;
 use crate::indexing::pipeline::types::{FileContent, PipelineError, PipelineResult};
 use crossbeam_channel::{Receiver, Sender};
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -183,14 +184,20 @@ fn read_file(path: &PathBuf) -> PipelineResult<FileContent> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PipelineError::FileRead {
+    let file = fs::File::open(path).map_err(|source| PipelineError::FileRead {
         path: path.clone(),
-        source: e,
+        source,
     })?;
+    let mut content = String::new();
+    file.take(MAX_SOURCE_FILE_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(|source| PipelineError::FileRead {
+            path: path.clone(),
+            source,
+        })?;
 
-    // The file may have grown between metadata() and read_to_string(). Bound the
-    // post-read size as well so the preflight check cannot be raced into an
-    // unbounded retained allocation.
+    // A concurrent growth can read at most the fixed budget plus one byte.
+    // The extra byte distinguishes exact-boundary input from oversized input.
     if content.len() as u64 > MAX_SOURCE_FILE_BYTES {
         return Err(PipelineError::FileRead {
             path: path.clone(),

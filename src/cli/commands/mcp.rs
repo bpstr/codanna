@@ -5,6 +5,7 @@ use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
 use crate::io::args::parse_positional_args;
 use crate::io::envelope::EntityType;
+use crate::mcp::catalog::ToolKind;
 use crate::mcp::service::{
     FindSymbolTarget, SymbolResolution, accepted_params_line, missing_param_message,
     resolve_find_symbol_target, resolve_symbol_or_id, tool_param_spec,
@@ -240,42 +241,10 @@ pub async fn run(
 
             // Handle the first positional argument based on tool type
             if let Some(pos_arg) = first_positional {
-                match tool.as_str() {
-                    "find_symbol" => {
-                        args_map.insert(
-                            "name".to_string(),
-                            serde_json::Value::String(pos_arg.clone()),
-                        );
-                    }
-                    "get_calls" | "find_callers" => {
-                        args_map.insert(
-                            "function_name".to_string(),
-                            serde_json::Value::String(pos_arg.clone()),
-                        );
-                    }
-                    "analyze_impact" => {
-                        args_map.insert(
-                            "symbol_name".to_string(),
-                            serde_json::Value::String(pos_arg.clone()),
-                        );
-                    }
-                    "semantic_search_docs"
-                    | "semantic_search_with_context"
-                    | "search_documents" => {
-                        args_map.insert(
-                            "query".to_string(),
-                            serde_json::Value::String(pos_arg.clone()),
-                        );
-                    }
-                    "search_symbols" => {
-                        args_map.insert(
-                            "query".to_string(),
-                            serde_json::Value::String(pos_arg.clone()),
-                        );
-                    }
-                    _ => {
-                        eprintln!("Warning: Unknown tool '{tool}', ignoring positional argument");
-                    }
+                if let Some(key) = ToolKind::parse(&tool).and_then(|kind| kind.positional()) {
+                    args_map.insert(key.to_string(), serde_json::Value::String(pos_arg.clone()));
+                } else {
+                    eprintln!("Warning: tool '{tool}' has no positional argument");
                 }
             }
 
@@ -315,37 +284,23 @@ pub async fn run(
 
     // Validate the tool name up front: JSON mode never reaches the dispatch
     // match below, so its unknown-tool arm cannot cover this.
-    const KNOWN_TOOLS: &[&str] = &[
-        "find_symbol",
-        "get_calls",
-        "find_callers",
-        "analyze_impact",
-        "get_index_info",
-        "search_symbols",
-        "semantic_search_docs",
-        "semantic_search_with_context",
-        "search_documents",
-    ];
-    if !KNOWN_TOOLS.contains(&tool.as_str()) {
+    let Some(tool_kind) = ToolKind::parse(&tool) else {
+        let available = format!("Available tools: {}", ToolKind::names());
         if json {
             use crate::io::exit_code::ExitCode;
             use crate::io::format::JsonResponse;
             let response = JsonResponse::error(
                 ExitCode::GeneralError,
                 &format!("Unknown tool: {tool}"),
-                vec![
-                    "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
-                ],
+                vec![&available],
             );
             println!("{}", serde_json::to_string_pretty(&response).unwrap());
         } else {
             eprintln!("Unknown tool: {tool}");
-            eprintln!(
-                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
-            );
+            eprintln!("{available}");
         }
         std::process::exit(1);
-    }
+    };
 
     // One validation surface for both output modes (replaces the per-tool
     // checks that used to sit duplicated in the JSON collection blocks and
@@ -564,15 +519,14 @@ pub async fn run(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(3) as usize;
 
-                let impacted_ids = facade.get_impact_radius(symbol.id, Some(max_depth));
-
-                // Convert SymbolIds to full Symbols
-                let mut impacted_symbols = Vec::new();
-                for impact_id in impacted_ids {
-                    if let Some(sym) = facade.get_symbol(impact_id) {
-                        impacted_symbols.push(sym);
-                    }
-                }
+                let impacted_ids = facade
+                    .get_impact_radius_bounded(symbol.id, max_depth)
+                    .unwrap_or_else(|error| {
+                        exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+                    });
+                let impacted_symbols = facade.get_symbols(&impacted_ids).unwrap_or_else(|error| {
+                    exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+                });
 
                 Some(impacted_symbols)
             }
@@ -980,8 +934,8 @@ pub async fn run(
     let result = if json {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
-        match tool.as_str() {
-            "find_symbol" => {
+        match tool_kind {
+            ToolKind::FindSymbol => {
                 let name = arguments
                     .as_ref()
                     .and_then(|m| m.get("name"))
@@ -999,7 +953,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "get_calls" => {
+            ToolKind::GetCalls => {
                 let function_name = arguments
                     .as_ref()
                     .and_then(|m| m.get("function_name"))
@@ -1019,7 +973,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "find_callers" => {
+            ToolKind::FindCallers => {
                 let function_name = arguments
                     .as_ref()
                     .and_then(|m| m.get("function_name"))
@@ -1039,7 +993,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "analyze_impact" => {
+            ToolKind::AnalyzeImpact => {
                 let symbol_name = arguments
                     .as_ref()
                     .and_then(|m| m.get("symbol_name"))
@@ -1065,14 +1019,14 @@ pub async fn run(
                     }))
                     .await
             }
-            "get_index_info" => {
+            ToolKind::GetIndexInfo => {
                 use crate::mcp::GetIndexInfoRequest;
                 use rmcp::handler::server::wrapper::Parameters;
                 server
                     .get_index_info(Parameters(GetIndexInfoRequest {}))
                     .await
             }
-            "search_symbols" => {
+            ToolKind::SearchSymbols => {
                 let query = arguments
                     .as_ref()
                     .and_then(|m| m.get("query"))
@@ -1108,7 +1062,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "semantic_search_docs" => {
+            ToolKind::SemanticSearchDocs => {
                 let query = arguments
                     .as_ref()
                     .and_then(|m| m.get("query"))
@@ -1138,7 +1092,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "semantic_search_with_context" => {
+            ToolKind::SemanticSearchWithContext => {
                 let query = arguments
                     .as_ref()
                     .and_then(|m| m.get("query"))
@@ -1168,7 +1122,7 @@ pub async fn run(
                     }))
                     .await
             }
-            "search_documents" => {
+            ToolKind::SearchDocuments => {
                 use crate::mcp::SearchDocumentsRequest;
                 let query = arguments
                     .as_ref()
@@ -1193,26 +1147,6 @@ pub async fn run(
                         limit,
                     }))
                     .await
-            }
-            _ => {
-                if json {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        &format!("Unknown tool: {tool}"),
-                        vec![
-                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
-                        ],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
-                } else {
-                    eprintln!("Unknown tool: {tool}");
-                    eprintln!(
-                        "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
-                    );
-                }
-                std::process::exit(1);
             }
         }
     };

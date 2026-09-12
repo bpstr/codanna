@@ -54,6 +54,11 @@ impl NotificationBroadcaster {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.sender.receiver_count()
+    }
+
     /// Subscribe to receive notifications
     pub fn subscribe(&self) -> broadcast::Receiver<FileChangeEvent> {
         self.sender.subscribe()

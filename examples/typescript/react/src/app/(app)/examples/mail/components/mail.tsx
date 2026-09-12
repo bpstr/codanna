@@ -53,9 +53,42 @@ export function Mail({
 }: MailProps) {
   const [isCollapsed, setIsCollapsed] = React.useState(defaultCollapsed);
   const [mail] = useMail();
+  const [query, setQuery] = React.useState("");
+  const [filter, setFilter] = React.useState("all");
+  const filteredMails = mails.filter((item) =>
+    `${item.name} ${item.subject} ${item.text}`.toLowerCase().includes(query.toLowerCase()),
+  );
 
   return (
     <TooltipProvider delayDuration={0}>
+      <div className="grid min-w-0 gap-4 md:hidden">
+        <div className="p-2">
+          <AccountSwitcher isCollapsed={false} accounts={accounts} />
+        </div>
+        <section aria-label="Inbox" className="min-w-0">
+          <h1 className="px-4 text-xl font-bold">Inbox</h1>
+          <div className="p-4">
+            <Input
+              aria-label="Search mail"
+              placeholder="Search mail"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+          <Tabs value={filter} onValueChange={setFilter}>
+            <TabsList aria-label="Filter messages" className="mx-4 mb-2">
+              <TabsTrigger value="all">All mail</TabsTrigger>
+              <TabsTrigger value="unread">Unread</TabsTrigger>
+            </TabsList>
+            <TabsContent value="all"><MailList items={filteredMails} /></TabsContent>
+            <TabsContent value="unread"><MailList items={filteredMails.filter((item) => !item.read)} /></TabsContent>
+          </Tabs>
+        </section>
+        <section aria-label="Selected message" className="min-w-0 border-t">
+          <MailDisplay mail={mails.find((item) => item.id === mail.selected) || null} />
+        </section>
+      </div>
+      <div className="hidden h-full min-w-0 md:block">
       <ResizablePanelGroup
         direction="horizontal"
         onLayout={(sizes: number[]) => {
@@ -71,11 +104,13 @@ export function Mail({
           collapsible={true}
           minSize={15}
           maxSize={20}
-          onCollapse={(collapsed) => {
-            setIsCollapsed(collapsed);
-            document.cookie = `react-resizable-panels:collapsed=${JSON.stringify(
-              collapsed,
-            )}`;
+          onCollapse={() => {
+            setIsCollapsed(true);
+            document.cookie = "react-resizable-panels:collapsed=true";
+          }}
+          onExpand={() => {
+            setIsCollapsed(false);
+            document.cookie = "react-resizable-panels:collapsed=false";
           }}
           className={cn(
             isCollapsed &&
@@ -171,7 +206,7 @@ export function Mail({
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel defaultSize={defaultLayout[1]} minSize={30}>
-          <Tabs defaultValue="all">
+          <Tabs value={filter} onValueChange={setFilter}>
             <div className="flex items-center px-4 py-2">
               <h1 className="text-xl font-bold">Inbox</h1>
               <TabsList className="ml-auto">
@@ -194,15 +229,21 @@ export function Mail({
               <form>
                 <div className="relative">
                   <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Search" className="pl-8" />
+                  <Input
+                    aria-label="Search mail"
+                    placeholder="Search"
+                    className="pl-8"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
                 </div>
               </form>
             </div>
             <TabsContent value="all" className="m-0">
-              <MailList items={mails} />
+              <MailList items={filteredMails} />
             </TabsContent>
             <TabsContent value="unread" className="m-0">
-              <MailList items={mails.filter((item) => !item.read)} />
+              <MailList items={filteredMails.filter((item) => !item.read)} />
             </TabsContent>
           </Tabs>
         </ResizablePanel>
@@ -213,6 +254,7 @@ export function Mail({
           />
         </ResizablePanel>
       </ResizablePanelGroup>
+      </div>
     </TooltipProvider>
   );
 }

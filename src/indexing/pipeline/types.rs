@@ -487,6 +487,8 @@ impl SymbolLookupCache {
     /// Insert a symbol into the cache.
     pub fn insert(&self, symbol: crate::Symbol) {
         let id = symbol.id;
+        // Replacing an existing ID must not leave duplicate name/file entries.
+        self.remove(id);
         let file_id = symbol.file_id;
         let start_line = symbol.range.start_line;
         let name: Box<str> = symbol.name.as_ref().into();
@@ -517,6 +519,59 @@ impl SymbolLookupCache {
                 .unwrap_or_else(|insert_at| insert_at);
             entry.insert(pos, (start_line, id));
         }
+    }
+
+    /// Remove one symbol from every secondary map without retaining nested
+    /// DashMap guards. Called between resolution runs, not concurrently with
+    /// candidate consumers.
+    pub fn remove(&self, id: crate::types::SymbolId) {
+        let Some((_, symbol)) = self.by_id.remove(&id) else {
+            return;
+        };
+        if let Some(mut names) = self.by_name.get_mut(symbol.name.as_ref()) {
+            names.retain(|candidate| candidate.id != id);
+            let empty = names.is_empty();
+            drop(names);
+            if empty {
+                self.by_name.remove(symbol.name.as_ref());
+            }
+        }
+        if let Some(mut file) = self.by_file_id.get_mut(&symbol.file_id) {
+            file.retain(|(_, candidate)| *candidate != id);
+            let empty = file.is_empty();
+            drop(file);
+            if empty {
+                self.by_file_id.remove(&symbol.file_id);
+            }
+        }
+    }
+
+    /// Replace only affected files in a warm cache. Fetch all replacement data
+    /// before changing the cache, so a read failure cannot leave a partial view.
+    pub(crate) fn refresh_files(
+        &self,
+        index: &crate::storage::DocumentIndex,
+        files: &[crate::types::FileId],
+    ) -> PipelineResult<()> {
+        let files: std::collections::HashSet<_> = files.iter().copied().collect();
+        let mut replacements = Vec::with_capacity(files.len());
+        for file in files {
+            replacements.push((file, index.find_symbols_by_file(file)?));
+        }
+        for (file, symbols) in replacements {
+            let old_ids = self.symbols_in_file(file);
+            for id in old_ids {
+                self.remove(id);
+            }
+            self.by_file_id.remove(&file);
+            for symbol in symbols {
+                self.insert(symbol);
+            }
+        }
+        // Re-export targets and import aliases are derived state. The phase-two
+        // pre-pass reconstructs them after an edit; no stale alias may survive.
+        self.module_aliases.clear();
+        Ok(())
     }
 
     /// Get symbol by ID (O(1)).

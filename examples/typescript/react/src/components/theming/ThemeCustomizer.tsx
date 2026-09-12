@@ -58,6 +58,13 @@ function Customizer() {
   );
   const [saturationRange, setSaturationRange] = useState([100]);
   const [lightnessRange, setLightnessRange] = useState([0]);
+  const activeMode = mode === "dark" ? "dark" : "light";
+  const sameColor = (value: HSLColor | undefined, candidate: HSLColor) =>
+    value?.h === candidate.h && value?.s === candidate.s && value?.l === candidate.l;
+  const isPresetSelected = (theme: (typeof duo)[number]) =>
+    sameColor(initialColor, theme.colors[activeMode].primary) &&
+    lightnessRange.join(",") === theme.lightnessRange.join(",") &&
+    saturationRange.join(",") === theme.saturationRange.join(",");
 
   const getHSL = (s: Array<number>, l: Array<number>, r?: number) => {
     if (color) {
@@ -311,11 +318,13 @@ function Customizer() {
                       <div className="flex flex-wrap gap-1 overflow-x-auto">
                         {duo.map((theme, index) => (
                           <button
+                            type="button"
+                            aria-label={`${theme.label} duo-tone preset`}
+                            aria-pressed={isPresetSelected(theme)}
+                            title={`${theme.label} duo-tone preset`}
                             onClick={() => {
-                              //@ts-expect-error: FU
-                              setColor(theme.colors?.[mode].primary);
-                              //@ts-expect-error: FU
-                              setInitialColor(theme.colors?.[mode].primary);
+                              setColor(theme.colors[activeMode].primary);
+                              setInitialColor(theme.colors[activeMode].primary);
                               handleLightnessChange(theme.lightnessRange);
                               handleSaturationChange(theme.saturationRange);
                             }}
@@ -325,8 +334,12 @@ function Customizer() {
                                 theme.colors?.dark.primary,
                               )})`,
                             }}
-                            className={clsx("w-6 h-6 rounded-sm")}
-                          ></button>
+                            className={clsx("flex h-8 w-8 items-center justify-center rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2")}
+                          >
+                            {isPresetSelected(theme) && (
+                              <span aria-hidden="true" className="rounded-full bg-background px-1 text-xs text-foreground">✓</span>
+                            )}
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -347,18 +360,26 @@ function Customizer() {
                             <div className="grid grid-flow-col gap-1 overflow-x-auto justify-start">
                               {colorArray.map((color, colorIndex) => (
                                 <button
+                                  type="button"
+                                  aria-label={`${colorName} ${color.scale}`}
+                                  aria-pressed={sameColor(initialColor, color.primary)}
+                                  title={`${colorName} ${color.scale}`}
                                   key={colorIndex}
                                   style={{
                                     background: `hsl(${getHslValue(
                                       color.primary,
                                     )})`,
                                   }}
-                                  className="w-6 h-6 rounded-sm"
+                                  className="flex h-8 w-8 items-center justify-center rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                                   onClick={() => {
                                     setColor(color.primary);
                                     setInitialColor(color.primary);
                                   }}
-                                ></button>
+                                >
+                                  {sameColor(initialColor, color.primary) && (
+                                    <span aria-hidden="true" className="rounded-full bg-background px-1 text-xs text-foreground">✓</span>
+                                  )}
+                                </button>
                               ))}
                             </div>
                           </div>

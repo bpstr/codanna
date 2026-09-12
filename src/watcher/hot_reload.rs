@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use tokio::time::interval;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 use crate::indexing::facade::IndexFacade;
 use crate::mcp::notifications::{FileChangeEvent, NotificationBroadcaster};
@@ -23,7 +23,6 @@ pub struct HotReloadWatcher {
     index_path: PathBuf,
     facade: Arc<RwLock<IndexFacade>>,
     settings: Arc<Settings>,
-    persistence: IndexPersistence,
     last_modified: Option<SystemTime>,
     last_doc_modified: Option<SystemTime>,
     check_interval: Duration,
@@ -38,7 +37,6 @@ impl HotReloadWatcher {
         check_interval: Duration,
     ) -> Self {
         let index_path = settings.index_path.clone();
-        let persistence = IndexPersistence::new(index_path.clone());
 
         // Get initial modification time of the index metadata file
         let meta_file_path = index_path.join("tantivy").join("meta.json");
@@ -56,7 +54,6 @@ impl HotReloadWatcher {
             index_path,
             facade,
             settings,
-            persistence,
             last_modified,
             last_doc_modified,
             check_interval,
@@ -84,155 +81,65 @@ impl HotReloadWatcher {
         }
     }
 
-    /// Check if the index has been modified externally and reload if necessary.
+    /// Read filesystem state off the executor, then atomically replace the facade
+    /// under the same mutation lane used by source watchers and MCP writes.
     async fn check_and_reload(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Check for document store changes (state.json modified externally)
-        self.check_document_changes();
-
-        // Check if index file exists
-        if !self.persistence.exists() {
-            debug!("Index file does not exist at {:?}", self.index_path);
-            return Ok(());
-        }
-
-        // Get current modification time of the index metadata file
-        let meta_file_path = self.index_path.join("tantivy").join("meta.json");
-        let metadata = std::fs::metadata(&meta_file_path)?;
-        let current_modified = metadata.modified()?;
-
-        // Check if file has been modified
-        let should_reload = match self.last_modified {
-            Some(last) => current_modified > last,
-            None => true,
-        };
-
-        if !should_reload {
-            tracing::trace!("Index file unchanged");
-            return Ok(());
-        }
-
-        crate::log_event!(
-            "hot-reload",
-            "reloading",
-            "{}",
-            crate::parsing::paths::render_absolute_path(&self.index_path).display()
-        );
-
-        // Load the new index as a facade
-        match self.persistence.load_facade(self.settings.clone()) {
-            Ok(new_facade) => {
-                // Get write lock and replace the facade
-                let mut facade_guard = self.facade.write().await;
-                *facade_guard = new_facade;
-
-                // Update last modified time
-                self.last_modified = Some(current_modified);
-
-                // Ensure semantic search stays attached after hot reloads
-                let mut restored_semantic = false;
-                if !facade_guard.has_semantic_search() && !facade_guard.is_semantic_incompatible() {
-                    let semantic_path = self.index_path.join("semantic");
-                    let metadata_exists = semantic_path.join("metadata.json").exists();
-                    if metadata_exists {
-                        match facade_guard.load_semantic_search(&semantic_path) {
-                            Ok(true) => {
-                                restored_semantic = true;
-                            }
-                            Ok(false) => {
-                                crate::debug_event!(
-                                    "hot-reload",
-                                    "semantic metadata present but reload returned false"
-                                );
-                            }
-                            Err(crate::IndexError::SemanticSearch(
-                                crate::semantic::SemanticSearchError::DimensionMismatch {
-                                    ref suggestion,
-                                    ..
-                                },
-                            )) => {
-                                warn!(
-                                    "Semantic index dimension mismatch after hot-reload: {suggestion}. \
-                                     Semantic search disabled until re-indexed with --force."
-                                );
-                            }
-                            Err(e) => {
-                                warn!("Failed to reload semantic search after index update: {e}");
-                            }
-                        }
-                    } else {
-                        crate::debug_event!(
-                            "hot-reload",
-                            "semantic metadata missing",
-                            "{}",
-                            crate::parsing::paths::render_absolute_path(&semantic_path).display()
-                        );
+        let path = self.index_path.clone();
+        let (index_time, document_time) = crate::runtime::blocking(move || {
+            fn modified(path: PathBuf) -> std::io::Result<Option<SystemTime>> {
+                match std::fs::metadata(path) {
+                    Ok(meta) => meta.modified().map(Some),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
+            Ok::<_, std::io::Error>((
+                modified(path.join("tantivy/meta.json"))?,
+                modified(path.join("documents/state.json"))?,
+            ))
+        })
+        .await??;
+        let doc_changed = document_time.is_some() && document_time != self.last_doc_modified;
+        if let Some(observed) = index_time {
+            if Some(observed) != self.last_modified {
+                let settings = Arc::clone(&self.settings);
+                let path = self.index_path.clone();
+                crate::runtime::mutate(&self.facade, move |facade| {
+                    let mut loaded = IndexPersistence::new(path.clone()).load_facade(settings)?;
+                    if !loaded.has_semantic_search() && !loaded.is_semantic_incompatible() {
+                        loaded.load_semantic_search(&path.join("semantic"))?;
                     }
-                }
-
-                let symbol_count = facade_guard.symbol_count();
-                let has_semantic = facade_guard.has_semantic_search();
-                if restored_semantic {
-                    let count = facade_guard.semantic_search_embedding_count();
-                    crate::debug_event!("hot-reload", "restored semantic", "{count} embeddings");
-                }
-                crate::log_event!("hot-reload", "reloaded", "{symbol_count} symbols");
-                crate::debug_event!("hot-reload", "semantic search", "{has_semantic}");
-
-                // Send notification that index was reloaded
-                if let Some(ref broadcaster) = self.broadcaster {
+                    // Do not replace live state if loading or validation failed.
+                    *facade = loaded;
+                    Ok::<_, crate::IndexError>(())
+                })
+                .await??;
+                self.last_modified = Some(observed);
+                if let Some(broadcaster) = &self.broadcaster {
                     broadcaster.send(FileChangeEvent::IndexReloaded);
-                    crate::debug_event!("hot-reload", "broadcast", "IndexReloaded");
                 }
-
-                Ok(())
-            }
-            Err(e) => {
-                warn!("Failed to reload index: {e}");
-                Err(Box::new(std::io::Error::other(format!(
-                    "Failed to reload index: {e}"
-                ))))
             }
         }
-    }
-
-    /// Check if document store state.json has changed (documents indexed externally).
-    fn check_document_changes(&mut self) {
-        let doc_state_path = self.index_path.join("documents").join("state.json");
-
-        // Get current modification time
-        let current_modified = match std::fs::metadata(&doc_state_path) {
-            Ok(meta) => match meta.modified() {
-                Ok(time) => time,
-                Err(_) => return,
-            },
-            Err(_) => return,
-        };
-
-        // Check if changed
-        let changed = match self.last_doc_modified {
-            Some(last) => current_modified > last,
-            None => true,
-        };
-
-        if changed {
-            self.last_doc_modified = Some(current_modified);
+        self.last_doc_modified = document_time;
+        if doc_changed {
             info!("Document store changed, notifying watchers");
-
-            // Send IndexReloaded to refresh document handler's watched files
-            if let Some(ref broadcaster) = self.broadcaster {
+            if let Some(broadcaster) = &self.broadcaster {
                 broadcaster.send(FileChangeEvent::IndexReloaded);
             }
         }
+        Ok(())
     }
 
-    /// Get current index statistics.
-    pub async fn get_stats(&self) -> IndexStats {
-        let indexer = self.facade.read().await;
-        IndexStats {
-            symbol_count: indexer.symbol_count(),
-            last_modified: self.last_modified,
-            index_path: self.index_path.clone(),
-        }
+    /// Statistics are fallible: a worker failure is not an empty successful index.
+    pub async fn get_stats(&self) -> Result<IndexStats, crate::IndexError> {
+        let last_modified = self.last_modified;
+        let index_path = self.index_path.clone();
+        crate::runtime::read(&self.facade, move |facade| IndexStats {
+            symbol_count: facade.symbol_count(),
+            last_modified,
+            index_path,
+        })
+        .await
     }
 }
 

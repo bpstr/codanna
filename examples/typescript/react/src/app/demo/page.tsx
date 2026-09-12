@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 
 import { Announcement } from "@/components/announcement";
@@ -19,7 +18,7 @@ import { ThemeSwitcher } from "@/components/theming/ThemeSwitcher";
 export default function IndexPage() {
   return (
     <PageWrapper>
-      <Card className="fixed bottom-4 right-4 z-10">
+      <Card className="relative mb-4 md:fixed md:bottom-4 md:right-4 md:z-10">
         <CardHeader>Customize</CardHeader>
         <CardContent>
           <ThemeCustomizer />
@@ -45,23 +44,7 @@ export default function IndexPage() {
           </PageActions>
         </PageHeader>
         <ExamplesNav className="[&>a:first-child]:text-primary" />
-        <section className="overflow-hidden rounded-lg border bg-background shadow-md md:hidden md:shadow-xl">
-          <Image
-            src="/examples/mail-dark.png"
-            width={1280}
-            height={727}
-            alt="Mail"
-            className="hidden dark:block"
-          />
-          <Image
-            src="/examples/mail-light.png"
-            width={1280}
-            height={727}
-            alt="Mail"
-            className="block dark:hidden"
-          />
-        </section>
-        <section className="hidden md:block">
+        <section className="min-w-0">
           <div className="overflow-hidden rounded-lg border bg-background shadow">
             <MailPage />
           </div>

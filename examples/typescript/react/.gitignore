@@ -1,0 +1,5 @@
+# Generated Next/TypeScript outputs are not parser fixtures.
+.next/
+node_modules/
+next-env.d.ts
+*.tsbuildinfo

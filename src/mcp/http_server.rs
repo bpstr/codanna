@@ -7,19 +7,15 @@
 pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
     use crate::IndexPersistence;
     use crate::indexing::facade::IndexFacade;
-    use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
+    use crate::mcp::notifications::NotificationBroadcaster;
     use crate::watcher::HotReloadWatcher;
-    use axum::Router;
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    };
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock;
     use tokio_util::sync::CancellationToken;
 
-    let auth = crate::mcp::auth::NetworkAuth::from_env()?;
+    let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
     let validated_bind = crate::mcp::auth::validate_bind(&bind, false)?;
 
     // Initialize logging with config
@@ -34,12 +30,13 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
     let settings = Arc::new(config.clone());
     let persistence = IndexPersistence::new(config.index_path.clone());
 
-    let facade = if persistence.exists() {
+    let mut facade = if persistence.exists() {
         persistence.load_facade(settings.clone())?
     } else {
         crate::log_event!("http", "starting", "no existing index");
         IndexFacade::new(settings.clone())?
     };
+    auth.restrict_facade(&mut facade)?;
     let indexer = Arc::new(RwLock::new(facade));
 
     // Create cancellation token for coordinated shutdown
@@ -78,6 +75,9 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
 
     // Load document store once (shared between MCP server instances and watcher)
     let document_store_arc = crate::documents::load_from_settings(&config);
+    if let Some(store) = &document_store_arc {
+        auth.validate_documents(&*store.read().await)?;
+    }
     if document_store_arc.is_some() {
         tracing::debug!(target: "mcp", "document store loaded for MCP server");
     }
@@ -161,47 +161,15 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         }
     }
 
-    // Create streamable HTTP service for MCP connections
-    let indexer_for_service = indexer.clone();
-    let config_for_service = Arc::new(config.clone());
-    let document_store_for_service = document_store_arc.clone();
-
-    let mcp_service = StreamableHttpService::new(
-        move || {
-            crate::debug_event!("mcp", "creating server instance");
-            let server = CodeIntelligenceServer::new_with_facade(
-                indexer_for_service.clone(),
-                config_for_service.clone(),
-            )
-            .with_broadcaster(broadcaster.clone());
-
-            // Attach document store if available
-            let server = if let Some(ref store_arc) = document_store_for_service {
-                server.with_document_store_arc(store_arc.clone())
-            } else {
-                server
-            };
-
-            Ok(server)
-        },
-        LocalSessionManager::default().into(),
-        {
-            let cfg = StreamableHttpServerConfig::default()
-                .with_cancellation_token(ct.child_token())
-                .with_sse_keep_alive(Some(Duration::from_secs(15)))
-                .with_sse_retry(None)
-                .with_legacy_session_mode(true)
-                .with_json_response(false);
-            let cfg = match config.mcp.allowed_hosts.clone() {
-                Some(hosts) => cfg.with_allowed_hosts(hosts),
-                None => cfg,
-            };
-            match config.mcp.allowed_origins.clone() {
-                Some(origins) => cfg.with_allowed_origins(origins),
-                None => cfg,
-            }
-        },
-    );
+    let router = crate::mcp::network::NetworkService::new(
+        indexer,
+        Arc::new(config.clone()),
+        document_store_arc,
+        broadcaster,
+        ct.clone(),
+        auth,
+    )
+    .router;
 
     // Helper function for shutdown signal with cancellation token
     async fn shutdown_signal() {
@@ -210,9 +178,6 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
             .expect("failed to listen for ctrl+c");
         eprintln!("Received shutdown signal");
     }
-
-    let router =
-        crate::mcp::auth::network_router(Router::new().nest_service("/mcp", mcp_service), auth);
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(validated_bind).await?;

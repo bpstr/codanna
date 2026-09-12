@@ -22,6 +22,7 @@ pub mod profiles;
 pub mod project_resolver;
 pub mod relationship;
 pub mod retrieve;
+pub(crate) mod runtime;
 pub mod semantic;
 pub mod storage;
 pub mod symbol;

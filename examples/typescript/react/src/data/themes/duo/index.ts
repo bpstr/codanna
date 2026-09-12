@@ -8,14 +8,14 @@ import { duoRed } from "./duo-red";
 import { duoYellow } from "./duo-yellow";
 
 const duo = [
-  duoBlue,
-  duoBurgundy,
-  duoCyan,
-  duoGreen,
-  duoLilac,
-  duoMagenta,
-  duoRed,
-  duoYellow,
+  { ...duoBlue, label: "Blue" },
+  { ...duoBurgundy, label: "Burgundy" },
+  { ...duoCyan, label: "Cyan" },
+  { ...duoGreen, label: "Green" },
+  { ...duoLilac, label: "Lilac" },
+  { ...duoMagenta, label: "Magenta" },
+  { ...duoRed, label: "Red" },
+  { ...duoYellow, label: "Yellow" },
 ];
 
 export { duo };

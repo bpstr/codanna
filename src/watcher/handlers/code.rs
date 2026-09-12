@@ -49,31 +49,46 @@ impl CodeFileHandler {
 
     /// Initialize the cached paths and eligibility gates from the facade.
     pub async fn init_cache(&self) {
-        let facade = self.facade.read().await;
-        let paths: HashSet<PathBuf> = facade
-            .get_all_indexed_paths()
-            .into_iter()
-            .map(|p| self.to_absolute(&p))
-            .collect();
+        if let Err(error) = self.refresh_cache().await {
+            tracing::error!("Code watch cache refresh failed: {error}");
+        }
+    }
 
-        let settings = facade.settings();
-        let roots = settings.indexed_paths_cache.clone();
-        let extensions: HashSet<String> = {
-            let registry = crate::parsing::get_registry();
-            match registry.lock() {
-                Ok(registry) => registry
-                    .enabled_extensions(settings)
-                    .map(|ext| ext.to_string())
-                    .collect(),
-                Err(_) => HashSet::new(),
-            }
-        };
-
-        let mut cache = self.cached_paths.write().await;
-        *cache = paths;
-        drop(cache);
-        let mut elig = self.eligibility.write().await;
-        *elig = Eligibility { extensions, roots };
+    async fn refresh_cache(&self) -> Result<(), WatchError> {
+        let workspace = self.workspace_root.clone();
+        let snapshot = crate::runtime::read(&self.facade, move |facade| {
+            let paths = facade.document_index().get_all_indexed_paths()?;
+            let paths: HashSet<PathBuf> = paths
+                .into_iter()
+                .map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        workspace.join(path)
+                    }
+                })
+                .collect();
+            let settings = facade.settings();
+            let roots = settings.indexed_paths_cache.clone();
+            let registry = crate::parsing::get_registry()
+                .lock()
+                .map_err(|_| crate::IndexError::MutexPoisoned)?;
+            let extensions = registry
+                .enabled_extensions(settings)
+                .map(str::to_owned)
+                .collect();
+            Ok::<_, crate::IndexError>((paths, Eligibility { extensions, roots }))
+        })
+        .await
+        .and_then(|value| value)
+        .map_err(|error| WatchError::HandlerFailed {
+            handler: "code cache".into(),
+            path: self.workspace_root.clone(),
+            reason: error.to_string(),
+        })?;
+        *self.cached_paths.write().await = snapshot.0;
+        *self.eligibility.write().await = snapshot.1;
+        Ok(())
     }
 
     /// Cheap gates for a path the index does not know yet: registered
@@ -100,15 +115,6 @@ impl CodeFileHandler {
         }
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         elig.roots.iter().any(|r| canonical.starts_with(r))
-    }
-
-    /// Convert a path to absolute using workspace root.
-    fn to_absolute(&self, path: &Path) -> PathBuf {
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.workspace_root.join(path)
-        }
     }
 
     /// Convert an absolute path to relative for the indexer.
@@ -141,12 +147,7 @@ impl WatchHandler for CodeFileHandler {
     }
 
     async fn tracked_paths(&self) -> Vec<PathBuf> {
-        let facade = self.facade.read().await;
-        facade
-            .get_all_indexed_paths()
-            .into_iter()
-            .map(|p| self.to_absolute(&p))
-            .collect()
+        self.cached_paths.read().await.iter().cloned().collect()
     }
 
     async fn watch_roots(&self) -> Vec<PathBuf> {
@@ -166,17 +167,18 @@ impl WatchHandler for CodeFileHandler {
             // Created file: matches() only ran the cheap gates. Hold the
             // exact line here -- reindex only what the index walk itself
             // would discover (ignore chains included).
-            let discoverable = {
-                let facade = self.facade.read().await;
-                !facade
-                    .discoverable_files(path)
-                    .map_err(|error| WatchError::HandlerFailed {
-                        handler: "code discovery".to_owned(),
-                        path: path.to_path_buf(),
-                        reason: error.to_string(),
-                    })?
-                    .is_empty()
-            };
+            let target = path.to_path_buf();
+            let discoverable = crate::runtime::read(&self.facade, move |facade| {
+                facade.discoverable_files(&target)
+            })
+            .await
+            .and_then(|result| result)
+            .map_err(|error| WatchError::HandlerFailed {
+                handler: "code discovery".into(),
+                path: path.to_path_buf(),
+                reason: error.to_string(),
+            })?;
+            let discoverable = !discoverable.is_empty();
             if !discoverable {
                 return Ok(WatchAction::None);
             }
@@ -202,8 +204,7 @@ impl WatchHandler for CodeFileHandler {
     }
 
     async fn refresh_paths(&self) -> Result<(), WatchError> {
-        self.init_cache().await;
-        Ok(())
+        self.refresh_cache().await
     }
 }
 

@@ -4,7 +4,7 @@ use crate::SymbolId;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Error type for semantic search operations
 #[derive(Debug, thiserror::Error)]
@@ -45,23 +45,26 @@ pub enum SemanticSearchError {
 /// This implementation uses state-of-the-art embeddings to find
 /// semantically similar documentation across the entire codebase,
 /// enabling natural language queries for code discovery.
-/// Updated: Final test - embedding cleanup working correctly!
+/// Queries can use immutable snapshots while indexing updates a later generation.
 pub struct SimpleSemanticSearch {
     /// Embeddings indexed by symbol ID
-    embeddings: HashMap<SymbolId, Vec<f32>>,
+    embeddings: Arc<HashMap<SymbolId, Arc<[f32]>>>,
 
     /// Language mapping for each symbol (for language-filtered search)
-    symbol_languages: HashMap<SymbolId, String>,
+    symbol_languages: Arc<HashMap<SymbolId, String>>,
 
     /// The embedding model for query-time embedding (None in remote mode — caller
     /// must use `search_with_embedding` and provide the query vector externally).
-    model: Option<Mutex<TextEmbedding>>,
+    model: Option<Arc<Mutex<TextEmbedding>>>,
 
     /// Model dimensions for validation
     dimensions: usize,
 
     /// Metadata for tracking model info and timestamps
     metadata: Option<crate::semantic::SemanticMetadata>,
+
+    persistence: Arc<Mutex<super::journal::Persistence>>,
+    persist_io: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for SimpleSemanticSearch {
@@ -138,7 +141,11 @@ impl SimpleSemanticSearch {
         let test_embedding = text_model
             .embed(vec!["test"], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
-        let dimensions = test_embedding.into_iter().next().unwrap().len();
+        let dimensions = test_embedding
+            .into_iter()
+            .next()
+            .ok_or_else(|| SemanticSearchError::EmbeddingError("empty model response".into()))?
+            .len();
 
         // Create initial metadata
         let metadata = crate::semantic::SemanticMetadata::new(
@@ -148,11 +155,13 @@ impl SimpleSemanticSearch {
         );
 
         Ok(Self {
-            embeddings: HashMap::new(),
-            symbol_languages: HashMap::new(),
-            model: Some(Mutex::new(text_model)),
+            embeddings: Arc::new(HashMap::new()),
+            symbol_languages: Arc::new(HashMap::new()),
+            model: Some(Arc::new(Mutex::new(text_model))),
             dimensions,
             metadata: Some(metadata),
+            persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
+            persist_io: Arc::new(Mutex::new(())),
         })
     }
 
@@ -176,11 +185,14 @@ impl SimpleSemanticSearch {
         })?;
         let embeddings = model
             .lock()
-            .unwrap()
+            .map_err(|_| SemanticSearchError::EmbeddingError("query model lock poisoned".into()))?
             .embed(vec![doc], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
 
-        let embedding = embeddings.into_iter().next().unwrap();
+        let embedding = embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| SemanticSearchError::EmbeddingError("empty model response".into()))?;
 
         // Validate dimensions
         if embedding.len() != self.dimensions {
@@ -191,7 +203,8 @@ impl SimpleSemanticSearch {
             )));
         }
 
-        self.embeddings.insert(symbol_id, embedding);
+        Arc::make_mut(&mut self.embeddings).insert(symbol_id, Arc::from(embedding));
+        self.mark_dirty(symbol_id);
         Ok(())
     }
 
@@ -207,8 +220,8 @@ impl SimpleSemanticSearch {
 
         // Then store the language mapping
         if self.embeddings.contains_key(&symbol_id) {
-            self.symbol_languages
-                .insert(symbol_id, language.to_string());
+            Arc::make_mut(&mut self.symbol_languages).insert(symbol_id, language.to_string());
+            self.mark_dirty(symbol_id);
         }
 
         Ok(())
@@ -219,9 +232,10 @@ impl SimpleSemanticSearch {
         let mut count = 0;
         let mut dropped = 0usize;
         for (symbol_id, embedding, language) in items {
-            if embedding.len() == self.dimensions {
-                self.embeddings.insert(symbol_id, embedding);
-                self.symbol_languages.insert(symbol_id, language);
+            if embedding.len() == self.dimensions && embedding.iter().all(|x| x.is_finite()) {
+                Arc::make_mut(&mut self.embeddings).insert(symbol_id, Arc::from(embedding));
+                Arc::make_mut(&mut self.symbol_languages).insert(symbol_id, language);
+                self.mark_dirty(symbol_id);
                 count += 1;
             } else {
                 dropped += 1;
@@ -306,7 +320,7 @@ impl SimpleSemanticSearch {
                 self.dimensions
             )));
         }
-        let candidates: Vec<(&SymbolId, &Vec<f32>)> = if let Some(lang) = language {
+        let candidates: Vec<(&SymbolId, &Arc<[f32]>)> = if let Some(lang) = language {
             self.embeddings
                 .iter()
                 .filter(|(id, _)| self.symbol_languages.get(id).is_some_and(|l| l == lang))
@@ -340,10 +354,13 @@ impl SimpleSemanticSearch {
         // Generate query embedding
         let query_embeddings = model
             .lock()
-            .unwrap()
+            .map_err(|_| SemanticSearchError::EmbeddingError("query model lock poisoned".into()))?
             .embed(vec![query], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
-        let query_embedding = query_embeddings.into_iter().next().unwrap();
+        let query_embedding = query_embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| SemanticSearchError::EmbeddingError("empty model response".into()))?;
 
         // Calculate similarities
         let mut similarities: Vec<(SymbolId, f32)> = self
@@ -382,13 +399,16 @@ impl SimpleSemanticSearch {
         // Generate query embedding
         let query_embeddings = model
             .lock()
-            .unwrap()
+            .map_err(|_| SemanticSearchError::EmbeddingError("query model lock poisoned".into()))?
             .embed(vec![query], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
-        let query_embedding = query_embeddings.into_iter().next().unwrap();
+        let query_embedding = query_embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| SemanticSearchError::EmbeddingError("empty model response".into()))?;
 
         // Filter embeddings by language BEFORE computing similarity
-        let filtered_embeddings: Vec<(&SymbolId, &Vec<f32>)> = if let Some(lang) = language {
+        let filtered_embeddings: Vec<(&SymbolId, &Arc<[f32]>)> = if let Some(lang) = language {
             self.embeddings
                 .iter()
                 .filter(|(id, _)| {
@@ -455,8 +475,11 @@ impl SimpleSemanticSearch {
 
     /// Clear all embeddings
     pub fn clear(&mut self) {
-        self.embeddings.clear();
-        self.symbol_languages.clear();
+        for id in self.embeddings.keys().copied().collect::<Vec<_>>() {
+            self.mark_dirty(id);
+        }
+        Arc::make_mut(&mut self.embeddings).clear();
+        Arc::make_mut(&mut self.symbol_languages).clear();
     }
 
     /// Remove embeddings for specific symbols
@@ -465,8 +488,10 @@ impl SimpleSemanticSearch {
     /// that no longer exist.
     pub fn remove_embeddings(&mut self, symbol_ids: &[SymbolId]) {
         for id in symbol_ids {
-            self.embeddings.remove(id);
-            self.symbol_languages.remove(id);
+            if Arc::make_mut(&mut self.embeddings).remove(id).is_some() {
+                self.mark_dirty(*id);
+            }
+            Arc::make_mut(&mut self.symbol_languages).remove(id);
         }
     }
 
@@ -475,129 +500,56 @@ impl SimpleSemanticSearch {
         self.metadata.as_ref()
     }
 
-    /// Save embeddings to disk using the efficient vector storage
-    ///
-    /// # Arguments
-    /// * `path` - Path where semantic data should be stored
+    fn mark_dirty(&mut self, id: SymbolId) {
+        // This lock protects only dirty bookkeeping; storage I/O uses a separate lock.
+        let mut state = self
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.dirty.insert(id);
+        state.revision = state.revision.wrapping_add(1);
+    }
+
+    /// Read-only, copy-on-write snapshot. Creating it never generates an embedding,
+    /// scans vectors or reads files. Vector payloads are shared, not cloned.
+    pub(crate) fn query_snapshot(&self) -> SemanticQuery {
+        SemanticQuery(Self {
+            embeddings: Arc::clone(&self.embeddings),
+            symbol_languages: Arc::clone(&self.symbol_languages),
+            model: self.model.clone(),
+            dimensions: self.dimensions,
+            metadata: self.metadata.clone(),
+            persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
+            persist_io: Arc::new(Mutex::new(())),
+        })
+    }
+
+    /// Prepare under the owner's short lock, then execute outside that lock.
+    pub(crate) fn save_snapshot(&self) -> Result<SemanticSave, SemanticSearchError> {
+        let state = self
+            .persistence
+            .lock()
+            .map_err(|_| super::journal::error("semantic persistence tracker poisoned"))?
+            .clone();
+        let mut metadata = self.metadata.clone().unwrap_or_else(|| {
+            crate::semantic::SemanticMetadata::new_remote("unknown".into(), self.dimensions, 0)
+        });
+        metadata.update(self.embeddings.len());
+        Ok(SemanticSave {
+            embeddings: Arc::clone(&self.embeddings),
+            languages: Arc::clone(&self.symbol_languages),
+            metadata,
+            state,
+            tracker: Arc::clone(&self.persistence),
+            io: Arc::clone(&self.persist_io),
+        })
+    }
+
+    /// Publish dirty IDs using one atomic manifest; unchanged saves are no-ops.
+    /// Every 64 delta commits a checkpoint compacts the journal. Format 1 loads;
+    /// the first changed save upgrades to format 2, which older binaries reject.
     pub fn save(&self, path: &Path) -> Result<(), SemanticSearchError> {
-        use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
-        use crate::vector::VectorDimension;
-
-        // Ensure the directory exists
-        std::fs::create_dir_all(path).map_err(|e| SemanticSearchError::StorageError {
-            message: format!("Failed to create semantic directory: {e}"),
-            suggestion: "Check directory permissions".to_string(),
-        })?;
-
-        let (model_name, is_remote_backend) = if let Some(ref meta) = self.metadata {
-            (meta.model_name.clone(), meta.is_remote())
-        } else {
-            // Legacy instance without metadata — infer from model field presence
-            ("AllMiniLML6V2".to_string(), self.model.is_none())
-        };
-
-        let metadata = if is_remote_backend {
-            SemanticMetadata::new_remote(model_name, self.dimensions, self.embeddings.len())
-        } else {
-            SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len())
-        };
-
-        // Create storage with our dimension
-        let dimension = VectorDimension::new(self.dimensions).map_err(|e| {
-            SemanticSearchError::StorageError {
-                message: format!("Invalid dimension: {e}"),
-                suggestion: "Dimension must be between 1 and 4096".to_string(),
-            }
-        })?;
-
-        // Stage the vector file, then rename over the live one: a crash at
-        // any point leaves the previous generation loadable instead of the
-        // delete-then-rewrite window destroying all persisted embeddings.
-        // The staging dir is unique per save invocation: concurrent savers
-        // exist across processes (two serve processes watching one
-        // workspace) AND within one process (serve modes hold more than one
-        // facade). A shared staging path lets one saver yank another's
-        // in-flight directory (ENOENT mid-batch) or promote another's
-        // half-written file. Each save promotes only a file it wrote and
-        // synced itself; the live-file rename stays last-wins-atomic.
-        clear_stale_staging(path);
-        static STAGING_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let staging_dir = path.join(format!(
-            ".staging-{}-{}",
-            std::process::id(),
-            STAGING_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&staging_dir).map_err(|e| SemanticSearchError::StorageError {
-            message: format!("Failed to create staging dir: {e}"),
-            suggestion: "Check directory permissions".to_string(),
-        })?;
-
-        let mut storage = SemanticVectorStorage::new(&staging_dir, dimension)?;
-
-        // The storage batch owns only IDs and slice references, not a second
-        // Vec<f32> for every symbol. Publication semantics remain unchanged.
-        storage.save_batch_borrowed(
-            self.embeddings
-                .iter()
-                .map(|(id, vector)| (*id, vector.as_slice())),
-        )?;
-        drop(storage);
-
-        let staged_vec = staging_dir.join("segment_0.vec");
-        // write(true): Windows FlushFileBuffers requires GENERIC_WRITE
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&staged_vec)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| SemanticSearchError::StorageError {
-                message: format!("Failed to sync staged vector file: {e}"),
-                suggestion: "Check disk space and staged-file write access".to_string(),
-            })?;
-        std::fs::rename(&staged_vec, path.join("segment_0.vec")).map_err(|e| {
-            SemanticSearchError::StorageError {
-                message: format!("Failed to swap vector file into place: {e}"),
-                suggestion: "Check directory permissions".to_string(),
-            }
-        })?;
-
-        // Metadata is written only after the vector file is in place, so it
-        // never claims embeddings that are not durably on disk. Its temp
-        // file stages in this save's own dir for the same collision-freedom
-        // as the vector file.
-        metadata.save_staged(&staging_dir, path)?;
-
-        // Save language mappings as a JSON file (convert SymbolId to u32 for serialization)
-        let languages_path = path.join("languages.json");
-        let languages_map: HashMap<u32, &str> = self
-            .symbol_languages
-            .iter()
-            .map(|(id, lang)| (id.to_u32(), lang.as_str()))
-            .collect();
-        let languages_json = serde_json::to_string(&languages_map).map_err(|e| {
-            SemanticSearchError::StorageError {
-                message: format!("Failed to serialize language mappings: {e}"),
-                suggestion: "This is likely a bug in the code".to_string(),
-            }
-        })?;
-        let languages_tmp = staging_dir.join("languages.json.tmp");
-        std::fs::write(&languages_tmp, languages_json).map_err(|e| {
-            SemanticSearchError::StorageError {
-                message: format!("Failed to write language mappings: {e}"),
-                suggestion: "Check disk space and file permissions".to_string(),
-            }
-        })?;
-        std::fs::rename(&languages_tmp, &languages_path).map_err(|e| {
-            SemanticSearchError::StorageError {
-                message: format!("Failed to swap language mappings into place: {e}"),
-                suggestion: "Check directory permissions".to_string(),
-            }
-        })?;
-
-        // Bytes only, never correctness: every artifact this save produced
-        // has been renamed out already.
-        let _ = std::fs::remove_dir_all(&staging_dir);
-
-        Ok(())
+        self.save_snapshot()?.save(path)
     }
 
     /// Create an empty semantic search instance for remote-embedding mode.
@@ -609,16 +561,18 @@ impl SimpleSemanticSearch {
         let metadata =
             crate::semantic::SemanticMetadata::new_remote(model_name.to_string(), dimensions, 0);
         Self {
-            embeddings: HashMap::new(),
-            symbol_languages: HashMap::new(),
+            embeddings: Arc::new(HashMap::new()),
+            symbol_languages: Arc::new(HashMap::new()),
             model: None,
             dimensions,
             metadata: Some(metadata),
+            persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
+            persist_io: Arc::new(Mutex::new(())),
         }
     }
 
     /// Load symbol-to-language mappings from `languages.json`.
-    fn load_symbol_languages(
+    pub(super) fn load_symbol_languages(
         path: &Path,
     ) -> Result<HashMap<SymbolId, String>, SemanticSearchError> {
         let languages_path = path.join("languages.json");
@@ -649,119 +603,127 @@ impl SimpleSemanticSearch {
     /// Used in remote-embedding mode: stored vectors are loaded for similarity
     /// search but query embedding is handled externally via `search_with_embedding`.
     pub fn load_remote(path: &Path) -> Result<Self, SemanticSearchError> {
-        use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
-
-        let metadata = SemanticMetadata::load(path)?;
-        let mut storage = SemanticVectorStorage::open(path)?;
-
-        // Verify storage dimension matches metadata to catch corrupted indexes.
-        if storage.dimension().get() != metadata.dimension {
-            return Err(SemanticSearchError::DimensionMismatch {
-                expected: metadata.dimension,
-                actual: storage.dimension().get(),
-                suggestion: format!(
-                    "Remote index was built with {}-dimensional embeddings but storage has {}. Re-index with: codanna index <path> --force",
-                    metadata.dimension,
-                    storage.dimension().get()
-                ),
-            });
-        }
-
-        let embeddings_vec = storage.load_all()?;
-        let mut embeddings = HashMap::with_capacity(embeddings_vec.len());
-        for (id, embedding) in embeddings_vec {
-            embeddings.insert(id, embedding);
-        }
-
-        let symbol_languages = Self::load_symbol_languages(path)?;
-
+        let snapshot = super::journal::load(path)?;
         Ok(Self {
-            embeddings,
-            symbol_languages,
+            embeddings: Arc::new(
+                snapshot
+                    .embeddings
+                    .into_iter()
+                    .map(|(id, v)| (id, Arc::from(v)))
+                    .collect(),
+            ),
+            symbol_languages: Arc::new(snapshot.languages),
+            dimensions: snapshot.metadata.dimension,
+            metadata: Some(snapshot.metadata),
             model: None,
-            dimensions: metadata.dimension,
-            metadata: Some(metadata),
+            persistence: Arc::new(Mutex::new(snapshot.persistence)),
+            persist_io: Arc::new(Mutex::new(())),
         })
     }
 
     pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {
-        use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
-
-        // Load metadata first
-        let metadata = SemanticMetadata::load(path)?;
-
-        // Delegate to load_remote for indexes explicitly built with a remote backend.
-        // The backend field defaults to Local for old metadata without this field,
-        // preserving backward compatibility.
-        if metadata.is_remote() {
-            return Self::load_remote(path);
+        let mut search = Self::load_remote(path)?;
+        let metadata = search
+            .metadata
+            .as_ref()
+            .expect("loaded snapshot has metadata");
+        if !metadata.is_remote() {
+            let model = crate::vector::parse_embedding_model(&metadata.model_name)
+                .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+            let text_model = TextEmbedding::try_new(
+                InitOptions::new(model)
+                    .with_cache_dir(crate::init::models_dir())
+                    .with_show_download_progress(false),
+            )
+            .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+            search.model = Some(Arc::new(Mutex::new(text_model)));
         }
+        Ok(search)
+    }
+}
 
-        // Parse model name from metadata
-        let model = crate::vector::parse_embedding_model(&metadata.model_name)
-            .map_err(|e| SemanticSearchError::StorageError {
-                message: format!("Invalid model in metadata: {e}"),
-                suggestion: format!(
-                    "The index was created with model '{}' which is not supported. Consider re-indexing with a supported model.",
-                    metadata.model_name
-                ),
-            })?;
+/// Restricted query surface: snapshots cannot mutate or publish a generation.
+pub(crate) struct SemanticQuery(SimpleSemanticSearch);
+impl SemanticQuery {
+    pub(crate) fn has_local_model(&self) -> bool {
+        self.0.has_local_model()
+    }
+    pub(crate) fn search_with_language(
+        &self,
+        query: &str,
+        limit: usize,
+        language: Option<&str>,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        self.0.search_with_language(query, limit, language)
+    }
+    pub(crate) fn search_with_embedding_and_language(
+        &self,
+        query: &[f32],
+        limit: usize,
+        language: Option<&str>,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        self.0
+            .search_with_embedding_and_language(query, limit, language)
+    }
+}
 
-        // Open existing storage
-        let mut storage = SemanticVectorStorage::open(path)?;
-
-        // Verify dimension matches
-        if storage.dimension().get() != metadata.dimension {
-            return Err(SemanticSearchError::DimensionMismatch {
-                expected: metadata.dimension,
-                actual: storage.dimension().get(),
-                suggestion: format!(
-                    "Index was created with a {}-dimension model. Re-index with: codanna index <path> --force",
-                    storage.dimension().get()
-                ),
-            });
+pub(crate) struct SemanticSave {
+    embeddings: Arc<HashMap<SymbolId, Arc<[f32]>>>,
+    languages: Arc<HashMap<SymbolId, String>>,
+    metadata: super::SemanticMetadata,
+    state: super::journal::Persistence,
+    tracker: Arc<Mutex<super::journal::Persistence>>,
+    io: Arc<Mutex<()>>,
+}
+impl SemanticSave {
+    pub(crate) fn save(mut self, path: &Path) -> Result<(), SemanticSearchError> {
+        let _io = self
+            .io
+            .lock()
+            .map_err(|_| super::journal::error("semantic save lane poisoned"))?;
+        let revision = self.state.revision;
+        {
+            let current = self
+                .tracker
+                .lock()
+                .map_err(|_| super::journal::error("semantic persistence tracker poisoned"))?;
+            if current
+                .committed_revision
+                .is_some_and(|committed| committed > revision)
+            {
+                return Err(super::journal::error(
+                    "stale prepared semantic save; a newer snapshot is already committed",
+                ));
+            }
+            // Another prepared snapshot may have committed while this one waited
+            // on the I/O lane. Compare against that owner-known manifest, not an
+            // obsolete one captured before waiting. External writers still fail
+            // the on-disk compare-and-swap inside journal::save.
+            self.state.saved = current.saved.clone();
+            if current.committed_revision == Some(revision) {
+                self.state.dirty.clear();
+            }
         }
-
-        // Load all embeddings
-        let embeddings_vec = storage.load_all()?;
-
-        // Verify count matches metadata
-        if embeddings_vec.len() != metadata.embedding_count {
-            eprintln!(
-                "WARNING: Expected {} embeddings but found {}",
-                metadata.embedding_count,
-                embeddings_vec.len()
-            );
+        super::journal::save(
+            path,
+            &mut self.state,
+            &self.embeddings,
+            &self.languages,
+            self.metadata,
+        )?;
+        let mut current = self
+            .tracker
+            .lock()
+            .map_err(|_| super::journal::error("semantic persistence tracker poisoned"))?;
+        self.state.committed_revision = Some(revision);
+        if current.revision == revision {
+            *current = self.state;
+        } else {
+            // Preserve every later dirty ID, even when the same ID changed twice.
+            current.saved = self.state.saved;
+            current.committed_revision = Some(revision);
         }
-
-        // Convert to HashMap
-        let mut embeddings = HashMap::with_capacity(embeddings_vec.len());
-        for (id, embedding) in embeddings_vec {
-            embeddings.insert(id, embedding);
-        }
-
-        // Create new instance with model from metadata
-        let text_model = TextEmbedding::try_new(
-            InitOptions::new(model)
-                .with_cache_dir(crate::init::models_dir())
-                .with_show_download_progress(false),
-        )
-        .map_err(|e| {
-            SemanticSearchError::ModelInitError(format!(
-                "Failed to load model '{}': {}",
-                metadata.model_name, e
-            ))
-        })?;
-
-        let symbol_languages = Self::load_symbol_languages(path)?;
-
-        Ok(Self {
-            embeddings,
-            symbol_languages,
-            model: Some(Mutex::new(text_model)),
-            dimensions: metadata.dimension,
-            metadata: Some(metadata),
-        })
+        Ok(())
     }
 }
 
@@ -804,39 +766,6 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
     let score = dot_product / (magnitude_a * magnitude_b);
     if score.is_finite() { score } else { 0.0 }
-}
-
-/// Remove leftover staging directories owned by no live process: the
-/// legacy fixed `.staging` name, and `.staging-<pid>-<seq>` dirs whose
-/// pid is dead (a crashed save). A live pid keeps its dirs — those are
-/// in-flight saves, whether a co-run process's or another facade's in
-/// this one. Best-effort: a leftover dir costs bytes, not correctness,
-/// so removal failures are ignored.
-fn clear_stale_staging(path: &Path) {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let dead = match name.strip_prefix(".staging") {
-            Some("") => true,
-            Some(suffix) => {
-                let pid = suffix
-                    .strip_prefix('-')
-                    .and_then(|rest| rest.split('-').next())
-                    .and_then(|p| p.parse::<u32>().ok());
-                match pid {
-                    Some(pid) => !crate::io::process::pid_is_alive(pid),
-                    None => true,
-                }
-            }
-            None => false,
-        };
-        if dead {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -915,12 +844,15 @@ mod tests {
         let loaded = SimpleSemanticSearch::load(dir.path()).unwrap();
         assert_eq!(loaded.embedding_count(), 1);
 
-        // Next save clears stale staging and swaps in the new generation
+        // Next save ignores legacy staging and commits a new generation
         search
             .index_doc_comment(SymbolId::new(2).unwrap(), "Connect to database")
             .unwrap();
         search.save(dir.path()).unwrap();
-        assert!(!staging.exists());
+        assert!(
+            staging.exists(),
+            "legacy staging is not owned by the new journal"
+        );
         let reloaded = SimpleSemanticSearch::load(dir.path()).unwrap();
         assert_eq!(reloaded.embedding_count(), 2);
     }
@@ -1216,5 +1148,96 @@ mod review_borrowed_persistence {
         assert_eq!(loaded.embeddings.len(), 1);
         assert_eq!(loaded.symbol_languages.len(), 1);
         assert!(loaded.embeddings.contains_key(&SymbolId::new(2).unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn hardening_final_semantic_query_pins_old_payload_without_copying_vectors() {
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let id = SymbolId::new(1).unwrap();
+        search.store_embeddings(vec![(id, vec![1., 0.], "rust".into())]);
+        let query = search.query_snapshot();
+        assert!(Arc::ptr_eq(&search.embeddings, &query.0.embeddings));
+        let payload = Arc::clone(&search.embeddings[&id]);
+        search.store_embeddings(vec![(id, vec![0., 1.], "rust".into())]);
+        assert!(Arc::ptr_eq(&payload, &query.0.embeddings[&id]));
+        assert_eq!(
+            query
+                .search_with_embedding_and_language(&[1., 0.], 1, None)
+                .unwrap()[0]
+                .1,
+            1.
+        );
+        assert_eq!(
+            search
+                .search_with_embedding_and_language(&[1., 0.], 1, None)
+                .unwrap()[0]
+                .1,
+            0.
+        );
+    }
+    #[test]
+    fn hardening_final_save_snapshot_preserves_updates_made_after_preparation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let id = SymbolId::new(1).unwrap();
+        search.store_embeddings(vec![(id, vec![1., 0.], "rust".into())]);
+        let pending = search.save_snapshot().unwrap();
+        search.store_embeddings(vec![(id, vec![0., 1.], "rust".into())]);
+        pending.save(dir.path()).unwrap();
+        search.save(dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load_remote(dir.path()).unwrap();
+        assert_eq!(
+            loaded
+                .search_with_embedding_and_language(&[0., 1.], 1, None)
+                .unwrap()[0]
+                .1,
+            1.
+        );
+        assert!(search.persistence.lock().unwrap().dirty.is_empty());
+    }
+    #[test]
+    fn hardening_final_older_prepared_save_cannot_erase_newer_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let id = SymbolId::new(1).unwrap();
+        search.store_embeddings(vec![(id, vec![1., 0.], "rust".into())]);
+        let older = search.save_snapshot().unwrap();
+        search.store_embeddings(vec![(id, vec![0., 1.], "rust".into())]);
+        let newer = search.save_snapshot().unwrap();
+        newer.save(dir.path()).unwrap();
+        let committed = std::fs::read(dir.path().join("metadata.json")).unwrap();
+        assert!(older.save(dir.path()).is_err());
+        search.save(dir.path()).unwrap();
+        assert_eq!(
+            committed,
+            std::fs::read(dir.path().join("metadata.json")).unwrap()
+        );
+        let loaded = SimpleSemanticSearch::load_remote(dir.path()).unwrap();
+        assert_eq!(loaded.embeddings[&id].as_ref(), &[0., 1.]);
+    }
+
+    #[test]
+    fn hardening_final_prepared_saves_in_order_rebase_without_losing_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let a = SymbolId::new(1).unwrap();
+        let b = SymbolId::new(2).unwrap();
+        search.store_embeddings(vec![(a, vec![1., 0.], "rust".into())]);
+        search.save(dir.path()).unwrap();
+        search.store_embeddings(vec![(a, vec![0., 1.], "rust".into())]);
+        let first = search.save_snapshot().unwrap();
+        search.store_embeddings(vec![(b, vec![1., 0.], "typescript".into())]);
+        let second = search.save_snapshot().unwrap();
+        first.save(dir.path()).unwrap();
+        second.save(dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load_remote(dir.path()).unwrap();
+        assert_eq!(loaded.embeddings.len(), 2);
+        assert_eq!(loaded.embeddings[&a].as_ref(), &[0., 1.]);
+        assert_eq!(loaded.symbol_languages[&b], "typescript");
+        assert!(search.persistence.lock().unwrap().dirty.is_empty());
     }
 }

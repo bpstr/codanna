@@ -145,11 +145,12 @@ impl CodeIntelligenceClient {
             Err(e) => println!("Request failed: {e}"),
         }
 
-        // Test force-reindex custom request (with a small path)
+        // Exercise only the server-configured workspace roots, never a
+        // hard-coded path from Codanna's own source tree.
         println!("\nSending custom request: requests/codanna/force-reindex");
         let reindex_request = ClientRequest::CustomRequest(CustomRequest::new(
             "requests/codanna/force-reindex",
-            Some(serde_json::json!({"paths": ["src/mcp/client.rs"]})),
+            None,
         ));
         match client.peer().send_request(reindex_request).await {
             Ok(rmcp::model::ServerResult::CustomResult(custom)) => {

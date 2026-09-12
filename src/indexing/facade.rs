@@ -15,10 +15,15 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
-//! let facade = IndexFacade::new(settings)?;
-//! facade.index_directory(&path)?;  // Uses Pipeline
-//! let symbols = facade.find_symbols_by_name("main")?;  // Uses DocumentIndex
+//! ```no_run
+//! # fn example() -> codanna::IndexResult<()> {
+//! use codanna::{Settings, indexing::facade::IndexFacade};
+//! let mut facade = IndexFacade::new(std::sync::Arc::new(Settings::default()))?;
+//! facade.index_directory(std::path::Path::new("src"), false)?;
+//! let symbols = facade.find_symbols_by_name("main", None);
+//! # let _ = symbols;
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::config::Settings;
@@ -36,6 +41,11 @@ use std::sync::{Arc, Mutex};
 
 /// Result type for facade operations
 pub type FacadeResult<T> = Result<T, IndexError>;
+
+/// A hydrated adjacent symbol and its optional edge metadata.
+pub type GraphNeighbor = (Symbol, Option<crate::relationship::RelationshipMetadata>);
+/// Visible neighbors followed by the total matching edge count.
+pub type GraphNeighborPreview = (Vec<GraphNeighbor>, usize);
 
 /// Statistics for indexing operations
 #[derive(Debug, Clone, Default)]
@@ -74,7 +84,10 @@ impl SyncStats {
 ///
 /// This facade wraps DocumentIndex (for queries) and Pipeline (for indexing),
 /// providing an API compatible with SimpleIndexer for gradual migration.
+#[derive(Clone)]
 pub struct IndexFacade {
+    /// Optional whole-workspace boundary for network policy deployments.
+    pub(crate) network_workspace: Option<PathBuf>,
     /// Document storage (Tantivy-based) - used for all queries
     document_index: Arc<DocumentIndex>,
 
@@ -125,6 +138,7 @@ impl IndexFacade {
         let pipeline = Pipeline::with_settings(settings.clone());
 
         Ok(Self {
+            network_workspace: None,
             document_index,
             pipeline,
             semantic_search: None,
@@ -151,6 +165,7 @@ impl IndexFacade {
         };
 
         Self {
+            network_workspace: None,
             document_index,
             pipeline,
             semantic_search,
@@ -230,8 +245,11 @@ impl IndexFacade {
     /// Save semantic search data to disk.
     pub fn save_semantic_search(&self, path: &Path) -> FacadeResult<()> {
         if let Some(ref semantic) = self.semantic_search {
-            let sem = semantic.lock().map_err(|_| IndexError::lock_error())?;
-            sem.save(path)?;
+            let save = semantic
+                .lock()
+                .map_err(|_| IndexError::lock_error())?
+                .save_snapshot()?;
+            save.save(path)?;
         }
         Ok(())
     }
@@ -478,18 +496,11 @@ impl IndexFacade {
 
     /// Get functions called by a symbol.
     pub fn get_called_functions(&self, symbol_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_from(symbol_id, RelationKind::Calls)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (_, to_id, _) in relationships {
-            if let Some(symbol) = self.get_symbol(to_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(symbol_id, RelationKind::Calls, false, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get functions called by a symbol with metadata.
@@ -497,34 +508,17 @@ impl IndexFacade {
         &self,
         symbol_id: SymbolId,
     ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
-        let relationships = self
-            .document_index
-            .get_relationships_from(symbol_id, RelationKind::Calls)
-            .unwrap_or_default();
-
-        let mut results = Vec::new();
-        for (_, to_id, rel) in relationships {
-            if let Some(symbol) = self.get_symbol(to_id) {
-                results.push((symbol, rel.metadata));
-            }
-        }
-        results
+        self.graph_neighbors(symbol_id, RelationKind::Calls, false, None)
+            .unwrap_or_default()
     }
 
     /// Get functions that call a symbol.
     pub fn get_calling_functions(&self, symbol_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_to(symbol_id, RelationKind::Calls)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (from_id, _, _) in relationships {
-            if let Some(symbol) = self.get_symbol(from_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(symbol_id, RelationKind::Calls, true, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get functions that call a symbol with metadata.
@@ -532,114 +526,62 @@ impl IndexFacade {
         &self,
         symbol_id: SymbolId,
     ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
-        let relationships = self
-            .document_index
-            .get_relationships_to(symbol_id, RelationKind::Calls)
-            .unwrap_or_default();
-
-        let mut results = Vec::new();
-        for (from_id, _, rel) in relationships {
-            if let Some(symbol) = self.get_symbol(from_id) {
-                results.push((symbol, rel.metadata));
-            }
-        }
-        results
+        self.graph_neighbors(symbol_id, RelationKind::Calls, true, None)
+            .unwrap_or_default()
     }
 
     /// Get implementations of a trait/interface.
     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_to(trait_id, RelationKind::Implements)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (from_id, _, _) in relationships {
-            if let Some(symbol) = self.get_symbol(from_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(trait_id, RelationKind::Implements, true, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get traits implemented by a type.
     pub fn get_implemented_traits(&self, type_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_from(type_id, RelationKind::Implements)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (_, to_id, _) in relationships {
-            if let Some(symbol) = self.get_symbol(to_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(type_id, RelationKind::Implements, false, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get classes/types extended by a class.
     pub fn get_extends(&self, class_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_from(class_id, RelationKind::Extends)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (_, to_id, _) in relationships {
-            if let Some(symbol) = self.get_symbol(to_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(class_id, RelationKind::Extends, false, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get classes that extend a base class.
     pub fn get_extended_by(&self, base_class_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_to(base_class_id, RelationKind::Extends)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (from_id, _, _) in relationships {
-            if let Some(symbol) = self.get_symbol(from_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(base_class_id, RelationKind::Extends, true, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get types/symbols used by a symbol.
     pub fn get_uses(&self, symbol_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_from(symbol_id, RelationKind::Uses)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (_, to_id, _) in relationships {
-            if let Some(symbol) = self.get_symbol(to_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(symbol_id, RelationKind::Uses, false, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get symbols that use a type.
     pub fn get_used_by(&self, type_id: SymbolId) -> Vec<Symbol> {
-        let relationships = self
-            .document_index
-            .get_relationships_to(type_id, RelationKind::Uses)
-            .unwrap_or_default();
-
-        let mut symbols = Vec::new();
-        for (from_id, _, _) in relationships {
-            if let Some(symbol) = self.get_symbol(from_id) {
-                symbols.push(symbol);
-            }
-        }
-        symbols
+        self.graph_neighbors(type_id, RelationKind::Uses, true, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
     }
 
     /// Get relationships for a symbol (by symbol ID).
@@ -715,10 +657,8 @@ impl IndexFacade {
                 .document_index
                 .get_relationships_from(symbol_id, RelationKind::Defines)
             {
-                let defines: Vec<Symbol> = rels
-                    .iter()
-                    .filter_map(|(_, to_id, _)| self.get_symbol(*to_id))
-                    .collect();
+                let ids: Vec<_> = rels.iter().map(|(_, id, _)| *id).collect();
+                let defines = self.get_symbols(&ids).unwrap_or_default();
                 if !defines.is_empty() {
                     relationships.defines = Some(defines);
                 }
@@ -782,10 +722,8 @@ impl IndexFacade {
                 .document_index
                 .get_relationships_from(symbol_id, *kind)
                 .unwrap_or_default();
-            let symbols: Vec<Symbol> = rels
-                .iter()
-                .filter_map(|(_, to_id, _)| self.get_symbol(*to_id))
-                .collect();
+            let ids: Vec<_> = rels.iter().map(|(_, to_id, _)| *to_id).collect();
+            let symbols = self.get_symbols(&ids).unwrap_or_default();
             if !symbols.is_empty() {
                 deps.insert(*kind, symbols);
             }
@@ -807,10 +745,8 @@ impl IndexFacade {
                 .document_index
                 .get_relationships_to(symbol_id, *kind)
                 .unwrap_or_default();
-            let symbols: Vec<Symbol> = rels
-                .iter()
-                .filter_map(|(from_id, _, _)| self.get_symbol(*from_id))
-                .collect();
+            let ids: Vec<_> = rels.iter().map(|(from_id, _, _)| *from_id).collect();
+            let symbols = self.get_symbols(&ids).unwrap_or_default();
             if !symbols.is_empty() {
                 deps.insert(*kind, symbols);
             }
@@ -825,38 +761,92 @@ impl IndexFacade {
         symbol_id: SymbolId,
         max_depth: Option<usize>,
     ) -> Vec<SymbolId> {
-        let max_depth = max_depth.unwrap_or(2);
-        let mut visited = HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
+        self.document_index
+            .graph_view()
+            .impact(symbol_id, max_depth.unwrap_or(2), None)
+            .unwrap_or_default()
+    }
 
-        queue.push_back((symbol_id, 0usize));
-        visited.insert(symbol_id);
+    /// Batch-hydrate symbols in caller order without an N+1 point-query loop.
+    pub fn get_symbols(&self, ids: &[SymbolId]) -> FacadeResult<Vec<Symbol>> {
+        self.document_index
+            .find_symbols_by_ids(ids)
+            .map_err(Into::into)
+    }
 
-        while let Some((current_id, depth)) = queue.pop_front() {
-            if depth >= max_depth {
-                continue;
-            }
+    /// A bounded network traversal fails explicitly rather than presenting a
+    /// truncated result as a complete impact analysis.
+    pub fn get_impact_radius_bounded(
+        &self,
+        id: SymbolId,
+        depth: usize,
+    ) -> FacadeResult<Vec<SymbolId>> {
+        self.document_index
+            .graph_view()
+            .impact(id, depth, Some((1000, 20_000)))
+            .map_err(Into::into)
+    }
 
-            // Get dependents via Calls, Uses, Implements, Extends
-            for kind in &[
-                RelationKind::Calls,
-                RelationKind::Uses,
-                RelationKind::Implements,
-                RelationKind::Extends,
-            ] {
-                if let Ok(rels) = self.document_index.get_relationships_to(current_id, *kind) {
-                    for (from_id, _, _) in rels {
-                        if visited.insert(from_id) {
-                            queue.push_back((from_id, depth + 1));
-                        }
-                    }
-                }
-            }
-        }
+    /// Hydrate only a visible relationship page from one pinned reader.
+    pub fn graph_neighbor_preview(
+        &self,
+        id: SymbolId,
+        kind: RelationKind,
+        incoming: bool,
+        limit: usize,
+    ) -> FacadeResult<GraphNeighborPreview> {
+        let graph = self.document_index.graph_view();
+        let page = graph.relationships_page(&[id], incoming, &[kind], 0, limit)?;
+        let ids: Vec<_> = page
+            .edges
+            .iter()
+            .map(|(from, to, _)| if incoming { *from } else { *to })
+            .collect();
+        let symbols: HashMap<_, _> = graph
+            .symbols(&ids)?
+            .into_iter()
+            .map(|symbol| (symbol.id, symbol))
+            .collect();
+        let visible = page
+            .edges
+            .into_iter()
+            .filter_map(|(from, to, rel)| {
+                symbols
+                    .get(&if incoming { from } else { to })
+                    .cloned()
+                    .map(|symbol| (symbol, rel.metadata))
+            })
+            .collect();
+        Ok((visible, page.total))
+    }
 
-        // Remove the initial symbol from results
-        visited.remove(&symbol_id);
-        visited.into_iter().collect()
+    pub fn graph_neighbors(
+        &self,
+        id: SymbolId,
+        kind: RelationKind,
+        incoming: bool,
+        limit: Option<usize>,
+    ) -> FacadeResult<Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)>> {
+        let view = self.document_index.graph_view();
+        let edges = view.relationships(&[id], incoming, &[kind], limit)?;
+        let ids: Vec<_> = edges
+            .iter()
+            .map(|(from, to, _)| if incoming { *from } else { *to })
+            .collect();
+        let symbols: HashMap<_, _> = view
+            .symbols(&ids)?
+            .into_iter()
+            .map(|symbol| (symbol.id, symbol))
+            .collect();
+        Ok(edges
+            .into_iter()
+            .filter_map(|(from, to, rel)| {
+                symbols
+                    .get(&if incoming { from } else { to })
+                    .cloned()
+                    .map(|symbol| (symbol, rel.metadata))
+            })
+            .collect())
     }
 
     // =========================================================================
@@ -898,7 +888,10 @@ impl IndexFacade {
             .as_ref()
             .ok_or(IndexError::SemanticSearchNotEnabled)?;
 
-        let sem = semantic.lock().map_err(|_| IndexError::lock_error())?;
+        let sem = semantic
+            .lock()
+            .map_err(|_| IndexError::lock_error())?
+            .query_snapshot();
 
         // When the semantic search has no local model (built with remote embeddings),
         // generate the query vector via the embedding backend regardless of whether
@@ -918,12 +911,16 @@ impl IndexFacade {
             sem.search_with_embedding_and_language(&query_vec, limit, language_filter)?
         };
 
-        let mut symbols = Vec::new();
-        for (symbol_id, score) in results {
-            if let Some(symbol) = self.get_symbol(symbol_id) {
-                symbols.push((symbol, score));
-            }
-        }
+        let ids = results.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let mut hydrated = self
+            .get_symbols(&ids)?
+            .into_iter()
+            .map(|s| (s.id, s))
+            .collect::<std::collections::HashMap<_, _>>();
+        let symbols = results
+            .into_iter()
+            .filter_map(|(id, score)| hydrated.remove(&id).map(|s| (s, score)))
+            .collect();
 
         Ok(symbols)
     }
@@ -1112,11 +1109,87 @@ impl IndexFacade {
             .collect()
     }
 
+    /// Apply one whole-workspace boundary. Existing source provenance must also
+    /// fit; accepting a token for A must not expose rows previously indexed from B.
+    pub(crate) fn restrict_workspace(&mut self, root: PathBuf) -> crate::IndexResult<()> {
+        let root = root
+            .canonicalize()
+            .map_err(|e| IndexError::General(e.to_string()))?;
+        for path in self
+            .settings
+            .indexing
+            .indexed_paths
+            .iter()
+            .chain(self.indexed_paths.iter())
+        {
+            Self::contained_source(&root, path)?;
+        }
+        for path in self.document_index.get_all_indexed_paths()? {
+            Self::contained_source(&root, &path)?;
+        }
+        self.network_workspace = Some(root);
+        Ok(())
+    }
+
+    pub(crate) fn contained_source(root: &Path, path: &Path) -> crate::IndexResult<PathBuf> {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(IndexError::General(
+                "network source paths cannot contain parent traversal".into(),
+            ));
+        }
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        // Deleted paths still need a boundary check. Resolve the closest existing
+        // ancestor, rather than falling back to an unverified absolute string.
+        let mut ancestor = absolute.as_path();
+        let mut tail = Vec::new();
+        let resolved = loop {
+            match ancestor.canonicalize() {
+                Ok(mut resolved) => {
+                    for component in tail.iter().rev() {
+                        resolved.push(component);
+                    }
+                    break resolved;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let name = ancestor
+                        .file_name()
+                        .ok_or_else(|| IndexError::General("source ancestor unavailable".into()))?;
+                    tail.push(name.to_os_string());
+                    ancestor = ancestor
+                        .parent()
+                        .ok_or_else(|| IndexError::General("source ancestor unavailable".into()))?;
+                }
+                Err(error) => return Err(IndexError::General(error.to_string())),
+            }
+        };
+        if !resolved.starts_with(root) {
+            return Err(IndexError::General(
+                "source lies outside the authorized network workspace".into(),
+            ));
+        }
+        Ok(resolved)
+    }
+
+    fn check_network_source(&self, path: &Path) -> crate::IndexResult<()> {
+        if let Some(root) = &self.network_workspace {
+            Self::contained_source(root, path)?;
+        }
+        Ok(())
+    }
+
     pub fn index_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> crate::IndexResult<crate::IndexingResult> {
         let path = &Self::canonical_or_raw(path.as_ref());
+        self.check_network_source(path)?;
         if self.has_semantic_search() {
             if let Err(e) = self.ensure_embedding_pool() {
                 tracing::warn!("Failed to initialize embedding pool: {e}");
@@ -1129,7 +1202,35 @@ impl IndexFacade {
             self.embedding_pool.clone(),
         )?;
 
-        Ok(crate::IndexingResult::Indexed(stats.file_id))
+        Ok(if stats.cached {
+            crate::IndexingResult::Cached(stats.file_id)
+        } else {
+            crate::IndexingResult::Indexed(stats.file_id)
+        })
+    }
+
+    /// The network reindex path consumes a preflighted snapshot, never a second walk/read.
+    pub(crate) fn index_prepared_file(
+        &mut self,
+        content: crate::indexing::pipeline::FileContent,
+        pending: &mut crate::indexing::pipeline::PendingResolution,
+    ) -> crate::IndexResult<crate::IndexingResult> {
+        self.check_network_source(&content.path)?;
+        if self.has_semantic_search() {
+            self.ensure_embedding_pool()?;
+        }
+        let stats = self.pipeline.index_prepared_file(
+            content,
+            Arc::clone(&self.document_index),
+            self.semantic_search.clone(),
+            self.embedding_pool.clone(),
+            pending,
+        )?;
+        Ok(if stats.cached {
+            crate::IndexingResult::Cached(stats.file_id)
+        } else {
+            crate::IndexingResult::Indexed(stats.file_id)
+        })
     }
 
     /// Index a single file with optional force re-indexing.
@@ -1157,6 +1258,7 @@ impl IndexFacade {
     /// Uses the Pipeline's cleanup stage to remove symbols and embeddings.
     pub fn remove_file(&mut self, path: impl AsRef<std::path::Path>) -> crate::IndexResult<()> {
         let path = &Self::canonical_or_raw(path.as_ref());
+        self.check_network_source(path)?;
         let semantic_path = self.settings.index_path.join("semantic");
 
         use crate::indexing::pipeline::stages::CleanupStage;
@@ -1176,6 +1278,7 @@ impl IndexFacade {
     /// This is the primary indexing entry point using Pipeline.
     pub fn index_directory(&mut self, path: &Path, force: bool) -> FacadeResult<IndexingStats> {
         let path = &Self::canonical_or_raw(path);
+        self.check_network_source(path)?;
         if self.has_semantic_search() {
             if let Err(e) = self.ensure_embedding_pool() {
                 tracing::warn!("Failed to initialize embedding pool: {e}");
@@ -1220,6 +1323,7 @@ impl IndexFacade {
         pending: &mut crate::indexing::pipeline::PendingResolution,
     ) -> FacadeResult<IndexingStats> {
         let path = &Self::canonical_or_raw(path);
+        self.check_network_source(path)?;
         if self.has_semantic_search() {
             if let Err(e) = self.ensure_embedding_pool() {
                 tracing::warn!("Failed to initialize embedding pool: {e}");

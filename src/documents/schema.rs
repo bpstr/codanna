@@ -9,7 +9,7 @@ use tantivy::schema::{
 };
 
 /// Schema fields for document chunk storage.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct DocumentSchema {
     /// Document type discriminator (always "chunk" for this index).
     pub doc_type: Field,
