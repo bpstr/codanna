@@ -62,7 +62,7 @@ CODANNA_EMBED_PROVIDER_STRICT=1 \
 ./target/release/codanna index
 ```
 
-In strict mode, ONNX Runtime session creation fails rather than silently using CPU when the requested provider cannot register.
+In strict mode, ONNX Runtime session creation fails rather than silently using CPU when the requested provider cannot register. Strict mode is also useful when benchmarking because it prevents a missing accelerator from being mistaken for an accelerated run.
 
 ## Library use
 
@@ -79,3 +79,4 @@ before constructing semantic-search or document-embedding components.
 - Remote embedding mode is unchanged and does not use these local execution-provider settings.
 - The embedding model, tokenizer, dimensions, storage format, and semantic-search API are unchanged.
 - CPU remains the default when `CODANNA_EMBED_PROVIDER` is unset.
+- Provider selection confirms ONNX Runtime registration; use platform profiling tools when you need to verify which device executes individual model operations.
