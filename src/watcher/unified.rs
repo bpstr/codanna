@@ -772,6 +772,30 @@ impl UnifiedWatcher {
             }
 
             WatchAction::ReloadConfig { added, removed } => {
+                // Apply the new settings before indexing or refreshing handlers.
+                // Otherwise CodeFileHandler continues deriving eligibility from
+                // stale facade settings and newly-added roots stay unwatched.
+                let settings_path = self
+                    .workspace_root
+                    .join(crate::init::local_dir_name())
+                    .join("settings.toml");
+                match crate::config::Settings::load_from(&settings_path) {
+                    Ok(mut settings) => {
+                        if settings.workspace_root.is_none() {
+                            settings.workspace_root = Some(self.workspace_root.clone());
+                        }
+                        let mut indexer = self.facade.write().await;
+                        if let Err(e) = indexer.reload_settings(settings) {
+                            tracing::error!("[config] failed to apply reloaded settings: {e}");
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("[config] failed to reload settings: {e}");
+                        return Ok(());
+                    }
+                }
+
                 if !added.is_empty() {
                     crate::log_event!("config", "adding directories", "{}", added.len());
                     for path in &added {

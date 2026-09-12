@@ -180,6 +180,31 @@ impl IndexFacade {
         &self.settings
     }
 
+    /// Replace runtime settings and rebuild the mutation pipeline.
+    ///
+    /// The storage identity is immutable for a live facade: changing workspace
+    /// root or index path requires a process restart so query and mutation
+    /// components cannot point at different generations.
+    pub fn reload_settings(&mut self, settings: Settings) -> Result<(), String> {
+        let new_index_base = if let Some(ref workspace_root) = settings.workspace_root {
+            workspace_root.join(&settings.index_path)
+        } else {
+            settings.index_path.clone()
+        };
+        if new_index_base != self.index_base {
+            return Err(format!(
+                "live config reload cannot change index storage from {} to {}; restart codanna",
+                self.index_base.display(),
+                new_index_base.display()
+            ));
+        }
+
+        let settings = Arc::new(settings);
+        self.pipeline = Pipeline::with_settings(Arc::clone(&settings));
+        self.settings = settings;
+        Ok(())
+    }
+
     /// Get the index base path.
     pub fn index_base(&self) -> &Path {
         &self.index_base
