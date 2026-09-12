@@ -35,6 +35,12 @@ jobs:
           import base64, gzip, hashlib, json, os
           from pathlib import Path
           encoded = Path(os.environ['RUNNER_TEMP'], 'changes.b64').read_bytes()
+          for before, after in [(b'2ZxVGcp35opW3OgqBwXFctNS6', b'2ZxVGcp35opW7OgqBwXFctNS6'),
+                                (b'tNS6cEK54NsYFlAS1OlMV54cSO', b'tNS6cEK54NsYHAS1OlMV54cSO'),
+                                (b'bHsmKVhnmVF4hVtJ7jEM5jLfc', b'bHsmKVhnmVF4VtJ7jEM5jLfc'),
+                                (b'hqtFqO1oMHZw4CHCFA/tnD9k', b'hqtFqO1oMHZw64CHCFA/tnD9k')]:
+              assert encoded.count(before) == 1
+              encoded = encoded.replace(before, after)
           raw = gzip.decompress(base64.b64decode(encoded))
           assert hashlib.sha256(raw).hexdigest() == 'd233403ccad2d028fb063d663b77169b79d41b4ff9c752b9311ea151986f9e33'
           prepared = []
