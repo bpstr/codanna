@@ -124,6 +124,16 @@ fn provider_dispatch(
     }
 }
 
+#[cfg(feature = "gpu-embeddings")]
+fn commit_runtime_provider(dispatch: ExecutionProviderDispatch) -> bool {
+    ort::init().with_execution_providers([dispatch]).commit()
+}
+
+#[cfg(not(feature = "gpu-embeddings"))]
+fn commit_runtime_provider(_dispatch: ExecutionProviderDispatch) -> bool {
+    false
+}
+
 /// Configure the process-wide ONNX Runtime environment for local embeddings.
 ///
 /// Call this before any fastembed model is constructed. The Codanna CLI invokes
@@ -155,7 +165,7 @@ pub fn configure_embedding_runtime() {
         return;
     };
 
-    let committed = ort::init().with_execution_providers([dispatch]).commit();
+    let committed = commit_runtime_provider(dispatch);
 
     if committed {
         eprintln!(
