@@ -1,6 +1,6 @@
 //! Unified file watcher that routes events to pluggable handlers.
 
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -434,7 +434,10 @@ impl UnifiedWatcher {
                 match handler.on_delete(path).await {
                     Ok(action) => {
                         if let Err(e) = self.execute_action(action, handler.name()).await {
-                            tracing::error!("[{}] overflow delete action error: {e}", handler.name());
+                            tracing::error!(
+                                "[{}] overflow delete action error: {e}",
+                                handler.name()
+                            );
                         }
                     }
                     Err(e) => tracing::error!("[{}] overflow delete error: {e}", handler.name()),
@@ -447,7 +450,10 @@ impl UnifiedWatcher {
                 match handler.on_modify(path).await {
                     Ok(action) => {
                         if let Err(e) = self.execute_action(action, handler.name()).await {
-                            tracing::error!("[{}] overflow modify action error: {e}", handler.name());
+                            tracing::error!(
+                                "[{}] overflow modify action error: {e}",
+                                handler.name()
+                            );
                         }
                     }
                     Err(e) => tracing::error!("[{}] overflow modify error: {e}", handler.name()),
