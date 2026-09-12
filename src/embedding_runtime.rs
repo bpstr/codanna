@@ -126,9 +126,9 @@ fn provider_dispatch(
 
 /// Configure the process-wide ONNX Runtime environment for local embeddings.
 ///
-/// This must run before fastembed creates any sessions. The Codanna library
-/// invokes it through a process constructor so all current embedding paths share
-/// the same provider without each path needing provider-specific initialization.
+/// Call this before any fastembed model is constructed. The Codanna CLI invokes
+/// it at the start of `main`; library consumers can call it explicitly when they
+/// want the same optional GPU acceleration.
 pub fn configure_embedding_runtime() {
     let raw = match std::env::var(PROVIDER_ENV) {
         Ok(value) => value,
@@ -169,14 +169,6 @@ pub fn configure_embedding_runtime() {
             "codanna: ONNX Runtime was already initialized before embedding provider selection; existing runtime configuration is unchanged"
         );
     }
-}
-
-// ORT environment configuration must happen before any fastembed session is
-// created. Codanna is both a binary and a library, so a constructor covers CLI,
-// MCP server, tests, and downstream library users consistently.
-#[ctor::ctor(unsafe)]
-fn configure_embedding_runtime_before_main() {
-    configure_embedding_runtime();
 }
 
 #[cfg(test)]
