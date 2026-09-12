@@ -109,6 +109,8 @@ sysinfo = "0.39.6"
 indexmap = { version = "2.14.0", features = ["serde"] }
 
 [dev-dependencies]
+# Observe actual server-side SSE body closure in local transport fixtures.
+http-body = "1.0.1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.28.0"

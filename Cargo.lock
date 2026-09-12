@@ -799,6 +799,7 @@ dependencies = [
  "fs4",
  "glob",
  "hex",
+ "http-body",
  "ignore",
  "indexmap 2.14.0",
  "indicatif 0.18.6",

@@ -119,10 +119,140 @@ mod tests {
     const WRITER: &str = "writer-fixture-secret-not-for-use-1234567890";
     const PROTOCOL: &str = "2025-11-25";
 
+    // A client-side Response drop is not an acknowledgement that Hyper has
+    // dropped the server body. rmcp deliberately creates an idle shadow GET
+    // while an earlier common stream is still active. Observe the actual body
+    // lifetime rather than sleeping or treating a duplicate GET as a reconnect.
+    struct ObservedBody {
+        inner: Option<axum::body::Body>,
+        session: String,
+        closed: tokio::sync::mpsc::UnboundedSender<String>,
+    }
+    impl http_body::Body for ObservedBody {
+        type Data = axum::body::Bytes;
+        type Error = axum::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            std::pin::Pin::new(self.inner.as_mut().expect("body lives until drop")).poll_frame(cx)
+        }
+        fn is_end_stream(&self) -> bool {
+            self.inner
+                .as_ref()
+                .expect("body lives until drop")
+                .is_end_stream()
+        }
+        fn size_hint(&self) -> http_body::SizeHint {
+            self.inner
+                .as_ref()
+                .expect("body lives until drop")
+                .size_hint()
+        }
+    }
+    impl Drop for ObservedBody {
+        fn drop(&mut self) {
+            // Release rmcp's stream receiver before acknowledging closure.
+            drop(self.inner.take());
+            let _ = self.closed.send(self.session.clone());
+        }
+    }
+    async fn observe_stream_closure(
+        axum::extract::State(closed): axum::extract::State<
+            tokio::sync::mpsc::UnboundedSender<String>,
+        >,
+        request: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        let session = if request.method() == axum::http::Method::GET {
+            request
+                .headers()
+                .get("Mcp-Session-Id")
+                .map(|value| value.to_str().unwrap().to_owned())
+        } else {
+            None
+        };
+        let response = next.run(request).await;
+        if let Some(session) = session.filter(|_| response.status() == StatusCode::OK) {
+            response.map(|body| {
+                axum::body::Body::new(ObservedBody {
+                    inner: Some(body),
+                    session,
+                    closed,
+                })
+            })
+        } else {
+            response
+        }
+    }
+
+    struct EventStream {
+        response: Response,
+        buffered: Vec<u8>,
+    }
+    impl EventStream {
+        async fn changed_after(&mut self, previous: Option<usize>) -> usize {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    while let Some(end) = self.buffered.windows(2).position(|pair| pair == b"\n\n")
+                    {
+                        let event: Vec<_> = self.buffered.drain(..end + 2).collect();
+                        let text =
+                            std::str::from_utf8(&event).expect("complete SSE event is UTF-8");
+                        let mut id = None;
+                        let mut data = String::new();
+                        for line in text.lines() {
+                            if let Some(value) = line.strip_prefix("id:") {
+                                id = Some(
+                                    value
+                                        .trim()
+                                        .parse::<usize>()
+                                        .expect("common stream event id"),
+                                );
+                            }
+                            if let Some(value) = line.strip_prefix("data:") {
+                                data.push_str(value.trim_start());
+                                data.push('\n');
+                            }
+                        }
+                        if data.is_empty() {
+                            continue;
+                        }
+                        let message: Value =
+                            serde_json::from_str(&data).expect("SSE data is JSON-RPC");
+                        if message["method"] == "notifications/resources/list_changed" {
+                            let id = id.expect("legacy SSE events have replay identity");
+                            // The SDK may replay its last cached event inclusively.
+                            // An old event must never satisfy the next delivery assertion.
+                            if previous.is_none_or(|previous| id > previous) {
+                                return id;
+                            }
+                        }
+                    }
+                    let chunk = self
+                        .response
+                        .chunk()
+                        .await
+                        .unwrap()
+                        .expect("SSE must remain open");
+                    self.buffered.extend_from_slice(&chunk);
+                    assert!(
+                        self.buffered.len() < 64 * 1024,
+                        "unbounded incomplete SSE event"
+                    );
+                }
+            })
+            .await
+            .expect("each active session must receive a new notification")
+        }
+    }
+
     struct Fixture {
         url: String,
         client: Client,
         events: Arc<NotificationBroadcaster>,
+        closed: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>,
         manager: Arc<LocalSessionManager>,
         auth: NetworkAuth,
         stop: CancellationToken,
@@ -171,6 +301,11 @@ mod tests {
                 stop.clone(),
                 auth.clone(),
             );
+            let (closed_tx, closed_rx) = tokio::sync::mpsc::unbounded_channel();
+            let router = service.router.layer(axum::middleware::from_fn_with_state(
+                closed_tx,
+                observe_stream_closure,
+            ));
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
@@ -192,20 +327,21 @@ mod tests {
                 tokio::spawn(async move {
                     axum_server::from_tcp_rustls(listener, config)
                         .unwrap()
-                        .serve(service.router.into_make_service())
+                        .serve(router.into_make_service())
                         .await
                         .unwrap();
                 })
             } else {
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
                 tokio::spawn(async move {
-                    axum::serve(listener, service.router).await.unwrap();
+                    axum::serve(listener, router).await.unwrap();
                 })
             };
             Self {
                 url: format!("{}://{address}/mcp", if tls { "https" } else { "http" }),
                 client: client.build().unwrap(),
                 events,
+                closed: tokio::sync::Mutex::new(closed_rx),
                 manager: service.manager,
                 auth,
                 stop,
@@ -253,22 +389,39 @@ mod tests {
             );
             sid
         }
-        async fn stream(&self, token: &str, sid: &str) -> Response {
-            let response = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.client
-                    .get(&self.url)
-                    .bearer_auth(token)
-                    .header("Accept", "text/event-stream")
-                    .header("Mcp-Session-Id", sid)
-                    .header("MCP-Protocol-Version", PROTOCOL)
-                    .send(),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+        async fn stream(&self, token: &str, sid: &str, previous: Option<usize>) -> EventStream {
+            let mut request = self
+                .client
+                .get(&self.url)
+                .bearer_auth(token)
+                .header("Accept", "text/event-stream")
+                .header("Mcp-Session-Id", sid)
+                .header("MCP-Protocol-Version", PROTOCOL);
+            if let Some(previous) = previous {
+                request = request.header("Last-Event-ID", previous.to_string());
+            }
+            let response = tokio::time::timeout(Duration::from_secs(5), request.send())
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
-            response
+            EventStream {
+                response,
+                buffered: Vec::new(),
+            }
+        }
+        async fn disconnected(&self, expected: &str) {
+            let actual = tokio::time::timeout(Duration::from_secs(5), async {
+                self.closed
+                    .lock()
+                    .await
+                    .recv()
+                    .await
+                    .expect("closure observer stays alive")
+            })
+            .await
+            .expect("the server must observe client SSE disconnection");
+            assert_eq!(actual, expected, "only the disconnected stream may close");
         }
         async fn subscribers(&self, expected: usize) {
             tokio::time::timeout(Duration::from_secs(5), async {
@@ -284,25 +437,6 @@ mod tests {
                 )
             });
         }
-    }
-    async fn changed(response: &mut Response) {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            let mut body = String::new();
-            loop {
-                let chunk = response
-                    .chunk()
-                    .await
-                    .unwrap()
-                    .expect("SSE must remain open");
-                body.push_str(&String::from_utf8_lossy(&chunk));
-                if body.contains("notifications/resources/list_changed") {
-                    break;
-                }
-                assert!(body.len() < 64 * 1024, "unexpected unbounded SSE response");
-            }
-        })
-        .await
-        .expect("each active session must receive the notification");
     }
     async fn exercise(tls: bool) {
         let server = Fixture::new(tls).await;
@@ -320,17 +454,20 @@ mod tests {
         assert_eq!(stolen.status(), StatusCode::FORBIDDEN);
         let mutation = server.request(READER, Some(&a), json!({"jsonrpc":"2.0","id":3,"method":"requests/codanna/force-reindex","params":{"paths":[]}})).await;
         assert_eq!(mutation.status(), StatusCode::FORBIDDEN);
-        let mut first = server.stream(READER, &a).await;
-        let mut second = server.stream(WRITER, &b).await;
+        let mut first = server.stream(READER, &a, None).await;
+        let mut second = server.stream(WRITER, &b, None).await;
         server.events.send(FileChangeEvent::IndexReloaded);
-        changed(&mut first).await;
-        changed(&mut second).await;
-        drop(first); // temporary SSE disconnect keeps exactly one reconnectable session
-        let mut first = server.stream(READER, &a).await;
+        let first_id = first.changed_after(None).await;
+        let second_id = second.changed_after(None).await;
+        drop(first);
+        // No artificial close/retry/sleep: await Hyper dropping the actual
+        // response body, while both Codanna session listeners must stay alive.
+        server.disconnected(&a).await;
         server.subscribers(2).await;
+        let mut first = server.stream(READER, &a, Some(first_id)).await;
         server.events.send(FileChangeEvent::IndexReloaded);
-        changed(&mut first).await;
-        changed(&mut second).await;
+        first.changed_after(Some(first_id)).await;
+        let second_id = second.changed_after(Some(second_id)).await;
         let deleted = server
             .client
             .delete(&server.url)
@@ -345,7 +482,7 @@ mod tests {
         drop(first);
         server.subscribers(1).await;
         server.events.send(FileChangeEvent::IndexReloaded);
-        changed(&mut second).await;
+        second.changed_after(Some(second_id)).await;
         // Inject the clock into the real reaper rather than waiting an hour.
         reap_sessions(
             &server.auth,
