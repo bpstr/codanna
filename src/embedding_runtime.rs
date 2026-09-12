@@ -7,7 +7,7 @@
 //! Runtime selection is controlled by `CODANNA_EMBED_PROVIDER`:
 //! - unset / `cpu`: keep the existing CPU-only behavior
 //! - `auto`: prefer CoreML on Apple targets or CUDA on Linux/Windows when the
-//!   matching Cargo feature was compiled in
+//!   GPU embedding Cargo feature was compiled in
 //! - `coreml`: request CoreML explicitly
 //! - `cuda`: request CUDA explicitly
 //!
@@ -62,7 +62,7 @@ fn finalize_dispatch(
     }
 }
 
-#[cfg(all(feature = "gpu-coreml", target_vendor = "apple"))]
+#[cfg(all(feature = "gpu-embeddings", target_vendor = "apple"))]
 fn coreml_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     use ort::execution_providers::CoreMLExecutionProvider;
     Some(finalize_dispatch(
@@ -71,12 +71,15 @@ fn coreml_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     ))
 }
 
-#[cfg(not(all(feature = "gpu-coreml", target_vendor = "apple")))]
+#[cfg(not(all(feature = "gpu-embeddings", target_vendor = "apple")))]
 fn coreml_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
 
-#[cfg(all(feature = "gpu-cuda", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(
+    feature = "gpu-embeddings",
+    any(target_os = "linux", target_os = "windows")
+))]
 fn cuda_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     use ort::execution_providers::CUDAExecutionProvider;
     Some(finalize_dispatch(
@@ -85,7 +88,10 @@ fn cuda_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     ))
 }
 
-#[cfg(not(all(feature = "gpu-cuda", any(target_os = "linux", target_os = "windows"))))]
+#[cfg(not(all(
+    feature = "gpu-embeddings",
+    any(target_os = "linux", target_os = "windows")
+)))]
 fn cuda_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
