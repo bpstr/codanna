@@ -273,33 +273,37 @@ mod tests {
             ..Input::default()
         })
         .unwrap();
-        let client = links::build(&Input {
-            repo: "web".into(),
-            files: BTreeMap::from([("src/api.ts".into(), "a\nb".into())]),
-            symbols: vec![
-                CodeSymbol {
-                    key: 1,
-                    name: "getTask".into(),
-                    qualified_name: "a::getTask".into(),
-                    signature: "a".into(),
-                    path: "src/api.ts".into(),
-                    start_line: 1,
-                    end_line: 1,
-                },
-                CodeSymbol {
-                    key: 2,
-                    name: "getTask".into(),
-                    qualified_name: "b::getTask".into(),
-                    signature: "b".into(),
-                    path: "src/api.ts".into(),
-                    start_line: 2,
-                    end_line: 2,
-                },
-            ],
+        let client_a = links::build(&Input {
+            repo: "web-a".into(),
+            files: BTreeMap::from([("src/api.ts".into(), "a".into())]),
+            symbols: vec![CodeSymbol {
+                key: 1,
+                name: "getTask".into(),
+                qualified_name: "a::getTask".into(),
+                signature: "a".into(),
+                path: "src/api.ts".into(),
+                start_line: 1,
+                end_line: 1,
+            }],
             ..Input::default()
         })
         .unwrap();
-        let mut graph = merge(vec![core, client]).unwrap();
+        let client_b = links::build(&Input {
+            repo: "web-b".into(),
+            files: BTreeMap::from([("src/api.ts".into(), "b".into())]),
+            symbols: vec![CodeSymbol {
+                key: 1,
+                name: "getTask".into(),
+                qualified_name: "b::getTask".into(),
+                signature: "b".into(),
+                path: "src/api.ts".into(),
+                start_line: 1,
+                end_line: 1,
+            }],
+            ..Input::default()
+        })
+        .unwrap();
+        let mut graph = merge(vec![core, client_a, client_b]).unwrap();
         add_openapi(&mut graph, "core", "openapi.json", openapi).unwrap();
         assert!(graph.unresolved.iter().any(|u| u.reason
             == "ambiguous_cross_repo_contract_consumer"
