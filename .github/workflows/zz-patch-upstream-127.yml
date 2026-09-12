@@ -1,0 +1,34 @@
+name: Apply upstream 127 patch
+on:
+  push:
+    branches: [hardening/upstream-127-ts-import-alias]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/upstream-127-ts-import-alias
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply patch
+        run: python .github/scripts/patch-upstream-127.py
+      - name: Format and test
+        run: |
+          cargo fmt --all
+          cargo test typescript --all-features -- --nocapture
+          cargo check --all-features
+      - name: Clean patch scaffolding
+        run: rm .github/scripts/patch-upstream-127.py .github/workflows/zz-patch-upstream-127.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: preserve TypeScript named import targets across aliases"
+          git push origin HEAD:hardening/upstream-127-ts-import-alias
