@@ -49,3 +49,18 @@ end = s.index('\n}\n', start)
 s = s[:start] + '''    assert_eq!(result, codanna::parsing::ResolveResult::Found(SymbolId::new(1).unwrap()),
         "a single matching import must not be ambiguous");''' + s[end:]
 p.write_text(s)
+
+# Unclosed classes are legal literal text; a reversed range is genuinely invalid.
+replace('src/indexing/walker.rs',
+        '        fs::write(dir.path().join(".codannaignore"), "[\\n").unwrap();',
+        '''        let invalid_rule = "[z-a]";
+        let mut rules = ignore::gitignore::GitignoreBuilder::new(dir.path());
+        assert!(rules.add_line(None, invalid_rule).is_err(), "fixture must be invalid gitignore syntax");
+        fs::write(dir.path().join(".codannaignore"), format!("{invalid_rule}\\n")).unwrap();''')
+
+# Finish independent suites to report all failures, but retain a nonzero final outcome.
+p = Path('contributing/scripts/review-regressions.sh')
+s = p.read_text()
+s = s.replace('cargo test --locked --all-features --no-run\n', 'cargo test --locked --all-features --no-run\nstatus=0\n')
+s = '\n'.join(line + ' || status=1' if line.lstrip().startswith('run_tests --') or line.startswith('node --test ') else line for line in s.split('\n'))
+p.write_text(s + '\nexit "$status"\n')
