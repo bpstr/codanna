@@ -29,7 +29,11 @@ jobs:
           fi
       - name: Test knowledge engine and companion CLI
         run: cargo test --locked --bin codanna-knowledge
-      - name: Clippy knowledge companion
-        run: cargo clippy --locked --bin codanna-knowledge -- -D warnings
-      - name: CLI entry point
-        run: cargo run --locked --bin codanna-knowledge -- --help
+      - name: Test manifest dependency scanner
+        run: cargo test --locked --bin codanna-manifests
+      - name: Clippy knowledge companions
+        run: cargo clippy --locked --bin codanna-knowledge --bin codanna-manifests -- -D warnings
+      - name: CLI entry points
+        run: |
+          cargo run --locked --bin codanna-knowledge -- --help
+          cargo run --locked --bin codanna-manifests -- --help
