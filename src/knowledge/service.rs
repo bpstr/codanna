@@ -69,7 +69,12 @@ mod tests {
             tool_router: KnowledgeServer::tool_router(),
         };
         assert_eq!(server.tool_router.list_all().len(), 1);
-        assert!(server.get_change_context(Parameters(context::Request::default())).await.is_ok());
+        assert!(
+            server
+                .get_change_context(Parameters(context::Request::default()))
+                .await
+                .is_ok()
+        );
         assert!(
             server
                 .get_change_context(Parameters(context::Request {
@@ -82,6 +87,8 @@ mod tests {
     }
     #[test]
     fn request_schema_is_strict() {
-        assert!(serde_json::from_str::<context::Request>("{\"repo\":null,\"bogus\":true}").is_err());
+        assert!(
+            serde_json::from_str::<context::Request>("{\"repo\":null,\"bogus\":true}").is_err()
+        );
     }
 }
