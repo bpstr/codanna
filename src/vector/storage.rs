@@ -17,7 +17,7 @@
 //! - Startup time: <1ms (mmap is lazy-loaded by OS)
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -166,23 +166,22 @@ impl MmapVectorStorage {
         &mut self,
         vectors: &[(VectorId, &[f32])],
     ) -> Result<(), VectorStorageError> {
-        // Convert to owned for validation and writing
-        let owned_vectors: Vec<(VectorId, Vec<f32>)> = vectors
-            .iter()
-            .map(|(id, vec)| (*id, vec.to_vec()))
-            .collect();
-        self.validate_vectors(&owned_vectors)?;
+        // Validate and write directly from borrowed vectors. Do not materialize
+        // a second full batch: semantic snapshots can contain hundreds of
+        // thousands of vectors, so cloning here creates an avoidable O(index)
+        // memory spike exactly when persistence is already under pressure.
+        self.validate_vectors(vectors)?;
         self.ensure_storage_ready()?;
         // Drop the map before any file write: mutating a mapped file is
         // undefined behavior per the memmap2 contract. The next read remaps.
         self.invalidate_cache();
-        self.append_vectors(&owned_vectors)?;
+        self.append_vectors(vectors)?;
         self.update_metadata(vectors.len())?;
         Ok(())
     }
 
     /// Validates that all vectors have the correct dimension.
-    fn validate_vectors(&self, vectors: &[(VectorId, Vec<f32>)]) -> Result<(), VectorStorageError> {
+    fn validate_vectors(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
         for (_, vec) in vectors {
             self.dimension.validate_vector(vec)?;
         }
@@ -198,7 +197,7 @@ impl MmapVectorStorage {
     }
 
     /// Appends vectors to the storage file.
-    fn append_vectors(&self, vectors: &[(VectorId, Vec<f32>)]) -> Result<(), VectorStorageError> {
+    fn append_vectors(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
         debug_assert!(
             self.mmap.is_none(),
             "file must not be written while mapped (memmap2 UB)"
@@ -208,23 +207,22 @@ impl MmapVectorStorage {
             .append(true)
             .open(&self.path)?;
 
-        // Write header if this is a new file
+        // Write header if this is a new file before wrapping the append handle.
         if file.metadata()?.len() == 0 {
             self.write_header(&mut file)?;
         }
 
-        // Write vectors
+        // Buffer the payload so a 384-dimensional vector does not turn into
+        // hundreds of tiny write syscalls. Flush before returning: the caller
+        // updates the header count only after this function succeeds.
+        let mut writer = BufWriter::new(file);
         for (id, vector) in vectors {
-            // Write vector ID
-            file.write_all(&id.to_bytes())?;
-
-            // Write vector data
-            for &value in vector {
-                file.write_all(&value.to_le_bytes())?;
+            writer.write_all(&id.to_bytes())?;
+            for &value in *vector {
+                writer.write_all(&value.to_le_bytes())?;
             }
         }
-
-        file.flush()?;
+        writer.flush()?;
         Ok(())
     }
 
