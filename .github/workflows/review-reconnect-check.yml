@@ -45,6 +45,11 @@ jobs:
               prepared.append((path, new))
           for path, new in prepared:
               path.write_bytes(new)
+          path = Path('src/mcp/network.rs')
+          text = path.read_text()
+          needle = '    use http_body::Body as _;\n'
+          assert text.count(needle) == 1
+          path.write_text(text.replace(needle, ''))
           PY
       - uses: dtolnay/rust-toolchain@stable
         with:
