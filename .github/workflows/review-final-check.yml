@@ -1,0 +1,51 @@
+name: Review final checks
+
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-final-check.yml]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: review-final
+          cache-on-failure: true
+          cache-workspace-crates: false
+      - name: Record actual source and eliminate stale workspace artifacts
+        run: |
+          git rev-parse HEAD | tee "$RUNNER_TEMP/source.log"
+          sha256sum src/mcp/service.rs .github/workflows/full-test.yml | tee -a "$RUNNER_TEMP/source.log"
+          wc -l src/mcp/service.rs | tee -a "$RUNNER_TEMP/source.log"
+          cargo clean -p codanna
+      - name: Full Rust tests with locked dependencies
+        run: cargo test --locked --all-features 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
+      - name: No default features
+        if: ${{ !cancelled() }}
+        run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/no-default.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-final-checks
+          path: ${{ runner.temp }}/*.log
+          retention-days: 3
