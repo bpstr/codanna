@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Preserve source change manifest
-        run: cp review.final1.b64 "$RUNNER_TEMP/changes.b64"
+        run: cp review.final2.b64 "$RUNNER_TEMP/changes.b64"
       - uses: actions/checkout@v6
         with:
           ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
@@ -34,9 +34,9 @@ jobs:
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os
           from pathlib import Path
-          encoded = Path(os.environ['RUNNER_TEMP'], 'changes.b64').read_bytes().replace(b'W1Neh1nm', b'W1Oeh1nm')
+          encoded = Path(os.environ['RUNNER_TEMP'], 'changes.b64').read_bytes()
           raw = gzip.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(raw).hexdigest() == '7f3776cf632fdb4b68d55c98c4eace2da914060706397848cea7b88956bd49dc'
+          assert hashlib.sha256(raw).hexdigest() == 'd233403ccad2d028fb063d663b77169b79d41b4ff9c752b9311ea151986f9e33'
           prepared = []
           for change in json.loads(raw):
               path = Path(change['path'])
@@ -71,10 +71,10 @@ jobs:
       - name: Full Rust tests with locked dependencies
         run: cargo test --locked --all-features 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
       - name: Strict Clippy
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && success() }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
       - name: No default features
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && success() }}
         run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/no-default.log"
       - name: Export candidate
         if: always()
@@ -88,4 +88,5 @@ jobs:
           path: |
             ${{ runner.temp }}/*.log
             ${{ runner.temp }}/candidate.patch
+            ${{ runner.temp }}/changes.b64
           retention-days: 3
