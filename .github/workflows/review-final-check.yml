@@ -3,7 +3,9 @@ name: Review final checks
 on:
   push:
     branches: [work/review-20260912]
-    paths: [.github/workflows/review-final-check.yml]
+    paths:
+      - .github/workflows/review-final-check.yml
+      - 'review.final*.py'
 
 permissions:
   contents: read
@@ -23,43 +25,18 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Preserve source change manifest
-        run: cp review.final2.b64 "$RUNNER_TEMP/changes.b64"
+      - name: Preserve verified source manifests
+        run: cp review.final*.b64 review.final*.py "$RUNNER_TEMP/"
       - uses: actions/checkout@v6
         with:
           ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
           persist-credentials: false
       - name: Apply verified changes
         run: |
-          python3 - <<'PY'
-          import base64, gzip, hashlib, json, os
-          from pathlib import Path
-          encoded = Path(os.environ['RUNNER_TEMP'], 'changes.b64').read_bytes()
-          for before, after in [(b'2ZxVGcp35opW3OgqBwXFctNS6', b'2ZxVGcp35opW7OgqBwXFctNS6'),
-                                (b'tNS6cEK54NsYFlAS1OlMV54cSO', b'tNS6cEK54NsYHAS1OlMV54cSO'),
-                                (b'bHsmKVhnmVF4hVtJ7jEM5jLfc', b'bHsmKVhnmVF4VtJ7jEM5jLfc'),
-                                (b'hqtFqO1oMHZw4CHCFA/tnD9k', b'hqtFqO1oMHZw64CHCFA/tnD9k')]:
-              assert encoded.count(before) == 1
-              encoded = encoded.replace(before, after)
-          raw = gzip.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(raw).hexdigest() == 'd233403ccad2d028fb063d663b77169b79d41b4ff9c752b9311ea151986f9e33'
-          prepared = []
-          for change in json.loads(raw):
-              path = Path(change['path'])
-              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
-              old = path.read_bytes() if path.exists() else b''
-              assert (not path.exists()) if change['old'] is None else hashlib.sha256(old).hexdigest() == change['old']
-              lines = old.decode().splitlines(keepends=True)
-              for first, last, replacement in reversed(change['edits']):
-                  lines[first:last] = replacement.splitlines(keepends=True)
-              new = ''.join(lines).encode()
-              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
-              prepared.append((path,new))
-          for path, new in prepared:
-              path.parent.mkdir(parents=True,exist_ok=True)
-              path.write_bytes(new)
-          Path(os.environ['RUNNER_TEMP'],'changed-rust.txt').write_text('\n'.join(str(p) for p,_ in prepared if p.suffix == '.rs'))
-          PY
+          python3 "$RUNNER_TEMP/review.final-driver.py"
+          if [[ -f "$RUNNER_TEMP/review.final-adjust.py" ]]; then
+            python3 "$RUNNER_TEMP/review.final-adjust.py"
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
@@ -68,20 +45,31 @@ jobs:
           shared-key: review-final
           cache-on-failure: true
           cache-workspace-crates: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
       - name: Format and verify actual source
         run: |
-          xargs -d '\n' rustfmt --edition 2024 --config skip_children=true < "$RUNNER_TEMP/changed-rust.txt"
+          cargo fmt --all
           git add -N .
           git diff --check
           cargo clean -p codanna
       - name: Full Rust tests with locked dependencies
-        run: cargo test --locked --all-features 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
+        run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
       - name: Strict Clippy
-        if: ${{ !cancelled() && success() }}
+        if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
       - name: No default features
-        if: ${{ !cancelled() && success() }}
+        if: ${{ !cancelled() }}
         run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/no-default.log"
+      - name: Documentation
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --all-features 2>&1 | tee "$RUNNER_TEMP/docs.log"
+      - name: Plugin regressions
+        if: ${{ !cancelled() }}
+        run: node --test tests/security/*.test.cjs 2>&1 | tee "$RUNNER_TEMP/node.log"
       - name: Export candidate
         if: always()
         run: |
@@ -94,5 +82,5 @@ jobs:
           path: |
             ${{ runner.temp }}/*.log
             ${{ runner.temp }}/candidate.patch
-            ${{ runner.temp }}/changes.b64
+            ${{ runner.temp }}/review.final*.b64
           retention-days: 3
