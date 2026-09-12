@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 
 def replace(path, before, after):
@@ -64,3 +65,51 @@ s = p.read_text()
 s = s.replace('cargo test --locked --all-features --no-run\n', 'cargo test --locked --all-features --no-run\nstatus=0\n')
 s = '\n'.join(line + ' || status=1' if line.lstrip().startswith('run_tests --') or line.startswith('node --test ') else line for line in s.split('\n'))
 p.write_text(s + '\nexit "$status"\n')
+
+# Fix the production mismatch revealed by the actual CLI regression.
+p = Path('src/retrieve.rs')
+s = p.read_text()
+assert s.count('Envelope::not_found(') == 3
+s = s.replace('Envelope::not_found(', 'not_found_envelope(')
+assert s.count('Envelope::error(') == 4
+s = s.replace('Envelope::error(', 'query_error_envelope(')
+s = s.replace('let err: Envelope<()> = query_error_envelope(', 'let err: Envelope<()> = Envelope::error(')
+marker = '// =============================================================================\n// QueryContext - Shared abstraction for retrieve commands'
+assert s.count(marker) == 1
+s = s.replace(marker, '''// `retrieve` preserves its typed CLI exit vocabulary (not found = 3,
+// invalid query = 1). MCP keeps its distinct 1/2 envelope vocabulary.
+// Declared JSON outcomes must match the process code in both interfaces.
+fn not_found_envelope<T>(message: impl Into<String>) -> Envelope<T> {
+    let mut envelope = Envelope::not_found(message);
+    envelope.exit_code = ExitCode::NotFound as u8;
+    envelope
+}
+
+fn query_error_envelope<T>(code: ResultCode, message: impl Into<String>) -> Envelope<T> {
+    let mut envelope = Envelope::error(code, message);
+    envelope.exit_code = ExitCode::GeneralError as u8;
+    envelope
+}
+
+''' + marker)
+p.write_text(s)
+replace('tests/cli/test_review_cli_contracts.rs',
+        '''    let missing = fixture.json(&["retrieve", "symbol", "no_such_review_symbol", "--json"], 3);
+    assert_eq!(missing["status"], "not_found");
+    assert!(missing["data"].is_null());''',
+        '''    for command in ["symbol", "calls", "callers", "describe", "implementations", "search"] {
+        let missing = fixture.json(&["retrieve", command, "no_such_review_symbol", "--json"], 3);
+        assert_eq!(missing["status"], "not_found");
+        assert!(missing["data"].is_null());
+    }
+    for command in ["symbol", "calls", "callers", "describe"] {
+        let invalid = fixture.json(&["retrieve", command, "symbol_id:invalid", "--json"], 1);
+        assert_eq!(invalid["code"], "INVALID_QUERY");
+    }
+    let projected = fixture.json(&["retrieve", "symbol", "review_entry", "--fields", "invalid_field", "--json"], 2);
+    assert_eq!(projected["code"], "INVALID_QUERY");
+    // MCP deliberately uses a different not-found process code; preserve it.
+    let missing = fixture.json(&["mcp", "find_symbol", "name:no_such_review_symbol", "--json"], 1);
+    assert_eq!(missing["status"], "not_found");''')
+with Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').open('a') as f:
+    f.write('\nsrc/retrieve.rs\n')
