@@ -22,8 +22,38 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
+      - name: Preserve source change manifest
+        run: cp review.final1.b64 "$RUNNER_TEMP/changes.b64"
+      - uses: actions/checkout@v6
+        with:
           ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
           persist-credentials: false
+      - name: Apply verified changes
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          encoded = Path(os.environ['RUNNER_TEMP'], 'changes.b64').read_bytes().replace(b'W1Neh1nm', b'W1Oeh1nm')
+          raw = gzip.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(raw).hexdigest() == '7f3776cf632fdb4b68d55c98c4eace2da914060706397848cea7b88956bd49dc'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+              old = path.read_bytes() if path.exists() else b''
+              assert (not path.exists()) if change['old'] is None else hashlib.sha256(old).hexdigest() == change['old']
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path,new))
+          for path, new in prepared:
+              path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_bytes(new)
+          Path(os.environ['RUNNER_TEMP'],'changed-rust.txt').write_text('\n'.join(str(p) for p,_ in prepared if p.suffix == '.rs'))
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
@@ -32,20 +62,30 @@ jobs:
           shared-key: review-final
           cache-on-failure: true
           cache-workspace-crates: false
-      - name: Record actual source and eliminate stale workspace artifacts
+      - name: Format and verify actual source
         run: |
-          git rev-parse HEAD | tee "$RUNNER_TEMP/source.log"
-          sha256sum src/mcp/service.rs .github/workflows/full-test.yml | tee -a "$RUNNER_TEMP/source.log"
-          wc -l src/mcp/service.rs | tee -a "$RUNNER_TEMP/source.log"
+          xargs -d '\n' rustfmt --edition 2024 --config skip_children=true < "$RUNNER_TEMP/changed-rust.txt"
+          git add -N .
+          git diff --check
           cargo clean -p codanna
       - name: Full Rust tests with locked dependencies
         run: cargo test --locked --all-features 2>&1 | tee "$RUNNER_TEMP/full-tests.log"
+      - name: Strict Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
       - name: No default features
         if: ${{ !cancelled() }}
         run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/no-default.log"
+      - name: Export candidate
+        if: always()
+        run: |
+          git add -N .
+          git diff --binary > "$RUNNER_TEMP/candidate.patch"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: review-final-checks
-          path: ${{ runner.temp }}/*.log
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/candidate.patch
           retention-days: 3
