@@ -1,0 +1,60 @@
+name: Final review workbench
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-final-workbench.yml]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: acbc9470c2f6e211975d2cd89cf4e16c07196166
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Compile exact pinned revision
+        run: cargo test --locked --all-features --no-run
+      - name: Export offline compiler and dependency inputs
+        run: |
+          toolchain="$(rustc --print sysroot)"
+          tar -czf "$RUNNER_TEMP/compiler.tar.gz" -C "$toolchain" bin lib
+          tar -czf "$RUNNER_TEMP/registry.tar.gz" -C "$CARGO_HOME" registry
+          tar -czf "$RUNNER_TEMP/build-deps.tar.gz" --exclude='incremental' -C "$GITHUB_WORKSPACE" target
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-compiler
+          path: ${{ runner.temp }}/compiler.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-registry
+          path: ${{ runner.temp }}/registry.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-build-deps
+          path: ${{ runner.temp }}/build-deps.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Full test suite without external network
+        run: |
+          sudo --preserve-env=PATH,CARGO_HOME,RUSTUP_HOME unshare --net bash -c 'ip link set lo up; exec runuser -u runner -- env PATH="$PATH" CARGO_HOME="$CARGO_HOME" RUSTUP_HOME="$RUSTUP_HOME" timeout --kill-after=15s 600s cargo test --locked --offline --all-features -- --test-threads=2' 2>&1 | tee "$RUNNER_TEMP/full-offline.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-offline-log
+          path: ${{ runner.temp }}/full-offline.log
+          retention-days: 3
