@@ -59,6 +59,10 @@ jobs:
               raise SystemExit('preflight block changed unexpectedly')
           s = s.replace(old, new)
           s = s.replace('let language_id = detect_language(&content.path)?;', 'let language_id = detect_language(&content.path, settings)?;')
+          legacy_test_call = 'let result = detect_language(path);'
+          if s.count(legacy_test_call) != 3:
+              raise SystemExit(f'expected 3 legacy detect_language test calls, found {s.count(legacy_test_call)}')
+          s = s.replace(legacy_test_call, 'let result = detect_language(path, &Settings::default());')
           old = '''    PARSER_CACHE.with(|cache| {\n        let mut cache_ref = cache.borrow_mut();\n        let parser_cache = cache_ref\n            .as_mut()\n            .expect("Parser cache not initialized. Call init_parser_cache first.");\n\n        let parser = parser_cache.get_or_create(language_id)?;\n\n        parse_with_parser(content, language_id, parser, settings, module_root)\n    })\n'''
           new = '''    if !is_registered_language(language_id)? {\n        return generic_pack::parse(\n            content.path,\n            content.hash,\n            &content.content,\n            language_id,\n            module_root,\n        );\n    }\n\n    PARSER_CACHE.with(|cache| {\n        let mut cache_ref = cache.borrow_mut();\n        let parser_cache = cache_ref\n            .as_mut()\n            .expect("Parser cache not initialized. Call init_parser_cache first.");\n\n        let parser = parser_cache.get_or_create(language_id)?;\n\n        parse_with_parser(content, language_id, parser, settings, module_root)\n    })\n'''
           if old not in s:
