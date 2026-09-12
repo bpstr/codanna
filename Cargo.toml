@@ -149,7 +149,7 @@ path = "examples/pipeline_metrics_demo.rs"
 
 [[example]]
 name = "parser_census"
-path = "examples/parser_census/main.rs"
+path = "examples/parser_census.rs"
 
 [[example]]
 name = "resolution_precision"
