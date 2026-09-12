@@ -90,6 +90,8 @@ impl<'de> Deserialize<'de> for LanguageId {
             "rust" => "rust",
             "swift" => "swift",
             "typescript" => "typescript",
+            "ruby" => "ruby",
+            "bash" => "bash",
             // For unknown languages, we leak the string to get 'static lifetime
             // This is safe because language identifiers are typically created once
             // at startup and live for the entire program
@@ -392,6 +394,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::clojure::register(registry);
     super::lua::register(registry);
     super::swift::register(registry);
+    super::ruby_bash::register(registry);
 }
 
 /// Get the global registry

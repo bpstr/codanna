@@ -90,7 +90,9 @@ impl Language {
             "py" | "pyi" => Some(Language::Python),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
-            "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => Some(Language::Php),
+            "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => {
+                Some(Language::Php)
+            }
             "go" | "go.mod" | "go.sum" => Some(Language::Go),
             "c" | "h" => Some(Language::C),
             "clj" | "cljs" | "cljc" | "edn" => Some(Language::Clojure),
@@ -108,7 +110,9 @@ impl Language {
     }
 
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
-        path.extension().and_then(|ext| ext.to_str()).and_then(Self::from_extension)
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
     }
 
     pub fn extensions(&self) -> &[&str] {
@@ -117,7 +121,9 @@ impl Language {
             Language::Python => &["py", "pyi"],
             Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
             Language::TypeScript => &["ts", "tsx", "mts", "cts"],
-            Language::Php => &["php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml"],
+            Language::Php => &[
+                "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
+            ],
             Language::Go => &["go", "go.mod", "go.sum"],
             Language::C => &["c", "h"],
             Language::Clojure => &["clj", "cljs", "cljc", "edn"],
@@ -213,17 +219,50 @@ mod tests {
 
     #[test]
     fn test_language_from_path() {
-        assert_eq!(Language::from_path(Path::new("main.rs")), Some(Language::Rust));
-        assert_eq!(Language::from_path(Path::new("script.py")), Some(Language::Python));
-        assert_eq!(Language::from_path(Path::new("app.js")), Some(Language::JavaScript));
-        assert_eq!(Language::from_path(Path::new("types.d.ts")), Some(Language::TypeScript));
-        assert_eq!(Language::from_path(Path::new("index.php")), Some(Language::Php));
-        assert_eq!(Language::from_path(Path::new("main.go")), Some(Language::Go));
-        assert_eq!(Language::from_path(Path::new("main.cpp")), Some(Language::Cpp));
-        assert_eq!(Language::from_path(Path::new("player.gd")), Some(Language::Gdscript));
-        assert_eq!(Language::from_path(Path::new("script.lua")), Some(Language::Lua));
-        assert_eq!(Language::from_path(Path::new("app/models/user.rb")), Some(Language::Ruby));
-        assert_eq!(Language::from_path(Path::new("scripts/deploy.sh")), Some(Language::Bash));
+        assert_eq!(
+            Language::from_path(Path::new("main.rs")),
+            Some(Language::Rust)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("script.py")),
+            Some(Language::Python)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("app.js")),
+            Some(Language::JavaScript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("types.d.ts")),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("index.php")),
+            Some(Language::Php)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("main.go")),
+            Some(Language::Go)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("main.cpp")),
+            Some(Language::Cpp)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("player.gd")),
+            Some(Language::Gdscript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("script.lua")),
+            Some(Language::Lua)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("app/models/user.rb")),
+            Some(Language::Ruby)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("scripts/deploy.sh")),
+            Some(Language::Bash)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 

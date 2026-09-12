@@ -67,9 +67,9 @@ impl LightweightParser {
 
     fn new(flavor: Flavor) -> Result<Self, String> {
         let mut parser = Parser::new();
-        parser
-            .set_language(&flavor.grammar())
-            .map_err(|error| format!("failed to initialize {} parser: {error}", flavor.language()))?;
+        parser.set_language(&flavor.grammar()).map_err(|error| {
+            format!("failed to initialize {} parser: {error}", flavor.language())
+        })?;
         Ok(Self {
             parser,
             tree: None,
@@ -225,7 +225,10 @@ impl LightweightParser {
                 node.child_by_field_name("superclass"),
             ) {
                 let derived = Self::node_text(name, code).trim();
-                let base = Self::node_text(parent, code).trim().trim_start_matches('<').trim();
+                let base = Self::node_text(parent, code)
+                    .trim()
+                    .trim_start_matches('<')
+                    .trim();
                 if !derived.is_empty() && !base.is_empty() {
                     result.push((derived, base, Self::range(node)));
                 }
@@ -252,13 +255,19 @@ impl LightweightParser {
             return;
         }
         let next_owner = if matches!(node.kind(), "class" | "module") {
-            Self::name_node(node).map(|n| Self::node_text(n, code).trim()).or(owner)
+            Self::name_node(node)
+                .map(|n| Self::node_text(n, code).trim())
+                .or(owner)
         } else {
             owner
         };
         if matches!(node.kind(), "method" | "singleton_method") {
             if let (Some(definer), Some(name)) = (next_owner, Self::name_node(node)) {
-                result.push((definer, Self::node_text(name, code).trim(), Self::range(node)));
+                result.push((
+                    definer,
+                    Self::node_text(name, code).trim(),
+                    Self::range(node),
+                ));
             }
         }
         let mut cursor = node.walk();
@@ -347,7 +356,14 @@ impl LanguageParser for LightweightParser {
             return Vec::new();
         };
         let mut symbols = Vec::new();
-        self.extract_symbols(tree.root_node(), code, file_id, symbol_counter, &mut symbols, 0);
+        self.extract_symbols(
+            tree.root_node(),
+            code,
+            file_id,
+            symbol_counter,
+            &mut symbols,
+            0,
+        );
         symbols
     }
 
@@ -439,11 +455,15 @@ pub struct LightweightBehavior {
 
 impl LightweightBehavior {
     pub fn ruby() -> Self {
-        Self { flavor: Flavor::Ruby }
+        Self {
+            flavor: Flavor::Ruby,
+        }
     }
 
     pub fn bash() -> Self {
-        Self { flavor: Flavor::Bash }
+        Self {
+            flavor: Flavor::Bash,
+        }
     }
 }
 
@@ -497,30 +517,62 @@ pub struct RubyLanguage;
 pub struct BashLanguage;
 
 impl LanguageDefinition for RubyLanguage {
-    fn id(&self) -> LanguageId { LanguageId::new("ruby") }
-    fn name(&self) -> &'static str { "Ruby" }
-    fn extensions(&self) -> &'static [&'static str] { &["rb", "rake", "gemspec"] }
-    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
-        Ok(Box::new(LightweightParser::ruby().map_err(IndexError::General)?))
+    fn id(&self) -> LanguageId {
+        LanguageId::new("ruby")
     }
-    fn create_behavior(&self) -> Box<dyn LanguageBehavior> { Box::new(LightweightBehavior::ruby()) }
-    fn default_enabled(&self) -> bool { true }
+    fn name(&self) -> &'static str {
+        "Ruby"
+    }
+    fn extensions(&self) -> &'static [&'static str] {
+        &["rb", "rake", "gemspec"]
+    }
+    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
+        Ok(Box::new(
+            LightweightParser::ruby().map_err(IndexError::General)?,
+        ))
+    }
+    fn create_behavior(&self) -> Box<dyn LanguageBehavior> {
+        Box::new(LightweightBehavior::ruby())
+    }
+    fn default_enabled(&self) -> bool {
+        true
+    }
     fn is_enabled(&self, settings: &Settings) -> bool {
-        settings.languages.get("ruby").map(|c| c.enabled).unwrap_or(true)
+        settings
+            .languages
+            .get("ruby")
+            .map(|c| c.enabled)
+            .unwrap_or(true)
     }
 }
 
 impl LanguageDefinition for BashLanguage {
-    fn id(&self) -> LanguageId { LanguageId::new("bash") }
-    fn name(&self) -> &'static str { "Bash / POSIX shell" }
-    fn extensions(&self) -> &'static [&'static str] { &["sh", "bash", "zsh", "bats"] }
-    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
-        Ok(Box::new(LightweightParser::bash().map_err(IndexError::General)?))
+    fn id(&self) -> LanguageId {
+        LanguageId::new("bash")
     }
-    fn create_behavior(&self) -> Box<dyn LanguageBehavior> { Box::new(LightweightBehavior::bash()) }
-    fn default_enabled(&self) -> bool { true }
+    fn name(&self) -> &'static str {
+        "Bash / POSIX shell"
+    }
+    fn extensions(&self) -> &'static [&'static str] {
+        &["sh", "bash", "zsh", "bats"]
+    }
+    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
+        Ok(Box::new(
+            LightweightParser::bash().map_err(IndexError::General)?,
+        ))
+    }
+    fn create_behavior(&self) -> Box<dyn LanguageBehavior> {
+        Box::new(LightweightBehavior::bash())
+    }
+    fn default_enabled(&self) -> bool {
+        true
+    }
     fn is_enabled(&self, settings: &Settings) -> bool {
-        settings.languages.get("bash").map(|c| c.enabled).unwrap_or(true)
+        settings
+            .languages
+            .get("bash")
+            .map(|c| c.enabled)
+            .unwrap_or(true)
     }
 }
 
@@ -533,7 +585,9 @@ pub(crate) fn register(registry: &mut LanguageRegistry) {
 mod tests {
     use super::*;
 
-    fn file_id() -> FileId { FileId::new(1).unwrap() }
+    fn file_id() -> FileId {
+        FileId::new(1).unwrap()
+    }
 
     #[test]
     fn ruby_extracts_classes_methods_calls_imports_and_inheritance() {
@@ -549,17 +603,33 @@ end
         let mut parser = LightweightParser::ruby().unwrap();
         let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, file_id(), &mut counter);
-        assert!(symbols.iter().any(|s| s.name.as_ref() == "Client" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name.as_ref() == "fetch" && s.kind == SymbolKind::Method));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name.as_ref() == "Client" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name.as_ref() == "fetch" && s.kind == SymbolKind::Method)
+        );
         let calls = parser.find_calls(code);
         assert!(calls.iter().any(|(_, callee, _)| *callee == "parse"));
         assert!(calls.iter().any(|(_, callee, _)| *callee == "load_body"));
         let imports = parser.find_imports(code, file_id());
         assert!(imports.iter().any(|i| i.path == "json"));
         let extends = parser.find_extends(code);
-        assert!(extends.iter().any(|(child, parent, _)| *child == "Client" && *parent == "BaseClient"));
+        assert!(
+            extends
+                .iter()
+                .any(|(child, parent, _)| *child == "Client" && *parent == "BaseClient")
+        );
         let defines = parser.find_defines(code);
-        assert!(defines.iter().any(|(owner, method, _)| *owner == "Client" && *method == "fetch"));
+        assert!(
+            defines
+                .iter()
+                .any(|(owner, method, _)| *owner == "Client" && *method == "fetch")
+        );
     }
 
     #[test]
@@ -575,9 +645,17 @@ build
         let mut parser = LightweightParser::bash().unwrap();
         let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, file_id(), &mut counter);
-        assert!(symbols.iter().any(|s| s.name.as_ref() == "build" && s.kind == SymbolKind::Function));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.name.as_ref() == "build" && s.kind == SymbolKind::Function)
+        );
         let calls = parser.find_calls(code);
-        assert!(calls.iter().any(|(caller, callee, _)| *caller == "build" && *callee == "compile_assets"));
+        assert!(
+            calls
+                .iter()
+                .any(|(caller, callee, _)| *caller == "build" && *callee == "compile_assets")
+        );
         let imports = parser.find_imports(code, file_id());
         assert!(imports.iter().any(|i| i.path == "./lib/common.sh"));
     }
@@ -586,7 +664,13 @@ build
     fn definitions_register_extensions() {
         let mut registry = LanguageRegistry::new();
         register(&mut registry);
-        assert_eq!(registry.get_by_extension("rb").unwrap().id(), LanguageId::new("ruby"));
-        assert_eq!(registry.get_by_extension("sh").unwrap().id(), LanguageId::new("bash"));
+        assert_eq!(
+            registry.get_by_extension("rb").unwrap().id(),
+            LanguageId::new("ruby")
+        );
+        assert_eq!(
+            registry.get_by_extension("sh").unwrap().id(),
+            LanguageId::new("bash")
+        );
     }
 }

@@ -25,7 +25,6 @@ pub mod ruby_bash;
 pub mod rust;
 pub mod swift;
 pub mod typescript;
-pub mod util;
 
 pub use c::{CBehavior, CParser};
 pub use clojure::{ClojureBehavior, ClojureParser};
