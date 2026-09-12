@@ -1,0 +1,65 @@
+name: Conversation recall
+
+on:
+  pull_request:
+    paths:
+      - 'src/bin/codanna-recall/**'
+      - 'docs/conversation-recall.md'
+      - '.github/workflows/conversation-recall.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recall-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Focused recall tests
+        run: cargo test --locked --bin codanna-recall
+      - name: Recall Clippy
+        run: cargo clippy --locked --bin codanna-recall -- -D warnings
+      - name: Actual CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --bin codanna-recall
+          root="$(mktemp -d)"
+          trap 'rm -rf "$root"' EXIT
+          printf '%s\n' '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Keep the status bar stable"}]}}' > "$root/codex.jsonl"
+          printf '%s\n' '{"type":"assistant","uuid":"fixture","sessionId":"fixture","message":{"role":"assistant","content":[{"type":"text","text":"Use the status bar component"}]}}' > "$root/claude.jsonl"
+          bin="$GITHUB_WORKSPACE/target/debug/codanna-recall"
+          "$bin" --index "$root/index" --workspace assign import --provider codex --file "$root/codex.jsonl"
+          "$bin" --index "$root/index" --workspace assign import --provider claude --file "$root/claude.jsonl"
+          "$bin" --index "$root/index" --workspace assign search 'status bar' > "$root/result.json"
+          python3 - "$root/result.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          assert data['total_matches'] == 2, data
+          assert {hit['message']['provider'] for hit in data['results']} == {'codex', 'claude'}
+          PY
+      - name: Format recall sources
+        if: always()
+        run: |
+          rustfmt --edition 2024 src/bin/codanna-recall/main.rs
+          git diff -- src/bin/codanna-recall > recall-format.patch
+          git diff --exit-code -- src/bin/codanna-recall
+      - name: Publish formatting diff on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-format-${{ github.run_id }}
+          path: recall-format.patch
+          if-no-files-found: ignore
