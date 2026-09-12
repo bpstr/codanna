@@ -1,0 +1,42 @@
+name: Apply upstream 122 patch
+on:
+  push:
+    branches: [hardening/upstream-122-relative-import]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/upstream-122-relative-import
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply focused patch
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/indexing/pipeline/stages/resolve.rs')
+          s = p.read_text()
+          marker = '        // Inheritance witness for bare calls inside a class body, only\n'
+          guard = """        // A recorded unresolved relative import is negative evidence:\n        // the source explicitly names a local module, so falling through to\n        // global same-name candidates can fabricate a cross-repository edge.\n        if context\n            .scope\n            .import_binding(&unresolved.to_name)\n            .is_some_and(|binding| {\n                binding.resolved_symbol.is_none() && binding.import.path.starts_with('.')\n            })\n        {\n            return None;\n        }\n\n"""
+          if marker not in s:
+              raise SystemExit('resolve insertion marker not found')
+          p.write_text(s.replace(marker, guard + marker, 1))
+      - name: Format and compile
+        run: |
+          cargo fmt --all
+          cargo check --all-features
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/zz-patch-upstream-122.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/indexing/pipeline/stages/resolve.rs .github/workflows/zz-patch-upstream-122.yml
+          git commit -m "fix: fail closed on unresolved relative imports"
+          git push origin HEAD:hardening/upstream-122-relative-import
