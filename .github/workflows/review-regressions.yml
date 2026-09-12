@@ -46,7 +46,6 @@ jobs:
     timeout-minutes: 15
     env:
       NEXT_TELEMETRY_DISABLED: '1'
-      REVIEW_BROWSER_OUTPUT: ${{ runner.temp }}/browser
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,6 +66,7 @@ jobs:
         run: |
           command -v google-chrome
           export CHROME_BIN="$(command -v google-chrome)"
+          export REVIEW_BROWSER_OUTPUT="$RUNNER_TEMP/browser"
           cd examples/typescript/react
           node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3040 > "$RUNNER_TEMP/next.log" 2>&1 &
           next_pid=$!
