@@ -266,8 +266,7 @@ mod tests {
     }
     #[test]
     fn ambiguity_is_retained_not_guessed() {
-        let openapi =
-            r#"{"openapi":"3.1.0","paths":{"/tasks":{"get":{"operationId":"getTask"}}}}"#;
+        let openapi = r#"{"openapi":"3.1.0","paths":{"/tasks":{"get":{"operationId":"getTask"}}}}"#;
         let core = links::build(&Input {
             repo: "core".into(),
             files: BTreeMap::from([("openapi.json".into(), openapi.into())]),
