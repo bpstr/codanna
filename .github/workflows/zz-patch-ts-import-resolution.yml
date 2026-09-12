@@ -1,0 +1,106 @@
+name: Apply TypeScript import resolution hardening
+on:
+  push:
+    branches: [hardening/typescript-import-resolution]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/typescript-import-resolution
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply focused patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # #122: a failed explicit relative import is evidence that the bare
+          # name must not fall through to an unrelated global candidate.
+          p = Path('src/indexing/pipeline/stages/resolve.rs')
+          s = p.read_text()
+          marker = '''        // Inheritance witness for bare calls inside a class body, only\n'''
+          guard = '''        // An explicit unresolved relative import shadows unrelated global\n        // candidates. If the scope recorded such a binding but could not map\n        // it to an indexed symbol, fail closed instead of allowing the later\n        // candidate ladder to select a same-named symbol from another root.\n        if context\n            .scope\n            .import_binding(&unresolved.to_name)\n            .is_some_and(|binding| {\n                binding.resolved_symbol.is_none() && binding.import.path.starts_with('.')\n            })\n        {\n            return None;\n        }\n\n'''
+          if marker not in s:
+              raise SystemExit('resolve insertion marker not found')
+          s = s.replace(marker, guard + marker, 1)
+          p.write_text(s)
+
+          # #127: retain the imported target name for aliased named imports.
+          p = Path('src/parsing/typescript/parser.rs')
+          s = p.read_text()
+          old = '''                            if ni.kind() == "import_specifier" {\n                                let mut sp = ni.walk();\n                                let mut local: Option<String> = None;\n                                // Prefer the aliased local name if present\n                                for part in ni.children(&mut sp) {\n                                    if part.kind() == "identifier" {\n                                        local = Some(code[part.byte_range()].to_string());\n                                    }\n                                }\n                                imports.push(Import {\n                                    path: source_path.to_string(),\n                                    alias: local,\n                                    file_id,\n                                    is_glob: false,\n                                    is_type_only,\n                                });\n                            }\n'''
+          new = '''                            if ni.kind() == "import_specifier" {\n                                let mut sp = ni.walk();\n                                let identifiers: Vec<String> = ni\n                                    .children(&mut sp)\n                                    .filter(|part| part.kind() == "identifier")\n                                    .map(|part| code[part.byte_range()].to_string())\n                                    .collect();\n                                let imported = identifiers.first().cloned();\n                                let local = identifiers.last().cloned();\n\n                                // `Import` predates per-specifier target names. Preserve\n                                // the original imported symbol only for the aliased case\n                                // in a TypeScript-private path suffix; behavior strips it\n                                // before module resolution and exposes only the local alias\n                                // to downstream generic resolution. This avoids widening the\n                                // shared cross-language Import schema for one parser fix.\n                                let path = match (&imported, &local) {\n                                    (Some(imported), Some(local)) if imported != local => {\n                                        format!(\n                                            "{source_path}#codanna-import:{imported}"\n                                        )\n                                    }\n                                    _ => source_path.to_string(),\n                                };\n                                imports.push(Import {\n                                    path,\n                                    alias: local,\n                                    file_id,\n                                    is_glob: false,\n                                    is_type_only,\n                                });\n                            }\n'''
+          if old not in s:
+              raise SystemExit('TypeScript import_specifier block not found')
+          s = s.replace(old, new, 1)
+
+          test_marker = '''    #[test]\n    fn test_generic_type_extraction_in_constructors() {\n'''
+          test = r'''    #[test]
+    fn hardening_typescript_named_alias_retains_imported_target() {
+        let mut parser = TypeScriptParser::new().unwrap();
+        let file_id = FileId::new(1).unwrap();
+        let imports = parser.find_imports(
+            "import { sharedTarget as renamed } from './target';",
+            file_id,
+        );
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].alias.as_deref(), Some("renamed"));
+        assert_eq!(
+            imports[0].path,
+            "./target#codanna-import:sharedTarget",
+            "the imported target must survive alias extraction"
+        );
+    }
+
+'''
+          if test_marker not in s:
+              raise SystemExit('TypeScript test insertion marker not found')
+          s = s.replace(test_marker, test + test_marker, 1)
+          p.write_text(s)
+
+          p = Path('src/parsing/typescript/behavior.rs')
+          s = p.read_text()
+          old = '''        for import in imports {\n            // Get the local name to bind (alias or last path segment)\n            let local_name = import.alias.clone().unwrap_or_else(|| {\n                import\n                    .path\n                    .split('/')\n                    .next_back()\n                    .or_else(|| import.path.split('.').next_back())\n                    .unwrap_or(&import.path)\n                    .to_string()\n            });\n\n            // Path-domain arm first: relative specifiers resolve by file\n'''
+          new = '''        for import in imports {\n            // Aliased named imports carry their original target in a\n            // TypeScript-private suffix emitted by the parser. Strip it before\n            // module/path resolution while keeping the local exposed name.\n            let (module_import_path, imported_name) = import\n                .path\n                .rsplit_once("#codanna-import:")\n                .map_or((import.path.as_str(), None), |(module, name)| {\n                    (module, Some(name))\n                });\n\n            // Get the local name to bind (alias or last module segment).\n            let local_name = import.alias.clone().unwrap_or_else(|| {\n                module_import_path\n                    .split('/')\n                    .next_back()\n                    .or_else(|| module_import_path.split('.').next_back())\n                    .unwrap_or(module_import_path)\n                    .to_string()\n            });\n            let lookup_name = imported_name.unwrap_or(&local_name);\n\n            // Path-domain arm first: relative specifiers resolve by file\n'''
+          if old not in s:
+              raise SystemExit('TypeScript behavior loop header not found')
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              'self.resolve_relative_import(cache, &local_name, &import.path, f, extensions)',
+              'self.resolve_relative_import(cache, lookup_name, module_import_path, f, extensions)',
+              1,
+          )
+          s = s.replace(
+              'enhancer.enhance_import_path(&import.path, file_id)',
+              'enhancer.enhance_import_path(module_import_path, file_id)',
+              1,
+          )
+          s = s.replace(
+              'normalize_import(&import.path, &importing_module.clone().unwrap_or_default())',
+              'normalize_import(module_import_path, &importing_module.clone().unwrap_or_default())',
+              2,
+          )
+          s = s.replace(
+              'for id in cache.lookup_candidates(&local_name) {',
+              'for id in cache.lookup_candidates(lookup_name) {',
+              1,
+          )
+          p.write_text(s)
+      - name: Format
+        run: cargo fmt --all
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/zz-patch-ts-import-resolution.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/indexing/pipeline/stages/resolve.rs src/parsing/typescript/parser.rs src/parsing/typescript/behavior.rs .github/workflows/zz-patch-ts-import-resolution.yml
+          git commit -m "fix: fail closed on unresolved imports and preserve TS aliases"
+          git push origin HEAD:hardening/typescript-import-resolution
