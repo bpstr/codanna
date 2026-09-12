@@ -10,7 +10,7 @@
  * Output: Opens visualization in browser or saves to .codanna/visualizations/
  */
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const workingDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -18,9 +18,9 @@ const { generateHTML } = require('./graph/render');
 const { saveArtifact, serveAndOpen } = require('./graph/publish');
 
 function runCodanna(subcommand, args) {
-  const cmd = `codanna ${subcommand} ${args} --json`;
+  const argv = [...subcommand.split(" "), args, "--json"];
   try {
-    const output = execSync(cmd, {
+    const output = execFileSync("codanna", argv, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: workingDir

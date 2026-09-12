@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
+import { jsonForScript, secureHtml, openBrowser } from "../shared/safety.cjs";
 import { readDump } from "./lib/dump.mjs";
 import { buildData, parseGroup, DEFAULT_KINDS, RELATIONS } from "./lib/adapter.mjs";
 import { readVendorSource, findNetworkPrimitives } from "./lib/vendor.mjs";
@@ -127,13 +127,13 @@ const html = part("shell.html")
   .replace("<!--MARKUP-->", () => markup)
   .replace("<!--SCRIPT-->", () => asScript(part("page.js")))
   .replace("<!--LIBS-->", () => libs)
-  .replace("<!--ASSETS-->", () => `<script>window.VAULT_LOGO_MASK=${JSON.stringify(mask)};</script>`)
-  .replace("<!--DATA-->", () => `<script>window.VAULT_DATA=${JSON.stringify(data)};</script>`);
+  .replace("<!--ASSETS-->", () => `<script>window.VAULT_LOGO_MASK=${jsonForScript(mask)};</script>`)
+  .replace("<!--DATA-->", () => `<script>window.VAULT_DATA=${jsonForScript(data)};</script>`);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = opt("out") ? resolve(process.cwd(), opt("out")) : join(workingDir, ".codanna", "visualizations", `graph-disc-${stamp}.html`);
 if (!existsSync(dirname(OUT))) mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, html, "utf8");
+writeFileSync(OUT, secureHtml(html), "utf8");
 
 const groups = new Set(data.nodes.filter((n) => n.deg > 0).map((n) => n.folder));
 if (data.stats.orphans && unlinked !== "drop") groups.add("(unlinked)");
@@ -145,7 +145,4 @@ console.log(`wrote ${OUT} (${(Buffer.byteLength(html) / 1024).toFixed(0)} KB)`);
 // Measured: the disc stays smooth to a few thousand symbols; at ~10,000 the hover ramp
 // re-runs the reducers over every node per frame and drops to ~10 fps.
 if (s.nodes > 4000) console.log(`note: ${s.nodes} symbols -- hover and filters get sluggish above ~4000; scope with --root PREFIX or narrow --kinds`);
-if (!flag("no-open")) {
-  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  try { execSync(`${opener} "${OUT}"`, { stdio: "ignore" }); } catch { /* no browser, fine */ }
-}
+if (!flag("no-open")) openBrowser(OUT);

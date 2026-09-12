@@ -20,8 +20,11 @@ pub fn clone_repository(
     target_dir: &Path,
     git_ref: Option<&str>,
 ) -> PluginResult<String> {
-    crate::git::clone_repository(repo_url, target_dir, git_ref)
-        .map_err(|e| map_git_error(e, "clone"))
+    let commit = crate::git::clone_repository(repo_url, target_dir, git_ref)
+        .map_err(|e| map_git_error(e, "clone"))?;
+    // Validate even a whole-repository plugin, before reading its manifests.
+    validate_tree(target_dir)?;
+    Ok(commit)
 }
 
 /// Resolve a git reference to a commit SHA without cloning.
@@ -37,6 +40,20 @@ pub fn resolve_reference(repo_url: &str, git_ref: &str) -> PluginResult<String> 
 
 /// Extract a subdirectory from a cloned repository
 pub fn extract_subdirectory(repo_dir: &Path, subdir: &str, target_dir: &Path) -> PluginResult<()> {
+    use std::path::Component;
+    if Path::new(subdir).is_absolute()
+        || Path::new(subdir).components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(unsafe_path(Path::new(subdir)));
+    }
+    // Preflight the complete clone before copying anything. This also rejects
+    // intermediate directory links and preserves the direct-call boundary.
+    validate_tree(repo_dir)?;
     let source_dir = repo_dir.join(subdir);
 
     if !source_dir.exists() {
@@ -54,32 +71,50 @@ pub fn extract_subdirectory(repo_dir: &Path, subdir: &str, target_dir: &Path) ->
     Ok(())
 }
 
-/// Recursively copy directory contents
+fn unsafe_path(path: &Path) -> PluginError {
+    PluginError::InvalidPluginManifest {
+        reason: format!(
+            "Plugin trees must contain only regular files and directories, without symlinks or path escapes: {}",
+            path.display()
+        ),
+    }
+}
+
+/// Reject links and special files without dereferencing them. Git cannot
+/// provide hard links; a fresh private clone is the trusted staging boundary.
+fn validate_tree(root: &Path) -> PluginResult<()> {
+    let metadata = std::fs::symlink_metadata(root)?;
+    if metadata.file_type().is_symlink() {
+        return Err(unsafe_path(root));
+    }
+    if metadata.is_file() {
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(unsafe_path(root));
+    }
+    for entry in std::fs::read_dir(root)? {
+        validate_tree(&entry?.path())?;
+    }
+    Ok(())
+}
+
+/// Copy only preflighted regular files; recheck entry types during the copy.
 fn copy_dir_contents(source: &Path, dest: &Path) -> PluginResult<()> {
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
-        let file_type = entry.file_type()?;
+        let kind = entry.file_type()?;
         let source_path = entry.path();
-        let file_name = entry.file_name();
-        let dest_path = dest.join(&file_name);
-
-        if file_type.is_dir() {
+        let dest_path = dest.join(entry.file_name());
+        if kind.is_dir() {
             std::fs::create_dir_all(&dest_path)?;
             copy_dir_contents(&source_path, &dest_path)?;
-        } else if file_type.is_file() {
+        } else if kind.is_file() {
             std::fs::copy(&source_path, &dest_path)?;
-        } else if file_type.is_symlink() {
-            // Dereference symlink and copy target content
-            let metadata = std::fs::metadata(&source_path)?;
-            if metadata.is_dir() {
-                std::fs::create_dir_all(&dest_path)?;
-                copy_dir_contents(&source_path, &dest_path)?;
-            } else {
-                std::fs::copy(&source_path, &dest_path)?;
-            }
+        } else {
+            return Err(unsafe_path(&source_path));
         }
     }
-
     Ok(())
 }
 
@@ -143,29 +178,47 @@ mod tests {
     }
 
     #[test]
+    fn hardening_review_plugin_extraction_rejects_parent_and_absolute_paths() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("out");
+        assert!(extract_subdirectory(root.path(), "..", &target).is_err());
+        assert!(extract_subdirectory(root.path(), "/", &target).is_err());
+        assert!(!target.exists());
+    }
+
+    #[test]
     #[cfg(unix)]
-    fn test_extract_subdirectory_follows_symlinks() {
-        let temp_dir = tempdir().unwrap();
-        let source_dir = temp_dir.path().join("source");
-        let target_dir = temp_dir.path().join("target");
-
-        // Create a file and a symlink to it
-        std::fs::create_dir_all(source_dir.join("subdir")).unwrap();
-        std::fs::write(source_dir.join("subdir/real.txt"), "real content").unwrap();
-        std::os::unix::fs::symlink(
-            source_dir.join("subdir/real.txt"),
-            source_dir.join("subdir/link.txt"),
-        )
-        .unwrap();
-
-        let result = extract_subdirectory(&source_dir, "subdir", &target_dir);
-        assert!(result.is_ok());
-        assert!(target_dir.join("real.txt").exists());
-        assert!(target_dir.join("link.txt").exists());
-
-        // Verify the symlink target was copied (not the symlink itself)
-        let content = std::fs::read_to_string(target_dir.join("link.txt")).unwrap();
-        assert_eq!(content, "real content");
-        assert!(!target_dir.join("link.txt").is_symlink());
+    fn hardening_review_plugin_extraction_rejects_all_symlink_shapes_before_copy() {
+        for link_target in [
+            "absolute-file",
+            "parent-file",
+            "directory",
+            "intermediate",
+            "internal",
+        ] {
+            let root = tempdir().unwrap();
+            let source = root.path().join("clone");
+            let out = root.path().join("installed");
+            let secret = root.path().join("secret.txt");
+            std::fs::write(&secret, "host secret").unwrap();
+            std::fs::create_dir_all(source.join("subdir")).unwrap();
+            std::fs::write(source.join("subdir/real.txt"), "safe").unwrap();
+            let (target, link) = match link_target {
+                "absolute-file" => (secret.clone(), source.join("subdir/link")),
+                "parent-file" => ("../../secret.txt".into(), source.join("subdir/link")),
+                "directory" => (root.path().to_path_buf(), source.join("subdir/link")),
+                "intermediate" => (root.path().to_path_buf(), source.join("escape")),
+                _ => ("real.txt".into(), source.join("subdir/link")),
+            };
+            std::os::unix::fs::symlink(target, link).unwrap();
+            assert!(
+                extract_subdirectory(&source, "subdir", &out).is_err(),
+                "{link_target}"
+            );
+            assert!(
+                !out.exists(),
+                "preflight must precede copying: {link_target}"
+            );
+        }
     }
 }

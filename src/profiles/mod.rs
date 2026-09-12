@@ -442,9 +442,29 @@ pub fn sync_team_config(force: bool) -> ProfileResult<()> {
 
     // 2. Install required profiles
     let lockfile_path = workspace.join(".codanna/profiles.lock.json");
-    let lockfile = lockfile::ProfileLockfile::load(&lockfile_path).unwrap_or_default();
+    let lockfile = lockfile::ProfileLockfile::load(&lockfile_path)?;
 
-    for profile_ref in &profiles_config.profiles {
+    install_required_profiles(
+        &profiles_config.profiles,
+        &lockfile,
+        force,
+        install_profile_from_registry,
+    )?;
+
+    println!();
+    println!("Sync complete!");
+
+    Ok(())
+}
+
+fn install_required_profiles(
+    profiles: &[String],
+    lockfile: &lockfile::ProfileLockfile,
+    force: bool,
+    mut install: impl FnMut(&str, bool) -> ProfileResult<()>,
+) -> ProfileResult<()> {
+    let mut failures = Vec::new();
+    for profile_ref in profiles {
         let reference = ProfileReference::parse(profile_ref);
 
         // Check if already installed
@@ -459,27 +479,34 @@ pub fn sync_team_config(force: bool) -> ProfileResult<()> {
         println!("Installing profile '{}'...", reference.profile);
 
         // Install the profile
-        if let Err(e) = install_profile_from_registry(profile_ref, force) {
+        if let Err(e) = install(profile_ref, force) {
             eprintln!("  Error installing '{}': {e}", reference.profile);
-            eprintln!("  Continuing with remaining profiles...");
+            failures.push(format!("{}: {e}", reference.profile));
         } else {
             println!("  Installed '{}'", reference.profile);
         }
     }
 
-    println!();
-    println!("Sync complete!");
-
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(error::ProfileError::PartialFailure {
+            operation: "Profile sync".into(),
+            failures,
+        })
+    }
 }
 
 /// Remove an installed profile
 ///
 /// This is the public API for the `codanna profile remove` command.
 pub fn remove_profile(profile_name: &str, verbose: bool) -> ProfileResult<()> {
-    use lockfile::ProfileLockfile;
-
     let workspace = std::env::current_dir()?;
+    remove_profile_at(&workspace, profile_name, verbose)
+}
+
+fn remove_profile_at(workspace: &Path, profile_name: &str, verbose: bool) -> ProfileResult<()> {
+    use lockfile::ProfileLockfile;
     let lockfile_path = workspace.join(".codanna/profiles.lock.json");
 
     // Load lockfile
@@ -509,24 +536,22 @@ pub fn remove_profile(profile_name: &str, verbose: bool) -> ProfileResult<()> {
             println!("  Removing: {file_path}");
         }
 
-        if full_path.exists() {
-            match std::fs::remove_file(&full_path) {
-                Ok(_) => {
-                    removed_count += 1;
-
-                    // Try to remove parent directory if empty (same as plugins)
-                    if let Some(parent) = full_path.parent() {
-                        let _ = std::fs::remove_dir(parent); // Ignore errors if not empty
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  Warning: Failed to remove {file_path}: {e}");
-                    failed_removals.push(file_path.clone());
+        match std::fs::remove_file(&full_path) {
+            Ok(()) => {
+                removed_count += 1;
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::remove_dir(parent); // Best effort: never recursively remove.
                 }
             }
-        } else if verbose {
-            println!("    (file not found, skipping)");
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => failed_removals.push(format!("{file_path}: {e}")),
         }
+    }
+    if !failed_removals.is_empty() {
+        return Err(error::ProfileError::PartialFailure {
+            operation: format!("Removing profile '{profile_name}'"),
+            failures: failed_removals,
+        });
     }
 
     // Remove profile from lockfile
@@ -779,4 +804,61 @@ pub fn update_profile(profile_name: &str, force: bool) -> ProfileResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod review_profile_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_profile_removal_preserves_retry_state_on_partial_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join("blocked")).unwrap();
+        std::fs::write(root.join("removed.txt"), "owned file").unwrap();
+        let path = root.join(".codanna/profiles.lock.json");
+        let mut lock = lockfile::ProfileLockfile::new();
+        lock.add_profile(lockfile::ProfileLockEntry {
+            name: "review".into(),
+            version: "1".into(),
+            installed_at: "fixture".into(),
+            files: vec!["removed.txt".into(), "blocked".into()],
+            integrity: String::new(),
+            commit: None,
+            provider_id: None,
+            source: None,
+        });
+        lock.save(&path).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let err = remove_profile_at(root, "review", false).unwrap_err();
+        assert!(matches!(err, error::ProfileError::PartialFailure { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(!root.join("removed.txt").exists());
+        std::fs::remove_dir(root.join("blocked")).unwrap();
+        remove_profile_at(root, "review", false).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn hardening_review_profile_sync_attempts_remaining_entries_but_returns_failure() {
+        let profiles = vec!["broken".into(), "healthy".into()];
+        let mut attempted = Vec::new();
+        let result = install_required_profiles(
+            &profiles,
+            &lockfile::ProfileLockfile::new(),
+            false,
+            |name, _| {
+                attempted.push(name.to_string());
+                if name == "broken" {
+                    Err(error::ProfileError::NotInstalled { name: name.into() })
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(attempted, profiles);
+        assert!(matches!(
+            result,
+            Err(error::ProfileError::PartialFailure { .. })
+        ));
+    }
 }

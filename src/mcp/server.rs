@@ -57,6 +57,7 @@ pub struct CodeIntelligenceServer {
     pub document_store: Option<Arc<RwLock<DocumentStore>>>,
     tool_router: ToolRouter<Self>,
     pub(super) peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
+    pub(super) notification_session: Arc<super::notifications::NotificationSession>,
     broadcaster: Option<Arc<crate::mcp::notifications::NotificationBroadcaster>>,
 }
 
@@ -67,6 +68,7 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            notification_session: Arc::new(super::notifications::NotificationSession::default()),
             broadcaster: None,
         }
     }
@@ -78,6 +80,7 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            notification_session: Arc::new(super::notifications::NotificationSession::default()),
             broadcaster: None,
         }
     }
@@ -89,6 +92,7 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            notification_session: Arc::new(super::notifications::NotificationSession::default()),
             broadcaster: None,
         }
     }
@@ -119,33 +123,23 @@ impl CodeIntelligenceServer {
         self.facade.clone()
     }
 
-    /// Send a notification when a file is re-indexed
-    pub async fn notify_file_reindexed(&self, file_path: &str) {
-        let peer_guard = self.peer.lock().await;
-        if let Some(peer) = peer_guard.as_ref() {
-            // Send a resource updated notification
-            let _ = peer
-                .notify_resource_updated(ResourceUpdatedNotificationParam::new(format!(
-                    "file://{file_path}"
-                )))
-                .await;
-
-            // Also send a logging message for visibility. Logging is deprecated by
-            // SEP-2577; keep emitting it for client compatibility until rmcp removes it.
-            #[allow(deprecated)]
-            let _ = peer
-                .notify_logging_message(
-                    LoggingMessageNotificationParam::new(
-                        LoggingLevel::Info,
-                        serde_json::json!({
-                            "action": "re-indexed",
-                            "file": file_path
-                        }),
-                    )
-                    .with_logger("codanna"),
-                )
-                .await;
-        }
+    /// Send a notification when a file is re-indexed. Transport failures are
+    /// returned to the caller, not reported as successful delivery.
+    pub async fn notify_file_reindexed(&self, file_path: &str) -> anyhow::Result<()> {
+        let peer = self
+            .peer
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("MCP session is not initialized"))?;
+        super::notifications::notify_change(
+            &peer,
+            super::notifications::FileChangeEvent::FileReindexed {
+                path: file_path.into(),
+            },
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -261,9 +255,24 @@ impl ServerHandler for CodeIntelligenceServer {
             context.peer.set_peer_info(request);
         }
 
-        // Store the peer reference for sending notifications
-        let mut peer_guard = self.peer.lock().await;
-        *peer_guard = Some(context.peer.clone());
+        // One legacy listener per initialized session. Server clones share
+        // this peer slot only within that session; network factories construct
+        // fresh servers. The task retains neither the server nor its index.
+        let first_initialization = {
+            let mut peer = self.peer.lock().await;
+            let first = peer.is_none();
+            *peer = Some(context.peer.clone());
+            first
+        };
+        if first_initialization {
+            if let Some(broadcaster) = &self.broadcaster {
+                tokio::spawn(super::notifications::forward_notifications(
+                    context.peer.clone(),
+                    broadcaster.subscribe(),
+                    self.notification_session.token(),
+                ));
+            }
+        }
 
         // Return the server info
         Ok(self.get_info())
@@ -290,76 +299,57 @@ impl ServerHandler for CodeIntelligenceServer {
 impl CodeIntelligenceServer {
     /// Handle force-reindex request
     async fn handle_force_reindex(&self, request: CustomRequest) -> Result<CustomResult, McpError> {
-        use std::time::Instant;
-
-        let start = Instant::now();
-
-        // Parse optional paths parameter
-        let paths: Option<Vec<String>> = request
-            .params
-            .as_ref()
-            .and_then(|p| p.get("paths"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-        let mut indexer = self.facade.write().await;
-
-        // Resolution defers across the per-root loops so cross-root
-        // imports bind regardless of iteration order.
-        let (reindexed, symbols) = if let Some(paths) = paths {
-            // Reindex specific paths
-            let mut total_reindexed = 0;
+        let started = std::time::Instant::now();
+        let requested: Option<Vec<String>> =
+            match request.params.as_ref().and_then(|p| p.get("paths")) {
+                None => None,
+                Some(value) => Some(serde_json::from_value(value.clone()).map_err(|_| {
+                    McpError::invalid_params("paths must be an array of strings", None)
+                })?),
+            };
+        // Reject rather than build an unbounded queue of full reindexes. Move
+        // the owned guard to a blocking worker; do not block a Tokio executor.
+        let mut indexer = self.facade.clone().try_write_owned().map_err(|_| {
+            McpError::internal_error("Index is busy; retry the reindex request", None)
+        })?;
+        let (reindexed, symbols) = tokio::task::spawn_blocking(move || {
+            let paths = authorized_reindex_paths(indexer.settings(), requested.as_deref())?;
+            let mut count = 0;
             let mut pending = crate::indexing::pipeline::PendingResolution::default();
-            for path in &paths {
-                let path = std::path::Path::new(path);
+            for path in paths {
                 if path.is_file() {
-                    match indexer.index_file(path) {
-                        Ok(crate::IndexingResult::Indexed(_)) => total_reindexed += 1,
-                        Ok(crate::IndexingResult::Cached(_)) => {}
-                        Err(e) => {
-                            tracing::warn!("Failed to reindex {}: {e}", path.display());
-                        }
+                    match indexer.index_file(&path).map_err(|_| {
+                        McpError::internal_error(
+                            "Reindex failed; earlier paths may have been updated",
+                            None,
+                        )
+                    })? {
+                        crate::IndexingResult::Indexed(_) => count += 1,
+                        crate::IndexingResult::Cached(_) => {}
                     }
-                } else if path.is_dir() {
-                    match indexer.index_directory_deferred(path, false, &mut pending) {
-                        Ok(stats) => total_reindexed += stats.files_indexed,
-                        Err(e) => {
-                            tracing::warn!("Failed to reindex {}: {e}", path.display());
-                        }
-                    }
+                } else {
+                    let stats = indexer
+                        .index_directory_deferred(&path, false, &mut pending)
+                        .map_err(|_| {
+                            McpError::internal_error(
+                                "Reindex failed; earlier paths may have been updated",
+                                None,
+                            )
+                        })?;
+                    count += stats.files_indexed;
                 }
             }
-            if let Err(e) = indexer.resolve_deferred(pending) {
-                tracing::warn!("Reindex resolution failed: {e}");
-            }
-            (total_reindexed, indexer.symbol_count())
-        } else {
-            // Full reindex using indexed_paths from settings
-            let indexed_paths = indexer.settings().indexing.indexed_paths.clone();
-            let mut total_reindexed = 0;
-            let mut pending = crate::indexing::pipeline::PendingResolution::default();
-
-            for path in &indexed_paths {
-                if path.is_dir() {
-                    match indexer.index_directory_deferred(path, false, &mut pending) {
-                        Ok(stats) => total_reindexed += stats.files_indexed,
-                        Err(e) => {
-                            tracing::warn!("Failed to reindex {}: {e}", path.display());
-                        }
-                    }
-                }
-            }
-            if let Err(e) = indexer.resolve_deferred(pending) {
-                tracing::warn!("Reindex resolution failed: {e}");
-            }
-            (total_reindexed, indexer.symbol_count())
-        };
-
-        let duration_ms = start.elapsed().as_millis() as u64;
-
+            indexer.resolve_deferred(pending).map_err(|_| {
+                McpError::internal_error("Reindex relationship resolution failed", None)
+            })?;
+            Ok::<_, McpError>((count, indexer.symbol_count()))
+        })
+        .await
+        .map_err(|_| McpError::internal_error("Reindex worker failed", None))??;
         Ok(CustomResult(serde_json::json!({
             "reindexed": reindexed,
             "symbols": symbols,
-            "duration_ms": duration_ms
+            "duration_ms": started.elapsed().as_millis() as u64
         })))
     }
 
@@ -395,13 +385,118 @@ impl CodeIntelligenceServer {
         method: &str,
         params: serde_json::Value,
     ) -> Result<(), ServiceError> {
-        let peer_guard = self.peer.lock().await;
-        if let Some(peer) = peer_guard.as_ref() {
+        let peer = self.peer.lock().await.clone();
+        if let Some(peer) = peer {
             peer.send_notification(ServerNotification::CustomNotification(
                 CustomNotification::new(method, Some(params)),
             ))
             .await?;
+        } else {
+            return Err(ServiceError::TransportClosed);
         }
         Ok(())
+    }
+}
+
+/// Resolve the entire request before making any index mutation. Configured
+/// roots are operator-owned; callers cannot extend them through this endpoint.
+fn authorized_reindex_paths(
+    settings: &Settings,
+    requested: Option<&[String]>,
+) -> Result<Vec<std::path::PathBuf>, McpError> {
+    use std::path::{Path, PathBuf};
+    let workspace = settings
+        .workspace_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| McpError::internal_error("Workspace root is unavailable", None))?
+        .canonicalize()
+        .map_err(|_| McpError::internal_error("Workspace root cannot be resolved", None))?;
+    let resolve = |path: &Path| -> Result<PathBuf, McpError> {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workspace.join(path)
+        };
+        path.canonicalize()
+            .map_err(|_| McpError::invalid_params("Reindex path cannot be resolved", None))
+    };
+    let roots = if settings.indexing.indexed_paths.is_empty() {
+        vec![workspace.clone()]
+    } else {
+        settings
+            .indexing
+            .indexed_paths
+            .iter()
+            .map(|path| resolve(path))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let Some(requested) = requested else {
+        return Ok(roots);
+    };
+    if requested.is_empty() || requested.len() > 64 {
+        return Err(McpError::invalid_params(
+            "Provide between 1 and 64 reindex paths",
+            None,
+        ));
+    }
+    let mut paths = Vec::new();
+    for path in requested {
+        let path = resolve(Path::new(path))?;
+        if !roots.iter().any(|root| path.starts_with(root)) || (!path.is_file() && !path.is_dir()) {
+            return Err(McpError::invalid_params(
+                "Reindex paths must remain inside configured index roots",
+                None,
+            ));
+        }
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg(test)]
+mod review_path_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_review_reindex_checks_all_paths_against_configured_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(workspace.join("src/good.rs"), "fn good() {} ").unwrap();
+        std::fs::write(workspace.join("excluded.rs"), "fn excluded() {} ").unwrap();
+        std::fs::write(temp.path().join("outside.rs"), "fn outside() {} ").unwrap();
+        let mut settings = Settings::default();
+        settings.workspace_root = Some(workspace.clone());
+        settings.indexing.indexed_paths = vec!["src".into()];
+        assert!(authorized_reindex_paths(&settings, Some(&["src/good.rs".into()])).is_ok());
+        for escape in ["../outside.rs", "excluded.rs", "src/../../outside.rs"] {
+            assert!(
+                authorized_reindex_paths(&settings, Some(&["src/good.rs".into(), escape.into()]))
+                    .is_err()
+            );
+        }
+        assert!(authorized_reindex_paths(&settings, Some(&[])).is_err());
+        assert!(authorized_reindex_paths(&settings, Some(&vec!["src".into(); 65])).is_err());
+        assert_eq!(
+            authorized_reindex_paths(&settings, None).unwrap(),
+            vec![workspace.join("src").canonicalize().unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardening_review_reindex_rejects_symlink_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let secret = temp.path().join("secret.rs");
+        std::fs::write(&secret, "fn secret() {} ").unwrap();
+        std::os::unix::fs::symlink(&secret, workspace.join("link.rs")).unwrap();
+        let mut settings = Settings::default();
+        settings.workspace_root = Some(workspace);
+        assert!(authorized_reindex_paths(&settings, Some(&["link.rs".into()])).is_err());
     }
 }

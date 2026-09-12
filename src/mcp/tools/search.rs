@@ -71,6 +71,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_search_limit(limit)?;
         let indexer = self.facade.read().await;
 
         tracing::debug!(
@@ -198,6 +199,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchWithContextRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_search_limit(limit)?;
         let indexer = self.facade.read().await;
 
         if !indexer.has_semantic_search() {
@@ -730,6 +732,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_search_limit(limit)?;
         let indexer = self.facade.read().await;
 
         // One kind vocabulary (SymbolKind::from_str); unknown kinds error
@@ -829,6 +832,7 @@ impl CodeIntelligenceServer {
             limit,
         }): Parameters<SearchDocumentsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_search_limit(limit)?;
         let store = match &self.document_store {
             Some(s) => s,
             None => {

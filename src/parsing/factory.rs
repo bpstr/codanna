@@ -23,7 +23,7 @@ pub struct ParserWithBehavior {
 /// Parser factory that creates LanguageParser instances based on configuration.
 ///
 /// Validates language support and configuration before instantiation.
-/// Currently supports: Rust (full), Python/JS/TS (placeholder).
+/// Parser construction delegates to the registered language implementations.
 #[derive(Debug)]
 pub struct ParserFactory {
     settings: Arc<Settings>,
@@ -122,75 +122,7 @@ impl ParserFactory {
             }
         }
 
-        match language {
-            Language::Rust => {
-                let parser = RustParser::new().map_err(IndexError::General)?;
-                Ok(Box::new(parser))
-            }
-            Language::Python => {
-                let parser = PythonParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::JavaScript => {
-                // TODO: Implement JavaScriptParser
-                Err(IndexError::General(format!(
-                    "{} parser not yet implemented. Currently only Rust is supported.",
-                    language.name()
-                )))
-            }
-            Language::TypeScript => {
-                // TODO: Implement TypeScriptParser
-                Err(IndexError::General(format!(
-                    "{} parser not yet implemented. Currently only Rust is supported.",
-                    language.name()
-                )))
-            }
-            Language::Php => {
-                let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Go => {
-                let parser = GoParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::C => {
-                let parser = CParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Cpp => {
-                let parser = CppParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::CSharp => {
-                let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Gdscript => {
-                let parser = GdscriptParser::new().map_err(IndexError::General)?;
-                Ok(Box::new(parser))
-            }
-            Language::Java => {
-                let parser = JavaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Kotlin => {
-                let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Clojure => {
-                let parser =
-                    ClojureParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Lua => {
-                let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Swift => {
-                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-        }
+        self.create_parser_from_registry(language.to_language_id())
     }
 
     /// Checks if language is enabled in configuration.
@@ -668,5 +600,23 @@ mod tests {
         assert!(parser.is_ok());
         let parser = parser.unwrap();
         assert_eq!(parser.language(), Language::Python);
+    }
+}
+
+#[cfg(test)]
+mod review_factory_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_legacy_parser_constructs_every_enabled_language() {
+        let factory = ParserFactory::new(Arc::new(Settings::default()));
+        let languages = factory.enabled_languages();
+        assert!(languages.contains(&Language::JavaScript));
+        assert!(languages.contains(&Language::TypeScript));
+        for language in languages {
+            let parser = factory
+                .create_parser(language)
+                .unwrap_or_else(|err| panic!("failed legacy parser {}: {err}", language.name()));
+            assert_eq!(parser.language(), language);
+        }
     }
 }

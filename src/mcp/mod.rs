@@ -17,6 +17,8 @@
 //!    - Direct access to already-loaded index
 //!    - Most memory efficient for CLI operations
 
+#[cfg(feature = "http-server")]
+pub(crate) mod auth;
 pub mod client;
 pub mod http_server;
 pub mod https_server;

@@ -191,6 +191,26 @@ impl ChunkingConfig {
     }
 }
 
+/// Runtime-only chunking settings. Construct after merging collection overrides.
+/// No Deserialize or DerefMut implementation: external values must be validated.
+#[derive(Debug, Clone)]
+pub struct ValidatedChunkingConfig(ChunkingConfig);
+
+impl TryFrom<ChunkingConfig> for ValidatedChunkingConfig {
+    type Error = String;
+    fn try_from(config: ChunkingConfig) -> Result<Self, Self::Error> {
+        config.validate()?;
+        Ok(Self(config))
+    }
+}
+
+impl std::ops::Deref for ValidatedChunkingConfig {
+    type Target = ChunkingConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Strategy for splitting documents into chunks.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -248,5 +268,27 @@ mod tests {
         let effective = collection.effective_chunking(&defaults);
         assert_eq!(effective.max_chunk_chars, 2000);
         assert_eq!(effective.min_chunk_chars, 200); // Still default
+    }
+}
+
+#[cfg(test)]
+mod review_chunking_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_external_chunking_settings_require_validation() {
+        for (min, max, overlap) in [
+            (0, 0, 0),
+            (0, 10, 0),
+            (10, 10, 0),
+            (10, 20, 10),
+            (10, 20, 20),
+        ] {
+            let config: ChunkingConfig = serde_json::from_value(serde_json::json!({
+                "min_chunk_chars": min, "max_chunk_chars": max, "overlap_chars": overlap
+            }))
+            .unwrap();
+            assert!(ValidatedChunkingConfig::try_from(config).is_err());
+        }
+        assert!(ValidatedChunkingConfig::try_from(ChunkingConfig::default()).is_ok());
     }
 }

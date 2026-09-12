@@ -457,6 +457,7 @@ impl CodeIntelligenceServer {
             max_depth,
         }): Parameters<AnalyzeImpactRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_impact_depth(max_depth)?;
         use crate::symbol::context::ContextIncludes;
 
         let indexer = self.facade.read().await;

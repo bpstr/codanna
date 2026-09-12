@@ -3,7 +3,7 @@
 //! Provides the `Chunker` trait and implementations for splitting documents
 //! into chunks suitable for embedding.
 
-use super::config::ChunkingConfig;
+use super::config::ValidatedChunkingConfig;
 
 /// A raw chunk before being assigned IDs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,7 @@ impl RawChunk {
 /// Trait for document chunking strategies.
 pub trait Chunker: Send + Sync {
     /// Split document content into chunks.
-    fn chunk(&self, content: &str, config: &ChunkingConfig) -> Vec<RawChunk>;
+    fn chunk(&self, content: &str, config: &ValidatedChunkingConfig) -> Vec<RawChunk>;
 }
 
 /// Hybrid chunker: paragraph-based with size constraints.
@@ -70,7 +70,7 @@ struct Heading {
 }
 
 impl Chunker for HybridChunker {
-    fn chunk(&self, content: &str, config: &ChunkingConfig) -> Vec<RawChunk> {
+    fn chunk(&self, content: &str, config: &ValidatedChunkingConfig) -> Vec<RawChunk> {
         if content.is_empty() {
             return Vec::new();
         }
@@ -239,7 +239,7 @@ fn split_large_chunks(
 
             let mut char_start = 0;
             while char_start < chars.len() {
-                let char_end = (char_start + max_chars).min(chars.len());
+                let char_end = char_start.saturating_add(max_chars).min(chars.len());
                 let chunk_content: String = chars[char_start..char_end].iter().collect();
 
                 // Calculate byte positions
@@ -294,15 +294,18 @@ fn attach_heading_context(paragraphs: Vec<Paragraph>, headings: &[Heading]) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::ChunkingConfig;
     use super::*;
 
-    fn default_config() -> ChunkingConfig {
+    fn default_config() -> ValidatedChunkingConfig {
         ChunkingConfig {
             min_chunk_chars: 50,
             max_chunk_chars: 200,
             overlap_chars: 20,
             ..Default::default()
         }
+        .try_into()
+        .unwrap()
     }
 
     #[test]
@@ -333,6 +336,7 @@ mod tests {
             overlap_chars: 5,
             ..Default::default()
         };
+        let config = ValidatedChunkingConfig::try_from(config).unwrap();
         let chunks = chunker.chunk(content, &config);
 
         assert_eq!(chunks.len(), 2);
@@ -351,6 +355,7 @@ mod tests {
             overlap_chars: 20,
             ..Default::default()
         };
+        let config = ValidatedChunkingConfig::try_from(config).unwrap();
         let chunks = chunker.chunk(content, &config);
 
         // "Tiny." and "Also tiny." should be merged
@@ -365,11 +370,12 @@ mod tests {
         // Create a paragraph larger than max_chunk_chars
         let content = "word ".repeat(100); // ~500 chars
         let config = ChunkingConfig {
-            min_chunk_chars: 20,
+            min_chunk_chars: 21,
             max_chunk_chars: 100,
             overlap_chars: 20,
             ..Default::default()
         };
+        let config = ValidatedChunkingConfig::try_from(config).unwrap();
         let chunks = chunker.chunk(&content, &config);
 
         // Should be split into multiple chunks
@@ -401,11 +407,12 @@ Content in section 1.2.
 Content in chapter 2."#;
 
         let config = ChunkingConfig {
-            min_chunk_chars: 10,
+            min_chunk_chars: 11,
             max_chunk_chars: 500,
             overlap_chars: 10,
             ..Default::default()
         };
+        let config = ValidatedChunkingConfig::try_from(config).unwrap();
         let chunks = chunker.chunk(content, &config);
 
         // Find the chunk with "section 1.2" content
@@ -442,11 +449,12 @@ Content in chapter 2."#;
         let chunker = HybridChunker::new();
         let content = "The quick brown fox jumps over the lazy dog. ".repeat(20);
         let config = ChunkingConfig {
-            min_chunk_chars: 10,
+            min_chunk_chars: 40,
             max_chunk_chars: 100,
             overlap_chars: 30,
             ..Default::default()
         };
+        let config = ValidatedChunkingConfig::try_from(config).unwrap();
         let chunks = chunker.chunk(&content, &config);
 
         // Verify multiple chunks were created due to size limit

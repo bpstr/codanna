@@ -2,13 +2,13 @@
 // Returns symbols (id -> node record), out/inc adjacency (id -> relation ->
 // [ids], sorted by id), and the summary envelope's data.
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 /** Read the dump stream: one Envelope per line; begin / result* / summary. */
 function readDump({ from, binary, workingDir = process.cwd() }) {
   const text = from
     ? fs.readFileSync(from, 'utf8')
-    : execSync(`${binary} dump`, { cwd: workingDir, encoding: 'utf8', maxBuffer: 1 << 30, stdio: ['pipe', 'pipe', 'pipe'] });
+    : execFileSync(binary, ["dump"], { cwd: workingDir, encoding: 'utf8', maxBuffer: 1 << 30, stdio: ['pipe', 'pipe', 'pipe'] });
   const symbols = new Map();       // id -> node record
   const out = new Map();           // id -> { relation -> [to ids] }
   const inc = new Map();           // id -> { relation -> [from ids] }

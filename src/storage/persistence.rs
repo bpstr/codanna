@@ -64,7 +64,7 @@ impl IndexPersistence {
         load_semantic: bool,
     ) -> IndexResult<IndexFacade> {
         // Load metadata to understand data sources
-        let metadata = IndexMetadata::load(&self.base_path).ok();
+        let metadata = Some(IndexMetadata::load(&self.base_path)?);
 
         // Check if Tantivy index exists
         let tantivy_path = self.base_path.join("tantivy");
@@ -174,8 +174,7 @@ impl IndexPersistence {
     #[must_use = "Save errors should be handled to ensure data is persisted"]
     pub fn save_facade(&self, facade: &IndexFacade) -> IndexResult<()> {
         // Update metadata
-        let mut metadata =
-            IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
+        let mut metadata = IndexMetadata::load(&self.base_path)?;
 
         metadata.update_counts(facade.symbol_count() as u32, facade.file_count());
         // The gate upstream guarantees an existing index only reaches an
@@ -402,5 +401,25 @@ mod tests {
             metadata.embedding_count
         );
         assert!(!loaded.has_semantic_search());
+    }
+}
+
+#[cfg(test)]
+mod review_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_review_metadata_corruption_survives_load_and_save_attempts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut settings = Settings::default();
+        settings.index_path = dir.path().to_path_buf();
+        let settings = Arc::new(settings);
+        let facade = IndexFacade::new(settings.clone()).unwrap();
+        let path = dir.path().join("index.meta");
+        std::fs::write(&path, "{damaged metadata").unwrap();
+        let persistence = IndexPersistence::new(dir.path().to_path_buf());
+        assert!(persistence.load_facade_lite(settings).is_err());
+        assert!(persistence.save_facade(&facade).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{damaged metadata");
     }
 }

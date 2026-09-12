@@ -54,6 +54,12 @@ impl DocumentIndex {
         module_filter: Option<&str>,
         language_filter: Option<&str>,
     ) -> StorageResult<Vec<SearchResult>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(StorageError::InvalidFieldValue {
+                field: "limit".into(),
+                reason: "search limit must be between 1 and 1000".into(),
+            });
+        }
         let searcher = self.reader.searcher();
 
         let query_parser = QueryParser::for_index(
@@ -578,6 +584,13 @@ impl DocumentIndex {
     /// Get all symbols (use with caution on large indexes)
     pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
+
+        // Enumeration is intentionally uncapped, but its collector must never reserve
+        // beyond the actual index or pass zero to Tantivy.
+        let limit = limit.min(usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX));
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
 
         // Use pre-filtering query instead of AllQuery + post-filtering
         // This matches the pattern used in find_symbols_by_name and find_symbols_by_file
@@ -2705,5 +2718,21 @@ mod tests {
             .get_imports_for_file(FileId::new(99).unwrap())
             .unwrap();
         assert!(none.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod review_budget_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_storage_limits_do_not_panic_or_allocate_from_caller_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = DocumentIndex::new(dir.path(), &crate::Settings::default()).unwrap();
+        for limit in [0, 1001, usize::MAX] {
+            assert!(index.search("q", limit, None, None, None).is_err());
+        }
+        assert!(index.get_all_symbols(0).unwrap().is_empty());
+        assert!(index.get_all_symbols(usize::MAX).unwrap().is_empty());
+        assert!(index.search("q", 10, None, None, None).unwrap().is_empty());
     }
 }

@@ -1,7 +1,7 @@
 // Reader for `codanna dump` (JSON Lines envelope stream: begin / result* / summary).
 // Returns symbols (id -> record), the relationship rows, and the summary data.
 import fs from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export function readDump({ from, binary = "codanna", workingDir = process.cwd() }) {
   let text;
@@ -9,7 +9,7 @@ export function readDump({ from, binary = "codanna", workingDir = process.cwd() 
     text = fs.readFileSync(from, "utf8");
   } else {
     try {
-      text = execSync(`${binary} dump`, { cwd: workingDir, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["pipe", "pipe", "pipe"] });
+      text = execFileSync(binary, ["dump"], { cwd: workingDir, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
       const err = (e.stderr || e.message || "").toString().trim().split("\n").slice(0, 3).join(" ");
       throw new Error(`\`${binary} dump\` failed in ${workingDir}: ${err}\n` +

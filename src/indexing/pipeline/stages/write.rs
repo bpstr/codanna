@@ -30,11 +30,11 @@ pub struct WriteStage {
 /// Statistics from write operations.
 #[derive(Debug, Default, Clone)]
 pub struct WriteStats {
-    /// Total relationships written
+    /// Relationships accepted by the writer; durable only after commit/flush succeeds
     pub written: usize,
     /// Number of commits performed
     pub commits: usize,
-    /// Failed writes (logged but not fatal)
+    /// Retained for API compatibility; failed writes now return an error
     pub failed: usize,
 }
 
@@ -71,51 +71,25 @@ impl WriteStage {
     /// Write a batch of resolved relationships.
     ///
     /// Accumulates in memory and commits when threshold reached.
-    pub fn write(&mut self, batch: ResolvedBatch) -> WriteStats {
+    pub fn write(&mut self, batch: ResolvedBatch) -> crate::storage::StorageResult<WriteStats> {
         let mut stats = WriteStats::default();
-
-        // Ensure batch is started before writing
-        if let Err(e) = self.ensure_batch_started() {
-            tracing::warn!(target: "pipeline", "Failed to start batch: {e}");
-            stats.failed = batch.relationships.len();
-            return stats;
-        }
-
+        self.ensure_batch_started()?;
         for resolved in batch.relationships {
-            // Convert to Relationship struct (clone metadata to avoid partial move)
             let relationship = Relationship {
                 kind: resolved.kind,
-                weight: 1.0, // Default weight
+                weight: 1.0,
                 metadata: resolved.metadata.clone(),
             };
-
-            // Write to Tantivy
-            match self
-                .index
-                .store_relationship(resolved.from_id, resolved.to_id, &relationship)
-            {
-                Ok(()) => {
-                    stats.written += 1;
-                    self.pending.push(resolved);
-                }
-                Err(e) => {
-                    // Log but don't fail the whole batch
-                    tracing::warn!(
-                        target: "pipeline",
-                        "Failed to store relationship {:?} -> {:?}: {e}",
-                        resolved.from_id, resolved.to_id
-                    );
-                    stats.failed += 1;
-                }
-            }
-
-            // Auto-commit when threshold reached
-            if self.pending.len() >= self.commit_threshold && self.commit_internal().is_ok() {
+            self.index
+                .store_relationship(resolved.from_id, resolved.to_id, &relationship)?;
+            self.pending.push(resolved);
+            stats.written += 1;
+            if self.pending.len() >= self.commit_threshold {
+                self.commit_internal()?;
                 stats.commits += 1;
             }
         }
-
-        stats
+        Ok(stats)
     }
 
     /// Write a single resolved relationship.
@@ -204,6 +178,45 @@ mod tests {
         }
     }
 
+    fn poison_writer(index: Arc<DocumentIndex>) {
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = index.writer.write().unwrap();
+                panic!("deterministic unavailable storage fixture");
+            })
+            .join()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn hardening_review_relationship_writer_propagates_start_failure() {
+        let dir = TempDir::new().unwrap();
+        let index = Arc::new(DocumentIndex::new(dir.path(), &Settings::default()).unwrap());
+        poison_writer(Arc::clone(&index));
+        let mut stage = WriteStage::new(index);
+        let mut batch = ResolvedBatch::new();
+        batch.push(make_resolved(1, 2, RelationKind::Calls));
+        assert!(stage.write(batch).is_err());
+        assert_eq!(stage.pending_count(), 0);
+    }
+
+    #[test]
+    fn hardening_review_relationship_commit_failure_preserves_pending_state() {
+        let dir = TempDir::new().unwrap();
+        let index = Arc::new(DocumentIndex::new(dir.path(), &Settings::default()).unwrap());
+        let mut stage = WriteStage::new(Arc::clone(&index));
+        stage
+            .write_one(make_resolved(1, 2, RelationKind::Calls))
+            .unwrap();
+        // Force actual metadata publication to fail without permission or timing assumptions.
+        let meta_path = dir.path().join("meta.json");
+        std::fs::remove_file(&meta_path).unwrap();
+        std::fs::create_dir(&meta_path).unwrap();
+        assert!(stage.flush().is_err());
+        assert_eq!(stage.pending_count(), 1);
+    }
+
     #[test]
     fn test_write_empty_batch() {
         let temp_dir = TempDir::new().unwrap();
@@ -213,7 +226,7 @@ mod tests {
         let mut stage = WriteStage::new(index);
         let batch = ResolvedBatch::new();
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         assert_eq!(stats.written, 0);
         assert_eq!(stats.failed, 0);
@@ -232,7 +245,7 @@ mod tests {
         batch.push(make_resolved(1, 2, RelationKind::Calls));
         batch.push(make_resolved(2, 3, RelationKind::Defines));
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         assert_eq!(stats.written, 2);
         assert_eq!(stage.pending_count(), 2);
@@ -250,7 +263,7 @@ mod tests {
         let mut batch = ResolvedBatch::new();
         batch.push(make_resolved(1, 2, RelationKind::Calls));
 
-        stage.write(batch);
+        stage.write(batch).unwrap();
         assert_eq!(stage.pending_count(), 1);
 
         let count = stage.commit().unwrap();
@@ -272,7 +285,7 @@ mod tests {
         batch.push(make_resolved(2, 3, RelationKind::Defines));
         batch.push(make_resolved(3, 4, RelationKind::Calls));
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         // 3 written, 1 commit triggered at threshold
         assert_eq!(stats.written, 3);
@@ -292,7 +305,7 @@ mod tests {
         let mut batch = ResolvedBatch::new();
         batch.push(make_resolved(1, 2, RelationKind::Calls));
 
-        stage.write(batch);
+        stage.write(batch).unwrap();
         assert_eq!(stage.pending_count(), 1);
 
         let flush_stats = stage.flush().unwrap();

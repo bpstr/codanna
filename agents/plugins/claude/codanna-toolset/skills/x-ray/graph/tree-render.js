@@ -1,3 +1,4 @@
+const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // Radial tidy tree page: the Observable `Tree` chart (ISC) over a flare-shaped
 // hierarchy, pure d3/SVG, self-contained (d3 inlined), pan/zoom added outside
 // the chart function so it stays verbatim.
@@ -126,12 +127,12 @@ function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', le
   const radius = Math.max(480, Math.round(leaves * 11 / (2 * Math.PI)));
   const margin = 140;
   const size = 2 * (radius + margin);
-  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
+  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${escapeHtml(k)}</span>`).join('');
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   ${themeStyle()}
   <style>
     html, body { margin: 0; height: 100%; }
@@ -146,8 +147,8 @@ function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', le
   ${detailScript(sigLangs)}
   <div id="detail"></div>
   <div id="info">
-    <h3>${title}</h3>
-    ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
+    <h3>${escapeHtml(title)}</h3>
+    ${subtitle ? `<div class="stat">${escapeHtml(subtitle)}</div>` : ''}
     <div class="stat" id="stats"></div>
     <div class="legend">${legend}</div>
     <button id="reset-btn">Reset zoom</button>
@@ -157,10 +158,10 @@ function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', le
   ${busyOracleScript()}
   <script>
 ${TREE_FN}
-    const data = ${JSON.stringify(hierarchy)};
-    const workingDir = ${JSON.stringify(workingDir)};
-    const KVAR = ${JSON.stringify(kindVars)};
-    const DETAILS = ${JSON.stringify(details)};
+    const data = ${jsonForScript(hierarchy)};
+    const workingDir = ${jsonForScript(workingDir)};
+    const KVAR = ${jsonForScript(kindVars)};
+    const DETAILS = ${jsonForScript(details)};
 
     const svgNode = Tree(data, {
       label: d => d.count ? d.name + ' (' + d.count + ')' : d.name,
@@ -169,9 +170,9 @@ ${TREE_FN}
       sort: (a, b) => d3.ascending(a.data.name, b.data.name),
       stroke: '#888',
       halo: '#fff',
-      width: ${size},
-      height: ${size},
-      margin: ${margin}
+      width: ${jsonForScript(size)},
+      height: ${jsonForScript(size)},
+      margin: ${jsonForScript(margin)}
     });
     const svg = d3.select(svgNode);
     // Colours as token custom properties (style beats the chart function's

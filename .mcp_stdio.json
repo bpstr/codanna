@@ -1,12 +1,5 @@
 {
   "mcpServers": {
-    "Context7": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ]
-    },
     "codanna": {
       "command": "codanna",
       "args": [
@@ -15,10 +8,6 @@
         "--watch-interval",
         "5"
       ]
-    },
-    "codanna-https": {
-      "type": "http",
-      "url": "https://127.0.0.1:8443/mcp"
     }
   }
 }

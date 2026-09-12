@@ -22,6 +22,9 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     use tokio::sync::RwLock;
     use tokio_util::sync::CancellationToken;
 
+    let auth = crate::mcp::auth::NetworkAuth::from_env()?;
+    let validated_bind = crate::mcp::auth::validate_bind(&bind, true)?;
+
     // Initialize logging with config
     crate::logging::init_with_config(&config.logging);
 
@@ -35,18 +38,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     let persistence = IndexPersistence::new(config.index_path.clone());
 
     let facade = if persistence.exists() {
-        match persistence.load_facade(settings.clone()) {
-            Ok(loaded) => {
-                let symbol_count = loaded.symbol_count();
-                crate::log_event!("https", "loaded", "{symbol_count} symbols");
-                loaded
-            }
-            Err(e) => {
-                tracing::warn!("[https] failed to load index: {e}");
-                crate::log_event!("https", "starting", "empty index");
-                IndexFacade::new(settings.clone())?
-            }
-        }
+        persistence.load_facade(settings.clone())?
     } else {
         crate::log_event!("https", "starting", "no existing index");
         IndexFacade::new(settings.clone())?
@@ -179,34 +171,18 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     let indexer_for_service = indexer.clone();
     let config_for_service = Arc::new(config.clone());
 
-    // Create a shared service instance that all connections will use
-    let shared_service =
-        CodeIntelligenceServer::new_with_facade(indexer_for_service, config_for_service)
-            .with_broadcaster(broadcaster.clone());
-
-    // Attach document store if available
-    let shared_service = if let Some(store_arc) = document_store_arc {
-        tracing::debug!(target: "mcp", "attaching document store to MCP server");
-        shared_service.with_document_store_arc(store_arc)
-    } else {
-        shared_service
-    };
-
-    // Start notification listener to forward file change events to MCP clients
-    let notification_receiver = broadcaster.subscribe();
-    let notification_server = shared_service.clone();
-    tokio::spawn(async move {
-        notification_server
-            .start_notification_listener(notification_receiver)
-            .await;
-    });
-
+    // Session identity/peer state must never be shared across clients.
     let mcp_service = StreamableHttpService::new(
         move || {
-            // Return a clone of the shared service
-            // Since CodeIntelligenceServer derives Clone and the indexer is Arc<RwLock<_>>,
-            // all clones will share the same underlying indexer
-            Ok(shared_service.clone())
+            let server = CodeIntelligenceServer::new_with_facade(
+                indexer_for_service.clone(),
+                config_for_service.clone(),
+            )
+            .with_broadcaster(broadcaster.clone());
+            Ok(match &document_store_arc {
+                Some(store) => server.with_document_store_arc(store.clone()),
+                None => server,
+            })
         },
         LocalSessionManager::default().into(),
         {
@@ -227,62 +203,8 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         },
     );
 
-    // Create OAuth metadata handler with the bind address
-    let bind_for_metadata = bind.clone();
-    let oauth_metadata = move || async move {
-        eprintln!("OAuth metadata endpoint called");
-        axum::Json(serde_json::json!({
-            "issuer": format!("https://{}", bind_for_metadata.clone()),
-            "authorization_endpoint": format!("https://{}/oauth/authorize", bind_for_metadata.clone()),
-            "token_endpoint": format!("https://{}/oauth/token", bind_for_metadata.clone()),
-            "registration_endpoint": format!("https://{}/oauth/register", bind_for_metadata),
-            "scopes_supported": ["mcp"],
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token"],
-            "code_challenge_methods_supported": ["S256", "plain"],
-            "token_endpoint_auth_methods_supported": ["none"]
-        }))
-    };
-
-    // Request logging middleware (OAuth authentication is optional for HTTPS)
-    async fn log_requests(
-        req: axum::extract::Request,
-        next: axum::middleware::Next,
-    ) -> Result<axum::response::Response, axum::http::StatusCode> {
-        let path = req.uri().path();
-        eprintln!("Request to: {path}");
-
-        // Debug: Print all headers
-        eprintln!("Headers received:");
-        for (name, value) in req.headers() {
-            if let Ok(v) = value.to_str() {
-                eprintln!("  {name}: {v}");
-            }
-        }
-
-        // Pass through - TLS provides transport security
-        Ok(next.run(req).await)
-    }
-
-    // Create MCP router with logging middleware
-    let mcp_router_with_logging = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .layer(axum::middleware::from_fn(log_requests));
-
-    // Create main router - OAuth endpoints available but optional for HTTPS
-    let router = Router::new()
-        // OAuth endpoints - NO authentication required
-        .route(
-            "/.well-known/oauth-authorization-server",
-            axum::routing::get(oauth_metadata),
-        )
-        .route("/oauth/register", axum::routing::post(oauth_register))
-        .route("/oauth/token", axum::routing::post(oauth_token))
-        .route("/oauth/authorize", axum::routing::get(oauth_authorize))
-        // Health check - NO authentication required
-        .route("/health", axum::routing::get(health_check))
-        // MCP endpoint - No authentication required (TLS provides transport security)
-        .merge(mcp_router_with_logging);
+    let router =
+        crate::mcp::auth::network_router(Router::new().nest_service("/mcp", mcp_service), auth);
 
     // Get or create TLS certificates
     let (cert_pem, key_pem) = get_or_create_certificate(&bind)
@@ -295,7 +217,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         .context("Failed to configure TLS")?;
 
     // Parse bind address
-    let addr: SocketAddr = bind.parse().context("Failed to parse bind address")?;
+    let addr: SocketAddr = validated_bind;
 
     eprintln!("HTTPS MCP server listening on https://{bind}");
     eprintln!("MCP endpoint: https://{bind}/mcp");
@@ -322,179 +244,6 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
     eprintln!("HTTPS server shut down gracefully");
     Ok(())
-}
-
-/// Helper function for health check endpoint
-#[cfg(feature = "https-server")]
-async fn health_check() -> &'static str {
-    eprintln!("Health check endpoint called");
-    "OK"
-}
-
-/// OAuth register endpoint - accepts any registration
-#[cfg(feature = "https-server")]
-async fn oauth_register(
-    axum::Json(payload): axum::Json<serde_json::Value>,
-) -> axum::Json<serde_json::Value> {
-    eprintln!("OAuth register endpoint called with: {payload:?}");
-    // Return a dummy client registration response that matches the request
-    // Use empty string for public clients (Claude Code expects a string, not null)
-    axum::Json(serde_json::json!({
-        "client_id": "dummy-client-id",
-        "client_secret": "",  // Empty string for public client
-        "client_id_issued_at": 1234567890,
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-        "redirect_uris": payload.get("redirect_uris").unwrap_or(&serde_json::json!([])).clone(),
-        "client_name": payload.get("client_name").unwrap_or(&serde_json::json!("MCP Client")).clone(),
-        "token_endpoint_auth_method": "none"
-    }))
-}
-
-/// OAuth token endpoint - exchanges authorization code for access token
-#[cfg(feature = "https-server")]
-async fn oauth_token(body: String) -> axum::Json<serde_json::Value> {
-    eprintln!("OAuth token endpoint called with body: {body}");
-
-    // Parse form-encoded data (OAuth uses application/x-www-form-urlencoded)
-    let params: std::collections::HashMap<String, String> =
-        serde_urlencoded::from_str(&body).unwrap_or_default();
-
-    eprintln!("Token request params: {params:?}");
-
-    // Check grant type
-    let grant_type = params.get("grant_type").cloned().unwrap_or_default();
-    let code = params.get("code").cloned().unwrap_or_default();
-
-    // IMPORTANT: Reject refresh_token grant type (like the SDK example)
-    if grant_type == "refresh_token" {
-        eprintln!("Rejecting refresh_token grant type");
-        return axum::Json(serde_json::json!({
-            "error": "unsupported_grant_type",
-            "error_description": "only authorization_code is supported"
-        }));
-    }
-
-    // For authorization_code grant, verify the code
-    if grant_type == "authorization_code" && code == "dummy-auth-code" {
-        // Return access token WITHOUT refresh token
-        axum::Json(serde_json::json!({
-            "access_token": "mcp-access-token-dummy",
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "scope": "mcp"
-        }))
-    } else {
-        // Invalid request
-        eprintln!("Invalid token request: grant_type={grant_type}, code={code}");
-        axum::Json(serde_json::json!({
-            "error": "invalid_grant",
-            "error_description": "Invalid authorization code or grant type"
-        }))
-    }
-}
-
-/// OAuth authorize endpoint - redirects back with auth code
-#[cfg(feature = "https-server")]
-async fn oauth_authorize(
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl axum::response::IntoResponse {
-    eprintln!("OAuth authorize endpoint called with params: {params:?}");
-
-    // Extract redirect_uri and state from query params
-    let redirect_uri = params
-        .get("redirect_uri")
-        .cloned()
-        .unwrap_or_else(|| "http://localhost:3118/callback".to_string());
-    let state = params.get("state").cloned().unwrap_or_default();
-
-    // Build the callback URL with authorization code
-    let callback_url = format!("{redirect_uri}?code=dummy-auth-code&state={state}");
-
-    // Return HTML with auto-redirect and manual button
-    let html = format!(
-        r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorize Codanna</title>
-    <meta charset="utf-8">
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }}
-        .container {{
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            text-align: center;
-            max-width: 400px;
-        }}
-        h1 {{
-            color: #333;
-            margin-bottom: 1rem;
-        }}
-        p {{
-            color: #666;
-            margin-bottom: 2rem;
-        }}
-        button {{
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 5px;
-            font-size: 16px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }}
-        button:hover {{
-            background: #764ba2;
-        }}
-        .spinner {{
-            margin: 20px auto;
-            width: 50px;
-            height: 50px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }}
-        @keyframes spin {{
-            0% {{ transform: rotate(0deg); }}
-            100% {{ transform: rotate(360deg); }}
-        }}
-    </style>
-    <script>
-        // Auto-redirect after a short delay
-        setTimeout(function() {{
-            window.location.href = "{callback_url}";
-        }}, 1500);
-    </script>
-</head>
-<body>
-    <div class="container">
-        <h1>🔐 Authorize Codanna</h1>
-        <div class="spinner"></div>
-        <p>Authorizing access to Codanna MCP Server...</p>
-        <p>You will be redirected automatically.</p>
-        <button onclick="window.location.href='{callback_url}'">
-            Continue Manually
-        </button>
-    </div>
-</body>
-</html>
-"#
-    );
-
-    axum::response::Html(html)
 }
 
 /// Helper function for shutdown signal

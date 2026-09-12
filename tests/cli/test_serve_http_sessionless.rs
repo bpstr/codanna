@@ -127,6 +127,10 @@ fn spawn_http_serve(workspace: &Path) -> HttpServe {
         .args(["serve", "--http", "--bind", &format!("127.0.0.1:{port}")])
         .current_dir(workspace)
         .env("HOME", &test_home)
+        .env(
+            "CODANNA_MCP_TOKEN",
+            "http-session-fixture-credential-1234567890",
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -217,7 +221,10 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 fn mcp_headers<'a>(method: &'a str, extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     let mut h = vec![
-        ("Authorization", "Bearer mcp-access-token-dummy"),
+        (
+            "Authorization",
+            "Bearer http-session-fixture-credential-1234567890",
+        ),
         ("Content-Type", "application/json"),
         ("Accept", "application/json, text/event-stream"),
         ("Mcp-Method", method),

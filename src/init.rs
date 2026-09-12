@@ -287,82 +287,92 @@ impl ProjectRegistry {
         }
     }
 
-    /// Load the registry from disk
+    /// Load the registry from disk. Only an absent file is an empty registry.
     pub fn load() -> Result<Self, IndexError> {
-        let path = projects_file();
-        if !path.exists() {
-            // Return empty registry if file doesn't exist
-            return Ok(Self::new());
-        }
+        Self::load_from_path(&projects_file())
+    }
 
-        let content = std::fs::read_to_string(&path).map_err(|e| IndexError::FileRead {
-            path: path.clone(),
-            source: e,
-        })?;
-
-        serde_json::from_str(&content).map_err(|e| {
+    fn load_from_path(path: &Path) -> Result<Self, IndexError> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
+            Err(source) => {
+                return Err(IndexError::FileRead {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        let registry: Self = serde_json::from_str(&content).map_err(|error| {
             IndexError::General(format!(
-                "Failed to parse project registry: {e}\nSuggestion: Back up and delete {}",
-                crate::parsing::paths::render_absolute_path(&path).display()
+                "Failed to parse project registry {}: {error}. Preserve the file and restore a valid backup.", path.display()
             ))
+        })?;
+        if registry.version != 1 {
+            return Err(IndexError::General(format!(
+                "Unsupported project registry version {} in {}. Use a compatible binary; the registry was not modified.",
+                registry.version,
+                path.display()
+            )));
+        }
+        Ok(registry)
+    }
+
+    /// Save a complete registry atomically without truncating the old file.
+    pub fn save(&self) -> Result<(), IndexError> {
+        self.save_to_path(&projects_file())
+    }
+
+    fn save_to_path(&self, path: &Path) -> Result<(), IndexError> {
+        use std::io::Write;
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent).map_err(|source| IndexError::FileWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let content = serde_json::to_vec_pretty(self).map_err(|error| {
+            IndexError::General(format!("Failed to serialize project registry: {error}"))
+        })?;
+        let write = || -> std::io::Result<()> {
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+            temporary.write_all(&content)?;
+            temporary.as_file().sync_all()?;
+            temporary.persist(path).map_err(|error| error.error)?;
+            Ok(())
+        };
+        write().map_err(|source| IndexError::FileWrite {
+            path: path.to_path_buf(),
+            source,
         })
     }
 
-    /// Save the registry to disk
-    pub fn save(&self) -> Result<(), IndexError> {
-        let path = projects_file();
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| IndexError::FileWrite {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-
-        let content = serde_json::to_string_pretty(&self).map_err(|e| {
-            IndexError::General(format!("Failed to serialize project registry: {e}"))
-        })?;
-
-        std::fs::write(&path, content).map_err(|e| IndexError::FileWrite { path, source: e })
-    }
-
-    /// Register a new project - returns the generated project ID
+    /// Register a new project - returns the generated project ID.
     pub fn register_project(project_path: &Path) -> Result<String, IndexError> {
-        let project_id = ProjectId::new();
-        let project_info = Self::create_project_info(project_path);
-
-        let mut registry = Self::load().unwrap_or_else(|_| Self::new());
-        registry.add_project(project_id.as_str(), project_info);
-        registry.save()?;
-
-        Ok(project_id.to_string())
+        Self::register_at(&projects_file(), project_path, false)
     }
 
-    /// Register or update a project - returns the project ID (existing or new)
+    /// Register or update a project - returns the project ID (existing or new).
     pub fn register_or_update_project(project_path: &Path) -> Result<String, IndexError> {
-        let mut registry = Self::load().unwrap_or_else(|_| Self::new());
+        Self::register_at(&projects_file(), project_path, true)
+    }
 
-        // Canonicalize the input path for consistent comparison
-        let canonical_input = project_path
-            .canonicalize()
-            .unwrap_or_else(|_| project_path.to_path_buf());
-
-        // Check if project already exists by path
-        if let Some((existing_id, _)) = registry.find_project_by_path(&canonical_input) {
-            // Update the existing project info (in case metadata changed)
-            let updated_info = Self::create_project_info(project_path);
-            registry.add_project(&existing_id, updated_info);
-            registry.save()?;
-            Ok(existing_id)
+    fn register_at(
+        registry_path: &Path,
+        project_path: &Path,
+        update: bool,
+    ) -> Result<String, IndexError> {
+        // Loading must succeed before constructing or saving any replacement.
+        let mut registry = Self::load_from_path(registry_path)?;
+        let info = Self::create_project_info(project_path);
+        let existing = if update {
+            registry.find_project_by_path(&info.path).map(|(id, _)| id)
         } else {
-            // Register as new project
-            let project_id = ProjectId::new();
-            let project_info = Self::create_project_info(project_path);
-            registry.add_project(project_id.as_str(), project_info);
-            registry.save()?;
-            Ok(project_id.to_string())
-        }
+            None
+        };
+        let id = existing.unwrap_or_else(|| ProjectId::new().to_string());
+        registry.add_project(&id, info);
+        registry.save_to_path(registry_path)?;
+        Ok(id)
     }
 
     /// Create project info from path (helper function)
@@ -513,5 +523,41 @@ mod tests {
 
         let projects = projects_file();
         assert!(projects.ends_with(format!("{GLOBAL_DIR_NAME}/projects.json")));
+    }
+}
+
+#[cfg(test)]
+mod review_registry_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_review_registration_preserves_invalid_registry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("projects.json");
+        for original in [
+            "{broken",
+            r#"{"version":999,"projects":{},"default_project":null}"#,
+        ] {
+            std::fs::write(&registry, original).unwrap();
+            for update in [false, true] {
+                assert!(ProjectRegistry::register_at(&registry, dir.path(), update).is_err());
+                assert_eq!(std::fs::read_to_string(&registry).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn hardening_review_registration_distinguishes_missing_and_unreadable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("projects.json");
+        let id = ProjectRegistry::register_at(&registry, dir.path(), true).unwrap();
+        assert_eq!(
+            ProjectRegistry::register_at(&registry, dir.path(), true).unwrap(),
+            id
+        );
+        std::fs::remove_file(&registry).unwrap();
+        std::fs::create_dir(&registry).unwrap();
+        assert!(ProjectRegistry::register_at(&registry, dir.path(), false).is_err());
+        assert!(registry.is_dir());
     }
 }

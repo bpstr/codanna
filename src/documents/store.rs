@@ -35,7 +35,7 @@ use tantivy::{
 use thiserror::Error;
 
 use super::chunker::{Chunker, HybridChunker, RawChunk};
-use super::config::{ChunkingConfig, CollectionConfig};
+use super::config::{ChunkingConfig, CollectionConfig, ValidatedChunkingConfig};
 use super::schema::DocumentSchema;
 use super::types::{ChunkId, CollectionId, FileState};
 use crate::indexing::file_info::{calculate_hash, get_utc_timestamp};
@@ -67,6 +67,9 @@ pub enum DocumentStoreError {
 
     #[error("Embedding error: {0}")]
     Embedding(String),
+
+    #[error("Invalid chunking configuration: {0}")]
+    InvalidChunkingConfig(String),
 
     #[error("Lock poisoned")]
     LockPoisoned,
@@ -474,6 +477,8 @@ impl DocumentStore {
     where
         F: FnMut(IndexProgress<'_>),
     {
+        let chunking_config = ValidatedChunkingConfig::try_from(chunking_config.clone())
+            .map_err(DocumentStoreError::InvalidChunkingConfig)?;
         let mut stats = IndexStats::default();
 
         // Ensure collection has an ID
@@ -524,7 +529,7 @@ impl DocumentStore {
             });
 
             let content = std::fs::read_to_string(path)?;
-            let raw_chunks = self.chunker.chunk(&content, chunking_config);
+            let raw_chunks = self.chunker.chunk(&content, &chunking_config);
 
             let mut chunk_ids = Vec::new();
 
@@ -591,11 +596,19 @@ impl DocumentStore {
         path: &Path,
         chunking_config: &ChunkingConfig,
     ) -> StoreResult<Option<usize>> {
+        let chunking_config = ValidatedChunkingConfig::try_from(chunking_config.clone())
+            .map_err(DocumentStoreError::InvalidChunkingConfig)?;
         // Look up collection from file state
         let (collection, old_chunk_count) = match self.file_states.get(path) {
             Some(state) => (state.collection.clone(), state.chunk_ids.len()),
             None => return Ok(None), // File not in index
         };
+
+        // Read file content
+        let content = std::fs::read_to_string(path)?;
+
+        // Chunk the content
+        let raw_chunks = self.chunker.chunk(&content, &chunking_config);
 
         // Delete existing chunks
         self.delete_chunks_by_file(path, &collection)?;
@@ -606,11 +619,6 @@ impl DocumentStore {
             path.display()
         );
 
-        // Read file content
-        let content = std::fs::read_to_string(path)?;
-
-        // Chunk the content
-        let raw_chunks = self.chunker.chunk(&content, chunking_config);
         let mut chunk_ids = Vec::new();
         let mut pending_embeddings: Vec<(ChunkId, String)> = Vec::new();
 
@@ -749,8 +757,7 @@ impl DocumentStore {
         let term = Term::from_field_text(self.schema.collection_name, name);
         let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(100_000).order_by_score())?;
-        let count = top_docs.len();
+        let count = searcher.search(&query, &tantivy::collector::Count)?;
 
         // Delete from tantivy
         {
@@ -767,14 +774,9 @@ impl DocumentStore {
 
         self.reader.reload()?;
 
-        // Remove file states for this collection
-        // Note: This is a simplification - in a full implementation we'd track collection per file
-        self.file_states.retain(|_, state| {
-            !state.chunk_ids.iter().any(|_id| {
-                // TODO: Check if chunk belongs to this collection
-                true
-            })
-        });
+        // Each state records its collection; preserve every other collection,
+        // including empty files and legacy states with an unknown collection.
+        self.file_states.retain(|_, state| state.collection != name);
 
         // Remove collection ID
         self.collection_ids.remove(name);
@@ -1614,5 +1616,79 @@ mod tests {
         let beta = store.collection_stats("beta").unwrap();
         assert_eq!(alpha.file_count, 2, "alpha file_count not scoped");
         assert_eq!(beta.file_count, 2, "beta file_count not scoped");
+    }
+    #[test]
+    fn hardening_review_invalid_chunking_never_mutates_collection_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.md");
+        std::fs::write(&path, "A document that must remain indexed.").unwrap();
+        let mut store = DocumentStore::new(
+            temp.path().join("index"),
+            VectorDimension::new(384).unwrap(),
+        )
+        .unwrap();
+        let collection = CollectionConfig {
+            paths: vec![path.clone()],
+            ..Default::default()
+        };
+        store
+            .index_collection("keep", &collection, &ChunkingConfig::default())
+            .unwrap();
+        let ids = store.file_states.get(&path).unwrap().chunk_ids.clone();
+        let bad = ChunkingConfig {
+            max_chunk_chars: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            store.index_collection("new", &collection, &bad),
+            Err(DocumentStoreError::InvalidChunkingConfig(_))
+        ));
+        assert!(matches!(
+            store.reindex_file(&path, &bad),
+            Err(DocumentStoreError::InvalidChunkingConfig(_))
+        ));
+        assert_eq!(store.file_states.get(&path).unwrap().chunk_ids, ids);
+        assert!(!store.collection_ids.contains_key("new"));
+    }
+
+    #[test]
+    fn hardening_review_delete_collection_preserves_other_file_states() {
+        let dir = TempDir::new().unwrap();
+        let docs = TempDir::new().unwrap();
+        let alpha = docs.path().join("alpha.md");
+        let beta = docs.path().join("beta.md");
+        let body = "# Heading\n\n".to_string() + &"Unique document text. ".repeat(30);
+        std::fs::write(&alpha, &body).unwrap();
+        std::fs::write(&beta, &body).unwrap();
+        let mut store = DocumentStore::new(dir.path(), test_dimension()).unwrap();
+        let config = |path| CollectionConfig {
+            paths: vec![path],
+            ..Default::default()
+        };
+        let a = config(alpha.clone());
+        let b = config(beta.clone());
+        store
+            .index_collection("alpha", &a, &ChunkingConfig::default())
+            .unwrap();
+        store
+            .index_collection("beta", &b, &ChunkingConfig::default())
+            .unwrap();
+        let before = store.collection_stats("beta").unwrap().chunk_count;
+        assert!(before > 0);
+        assert!(store.delete_collection("alpha").unwrap() > 0);
+        assert!(!store.file_states.contains_key(&alpha));
+        assert!(store.file_states.contains_key(&beta));
+        drop(store);
+        let mut reopened = DocumentStore::new(dir.path(), test_dimension()).unwrap();
+        assert!(reopened.file_states.contains_key(&beta));
+        let stats = reopened
+            .index_collection("beta", &b, &ChunkingConfig::default())
+            .unwrap();
+        assert_eq!(stats.files_skipped, 1);
+        assert_eq!(stats.chunks_created, 0);
+        assert_eq!(
+            reopened.collection_stats("beta").unwrap().chunk_count,
+            before
+        );
     }
 }
