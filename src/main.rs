@@ -216,6 +216,7 @@ fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
 /// Auto-initializes config for index command. Persists index after modifications.
 #[tokio::main]
 async fn main() {
+    codanna::embedding_runtime::configure_embedding_runtime();
     let cli = Cli::parse();
 
     // For index command, auto-initialize if needed (but not when using --config)
