@@ -104,7 +104,11 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
         // Build and start the unified watcher
         match builder.build() {
-            Ok(unified_watcher) => {
+            Ok(mut unified_watcher) => {
+                if let Err(error) = unified_watcher.prepare().await {
+                    ct.cancel();
+                    return Err(error.into());
+                }
                 let watcher_ct = ct.clone();
                 tokio::spawn(async move {
                     tokio::select! {
@@ -126,8 +130,8 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
                 );
             }
             Err(e) => {
-                tracing::warn!("[watcher] failed to start: {e}");
-                tracing::warn!("[watcher] continuing without file watching");
+                ct.cancel();
+                return Err(e.into());
             }
         }
     }

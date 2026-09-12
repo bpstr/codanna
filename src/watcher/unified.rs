@@ -57,6 +57,8 @@ pub struct UnifiedWatcher {
     /// lane. Removal waves batch-sync these so the shared discovery can
     /// pair renames (remove + create of identical content).
     batch_sync_roots: Vec<PathBuf>,
+    /// Native watches and handler snapshots are installed before transport admission.
+    prepared: bool,
 }
 
 impl UnifiedWatcher {
@@ -65,23 +67,20 @@ impl UnifiedWatcher {
         UnifiedWatcherBuilder::new()
     }
 
-    /// Start watching for file changes.
-    ///
-    /// This is the main event loop that:
-    /// 1. Receives file events from notify
-    /// 2. Debounces modification events
-    /// 3. Routes events to matching handlers
-    /// 4. Executes returned actions
-    /// 5. Broadcasts notifications
-    pub async fn watch(mut self) -> Result<(), WatchError> {
+    /// Install native watches and handler snapshots before accepting client work.
+    /// Idempotent after success. A caller must discard this instance on failure.
+    pub async fn prepare(&mut self) -> Result<(), WatchError> {
+        if self.prepared {
+            return Ok(());
+        }
         // Initialize all handlers
         for handler in &self.handlers {
-            if let Err(e) = handler.refresh_paths().await {
-                tracing::warn!(
-                    "[watcher] failed to initialize {} handler: {e}",
-                    handler.name()
-                );
-            }
+            handler
+                .refresh_paths()
+                .await
+                .map_err(|error| WatchError::InitFailed {
+                    reason: format!("{} handler: {error}", handler.name()),
+                })?;
         }
 
         // Collect all paths from handlers and register them
@@ -115,7 +114,16 @@ impl UnifiedWatcher {
         #[cfg(target_os = "macos")]
         let _ = new_dirs;
 
-        self.register_handler_roots().await;
+        self.register_handler_roots().await?;
+
+        self.prepared = true;
+        Ok(())
+    }
+
+    /// Run the event loop, preparing first for callers that do not admit a
+    /// transport separately. Servers explicitly await `prepare` before handshake.
+    pub async fn watch(mut self) -> Result<(), WatchError> {
+        self.prepare().await?;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -221,8 +229,10 @@ impl UnifiedWatcher {
                     "[watcher] failed to watch {}: {e}",
                     crate::parsing::paths::render_absolute_path(&watch_path).display()
                 );
-                // Continue - don't fail completely
-                Ok(())
+                Err(WatchError::PathWatchFailed {
+                    path: watch_path,
+                    reason: e.to_string(),
+                })
             }
         }
     }
@@ -245,7 +255,10 @@ impl UnifiedWatcher {
                         "[watcher] failed to watch recursive root {}: {e}",
                         crate::parsing::paths::render_absolute_path(&watch_path).display()
                     );
-                    Ok(())
+                    Err(WatchError::PathWatchFailed {
+                        path: watch_path,
+                        reason: e.to_string(),
+                    })
                 }
             }
         }
@@ -340,7 +353,7 @@ impl UnifiedWatcher {
     /// Register handler watch roots: watched directly so directory
     /// creation at the top of a root is visible even when the root
     /// holds no indexed file directly.
-    async fn register_handler_roots(&mut self) {
+    async fn register_handler_roots(&mut self) -> Result<(), WatchError> {
         let mut roots = Vec::new();
         let mut sync_roots = Vec::new();
         for handler in &self.handlers {
@@ -351,14 +364,22 @@ impl UnifiedWatcher {
             roots.extend(handler_roots);
         }
         for root in &roots {
-            if self.registry.add_watch_dir(root.clone()) {
-                if let Err(e) = self.watch_handler_root(root) {
-                    tracing::warn!("[watcher] failed to watch root: {e}");
-                }
+            #[cfg(not(target_os = "macos"))]
+            let register = self.registry.add_watch_dir(root.clone());
+            #[cfg(target_os = "macos")]
+            let register = {
+                // Indexed file parents are already in the logical registry,
+                // but were deliberately not watched nonrecursively on macOS.
+                self.registry.add_watch_dir(root.clone());
+                !self.handler_roots.contains(root)
+            };
+            if register {
+                self.watch_handler_root(root)?;
             }
         }
         self.handler_roots = roots;
         self.batch_sync_roots = sync_roots;
+        Ok(())
     }
 
     /// A directory appeared under a registered root: watch every
@@ -785,7 +806,9 @@ impl UnifiedWatcher {
         let _ = dirs_to_watch;
 
         // Config reload can add or drop roots; re-register them.
-        self.register_handler_roots().await;
+        if let Err(error) = self.register_handler_roots().await {
+            tracing::error!("[watcher] root registration incomplete: {error}");
+        }
 
         crate::log_event!(
             "watcher",
@@ -917,6 +940,7 @@ impl UnifiedWatcherBuilder {
             workspace_root,
             handler_roots: Vec::new(),
             batch_sync_roots: Vec::new(),
+            prepared: false,
         })
     }
 }
@@ -1114,5 +1138,144 @@ mod tests {
 
         let unrelated = crate::IndexError::General("Pipeline error: parse failed".to_string());
         assert!(!is_writer_lock_contention(&unrelated));
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::sync::Notify;
+
+    struct StartupHandler {
+        root: PathBuf,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        calls: Arc<AtomicUsize>,
+        fail: bool,
+    }
+    #[async_trait::async_trait]
+    impl WatchHandler for StartupHandler {
+        fn name(&self) -> &str {
+            "startup-fixture"
+        }
+        fn matches(&self, _path: &Path) -> bool {
+            false
+        }
+        async fn tracked_paths(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        async fn watch_roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+        async fn on_modify(&self, _path: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+        async fn on_delete(&self, _path: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+        async fn refresh_paths(&self) -> Result<(), WatchError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            if self.fail {
+                return Err(WatchError::InitFailed {
+                    reason: "fixture refused initialization".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn fixture(dir: &Path, handler: StartupHandler) -> UnifiedWatcher {
+        let settings = Arc::new(crate::Settings {
+            workspace_root: Some(dir.to_path_buf()),
+            index_path: dir.join("index"),
+            ..crate::Settings::default()
+        });
+        let facade = Arc::new(RwLock::new(IndexFacade::new(settings).unwrap()));
+        UnifiedWatcher::builder()
+            .indexer(facade)
+            .workspace_root(dir.to_path_buf())
+            .broadcaster(Arc::new(NotificationBroadcaster::new(8)))
+            .handler(handler)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_preparation_waits_for_handlers_and_registers_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("src");
+        std::fs::create_dir(&root).unwrap();
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: root.clone(),
+                entered: entered.clone(),
+                release: release.clone(),
+                calls: calls.clone(),
+                fail: false,
+            },
+        );
+        let task = tokio::spawn(async move {
+            watcher.prepare().await.unwrap();
+            watcher
+        });
+        entered.notified().await;
+        assert!(
+            !task.is_finished(),
+            "readiness cannot precede handler completion"
+        );
+        release.notify_one();
+        let mut watcher = task.await.unwrap();
+        assert!(watcher.prepared);
+        assert!(watcher.registry.watch_dirs().contains(&root));
+        assert_eq!(watcher.handler_roots, vec![root]);
+        // A second prepare must not await or refresh again.
+        watcher.prepare().await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_failed_handler_never_reports_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = Arc::new(Notify::new());
+        release.notify_one();
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: dir.path().to_path_buf(),
+                entered: Arc::new(Notify::new()),
+                release,
+                calls: Arc::new(AtomicUsize::new(0)),
+                fail: true,
+            },
+        );
+        let error = watcher.prepare().await.unwrap_err();
+        assert!(error.to_string().contains("fixture refused initialization"));
+        assert!(!watcher.prepared);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_failed_native_registration_never_reports_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = Arc::new(Notify::new());
+        release.notify_one();
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: dir.path().join("missing-root"),
+                entered: Arc::new(Notify::new()),
+                release,
+                calls: Arc::new(AtomicUsize::new(0)),
+                fail: false,
+            },
+        );
+        assert!(watcher.prepare().await.is_err());
+        assert!(!watcher.prepared);
     }
 }

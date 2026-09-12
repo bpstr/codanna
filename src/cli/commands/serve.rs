@@ -211,10 +211,7 @@ async fn run_stdio_server(
             eprintln!("  codanna serve --http --watch");
             eprintln!("HTTP mode supports concurrent clients without lock conflicts.");
             eprintln!();
-            eprintln!(
-                "If you are sure no other codanna serve is running, remove {} and retry.",
-                crate::parsing::paths::render_absolute_path(&lock_path).display()
-            );
+            eprintln!("Stop the owning server and retry. Do not unlink an active OS lock file.");
             std::process::exit(1);
         }
         Err(ServeLockError::Io(e)) => {
@@ -327,7 +324,15 @@ async fn run_stdio_server(
 
         // Build and start the unified watcher
         match builder.build() {
-            Ok(unified_watcher) => {
+            Ok(mut unified_watcher) => {
+                // The MCP handshake must not race the async initial path load
+                // and native watch registration: an immediate client edit can
+                // otherwise disappear without a filesystem event.
+                if let Err(error) = unified_watcher.prepare().await {
+                    eprintln!("Failed to prepare unified watcher: {error}");
+                    drop(serve_lock);
+                    std::process::exit(1);
+                }
                 background_tasks.push(tokio::spawn(async move {
                     if let Err(e) = unified_watcher.watch().await {
                         eprintln!("Unified watcher error: {e}");
@@ -340,6 +345,8 @@ async fn run_stdio_server(
             }
             Err(e) => {
                 eprintln!("Failed to start unified watcher: {e}");
+                drop(serve_lock);
+                std::process::exit(1);
             }
         }
     }
