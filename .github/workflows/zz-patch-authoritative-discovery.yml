@@ -1,0 +1,74 @@
+name: Apply authoritative discovery patch
+on:
+  push:
+    branches: [hardening/authoritative-discovery]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/authoritative-discovery
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply focused patch
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/indexing/pipeline/stages/discover.rs')
+          s = p.read_text()
+          old = '''        for entry in walker.flatten() {\n            if entry.file_type().is_some_and(|ft| ft.is_dir()) {\n                continue;\n            }\n'''
+          new = '''        for entry in walker {\n            // Incremental discovery is an authoritative filesystem snapshot:\n            // absence from this set becomes a deletion. A traversal error must\n            // therefore fail the run rather than be flattened away, otherwise\n            // temporarily unreadable files are destructively removed from the\n            // persisted index.\n            let entry = entry.map_err(|e| PipelineError::Parse {\n                path: self.root.clone(),\n                reason: format!("filesystem discovery incomplete: {e}"),\n            })?;\n            if entry.file_type().is_some_and(|ft| ft.is_dir()) {\n                continue;\n            }\n'''
+          if old not in s:
+              raise SystemExit('incremental walker block not found')
+          s = s.replace(old, new, 1)
+
+          marker = '\n}\n'
+          test = r'''
+
+    #[cfg(unix)]
+    #[test]
+    fn hardening_incremental_discovery_fails_closed_on_walk_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let blocked = root.join("blocked");
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::fs::write(blocked.join("still_here.rs"), "pub fn still_here() {}\n").unwrap();
+
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let stage = DiscoverStage::new(&root, 1);
+        let result = stage.collect_all_files();
+
+        // Restore permissions so TempDir cleanup can remove the fixture.
+        std::fs::set_permissions(&blocked, original).unwrap();
+        assert!(
+            result.is_err(),
+            "an incomplete walk must not be accepted as an authoritative deletion snapshot"
+        );
+    }
+'''
+          pos = s.rfind(marker)
+          if pos < 0:
+              raise SystemExit('tests module closing brace not found')
+          s = s[:pos] + test + s[pos:]
+          p.write_text(s)
+      - name: Format
+        run: cargo fmt --all
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/zz-patch-authoritative-discovery.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/indexing/pipeline/stages/discover.rs .github/workflows/zz-patch-authoritative-discovery.yml
+          git commit -m "fix: fail closed on incomplete incremental discovery"
+          git push origin HEAD:hardening/authoritative-discovery
