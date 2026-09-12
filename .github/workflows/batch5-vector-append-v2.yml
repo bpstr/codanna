@@ -1,0 +1,60 @@
+name: Batch 5 vector append recovery v2
+
+on:
+  push:
+    branches:
+      - hardening/vector-append-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/vector-append-recovery
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply append patch and corrected regressions
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path('.github/workflows/batch5-vector-append.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == '- name: Implement crash-safe append recovery')
+          run_line = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'run: |')
+          end = next(i for i in range(run_line + 1, len(workflow)) if workflow[i].strip() == '- name: Format and test append recovery')
+          script_lines = workflow[run_line + 1:end]
+          indent = min(len(line) - len(line.lstrip()) for line in script_lines if line.strip())
+          script = '\n'.join(line[indent:] for line in script_lines)
+          patcher = Path('/tmp/batch5-append-patch.py')
+          patcher.write_text(script)
+          subprocess.run(['python', str(patcher)], check=True)
+
+          path = Path('src/vector/storage.rs')
+          source = path.read_text()
+          old = 'assert!(err.to_string().contains("inconsistent"));'
+          if source.count(old) < 2:
+              raise SystemExit('expected two legacy truncated-layout assertions')
+          source = source.replace(old, 'assert!(err.to_string().contains("truncated"));', 2)
+          path.write_text(source)
+
+      - name: Format and test append recovery
+        run: |
+          cargo fmt --all
+          cargo test vector::storage::tests::hardening_open_recovers --lib
+          cargo test vector::storage::tests --lib
+          cargo clippy --lib --all-features -- -D warnings
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs
+          git commit -m "hardening: make vector appends crash recoverable"
+          git push origin HEAD:hardening/vector-append-recovery
