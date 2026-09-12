@@ -279,7 +279,7 @@ mod tests {
             symbols: vec![CodeSymbol {
                 key: 1,
                 name: "getTask".into(),
-                qualified_name: "a::getTask".into(),
+                qualified_name: "getTask".into(),
                 signature: "a".into(),
                 path: "src/api.ts".into(),
                 start_line: 1,
@@ -294,7 +294,7 @@ mod tests {
             symbols: vec![CodeSymbol {
                 key: 1,
                 name: "getTask".into(),
-                qualified_name: "b::getTask".into(),
+                qualified_name: "getTask".into(),
                 signature: "b".into(),
                 path: "src/api.ts".into(),
                 start_line: 1,
