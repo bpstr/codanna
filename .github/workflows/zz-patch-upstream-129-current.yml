@@ -1,0 +1,34 @@
+name: Apply upstream 129 current patch
+on:
+  push:
+    branches: [hardening/upstream-129-config-reload]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/upstream-129-config-reload
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply patch
+        run: python .github/scripts/patch-upstream-129.py
+      - name: Format and compile
+        run: |
+          cargo fmt --all
+          cargo check --all-features
+          cargo test watcher --all-features -- --nocapture
+      - name: Clean patch scaffolding
+        run: rm .github/scripts/patch-upstream-129.py .github/workflows/zz-patch-upstream-129-current.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: apply reloaded settings before indexing new roots"
+          git push origin HEAD:hardening/upstream-129-config-reload
