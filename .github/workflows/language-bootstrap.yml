@@ -47,6 +47,16 @@ jobs:
           p = Path('src/parsing/mod.rs')
           s = p.read_text().replace('pub mod util;\n', '')
           p.write_text(s)
+
+          p = Path('src/io/parse.rs')
+          s = p.read_text()
+          s = s.replace('kt, lua, swift)', 'kt, lua, swift, rb, sh)')
+          needle = '        Language::Swift => tree_sitter_swift::LANGUAGE.into(),\n'
+          replacement = needle + '        Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),\n        Language::Bash => tree_sitter_bash::LANGUAGE.into(),\n'
+          if s.count(needle) != 1:
+              raise SystemExit('parse Swift arm not found exactly once')
+          s = s.replace(needle, replacement)
+          p.write_text(s)
           PY
       - name: Refresh lockfile and validate parsers
         run: |
@@ -58,6 +68,6 @@ jobs:
           rm .github/workflows/language-bootstrap.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Cargo.lock src/parsing Cargo.toml .github/workflows/language-bootstrap.yml
+          git add Cargo.lock src/parsing src/io/parse.rs Cargo.toml .github/workflows/language-bootstrap.yml
           git commit -m 'feat(parsing): wire Ruby and Bash into Codanna'
           git push origin HEAD:feature/languages-ruby-bash
