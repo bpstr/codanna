@@ -5,12 +5,14 @@ mod agent;
 mod architecture;
 #[path = "../knowledge/context.rs"]
 mod context;
+#[allow(dead_code)]
 #[path = "../knowledge/contracts.rs"]
 mod contracts;
 #[path = "../knowledge/drift.rs"]
 mod drift;
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
+#[allow(dead_code)]
 #[path = "../knowledge/service.rs"]
 mod service;
 use clap::{Parser, Subcommand};
