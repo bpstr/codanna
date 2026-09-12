@@ -133,6 +133,31 @@ impl MmapVectorStorage {
             .into());
         }
 
+        let expected_len = Self::expected_file_size(dimension, vector_count)?;
+        if mmap.len() < expected_len {
+            return Err(VectorStorageError::InvalidFormat(format!(
+                "Vector file is truncated: header expects {expected_len} bytes, file contains {} bytes",
+                mmap.len()
+            )));
+        }
+
+        // The header count is the commit marker for append batches. If a process
+        // dies after syncing payload bytes but before publishing the new count,
+        // the bytes beyond the committed layout are an uncommitted tail. Recover
+        // the last known-good generation instead of permanently rejecting it.
+        let mmap = if mmap.len() > expected_len {
+            drop(mmap);
+            drop(file);
+            let file = OpenOptions::new().write(true).open(&path)?;
+            file.set_len(expected_len as u64)?;
+            file.sync_all()?;
+            drop(file);
+            let file = File::open(&path)?;
+            // SAFETY: same invariant as above; writes always invalidate maps first.
+            unsafe { MmapOptions::new().map(&file)? }
+        } else {
+            mmap
+        };
         Self::validate_physical_layout(&mmap, dimension, vector_count)?;
 
         Ok(Self {
@@ -183,9 +208,26 @@ impl MmapVectorStorage {
         self.ensure_storage_ready()?;
         // Drop the map before any file write: mutating a mapped file is
         // undefined behavior per the memmap2 contract. The next read remaps.
+        let new_count = self
+            .vector_count
+            .checked_add(vectors.len())
+            .filter(|count| *count <= u32::MAX as usize)
+            .ok_or_else(|| {
+                VectorStorageError::InvalidFormat(
+                    "Vector count exceeds storage format capacity".to_string(),
+                )
+            })?;
+
         self.invalidate_cache();
         self.append_vectors(vectors)?;
-        self.update_metadata(vectors.len())?;
+
+        // Payload is durable before the header publishes the new count. If header
+        // publication fails, roll back to the previously committed file length.
+        if let Err(err) = self.update_header_count(new_count) {
+            let _ = self.truncate_to_count(self.vector_count);
+            return Err(err);
+        }
+        self.vector_count = new_count;
         Ok(())
     }
 
@@ -295,13 +337,7 @@ impl MmapVectorStorage {
             }
         }
         writer.flush()?;
-        Ok(())
-    }
-
-    /// Updates metadata after writing vectors.
-    fn update_metadata(&mut self, vector_count: usize) -> Result<(), VectorStorageError> {
-        self.vector_count += vector_count;
-        self.update_header_count()?;
+        writer.get_ref().sync_all()?;
         Ok(())
     }
 
@@ -586,11 +622,10 @@ impl MmapVectorStorage {
         Ok(())
     }
 
-    fn validate_physical_layout(
-        mmap: &Mmap,
+    fn expected_file_size(
         dimension: VectorDimension,
         vector_count: usize,
-    ) -> Result<(), VectorStorageError> {
+    ) -> Result<usize, VectorStorageError> {
         let payload_bytes = dimension
             .get()
             .checked_mul(BYTES_PER_F32)
@@ -600,14 +635,22 @@ impl MmapVectorStorage {
                     "Vector record size overflows address space".to_string(),
                 )
             })?;
-        let expected = vector_count
+        vector_count
             .checked_mul(payload_bytes)
             .and_then(|bytes| bytes.checked_add(HEADER_SIZE))
             .ok_or_else(|| {
                 VectorStorageError::InvalidFormat(
                     "Vector file size overflows address space".to_string(),
                 )
-            })?;
+            })
+    }
+
+    fn validate_physical_layout(
+        mmap: &Mmap,
+        dimension: VectorDimension,
+        vector_count: usize,
+    ) -> Result<(), VectorStorageError> {
+        let expected = Self::expected_file_size(dimension, vector_count)?;
 
         if mmap.len() != expected {
             return Err(VectorStorageError::InvalidFormat(format!(
@@ -619,7 +662,15 @@ impl MmapVectorStorage {
         Ok(())
     }
 
-    fn update_header_count(&self) -> Result<(), VectorStorageError> {
+    fn truncate_to_count(&self, count: usize) -> Result<(), VectorStorageError> {
+        let expected = Self::expected_file_size(self.dimension, count)?;
+        let file = OpenOptions::new().write(true).open(&self.path)?;
+        file.set_len(expected as u64)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    fn update_header_count(&self, count: usize) -> Result<(), VectorStorageError> {
         use std::io::{Seek, SeekFrom};
 
         debug_assert!(
@@ -633,8 +684,9 @@ impl MmapVectorStorage {
         file.seek(SeekFrom::Start(12))?;
 
         // Write updated count
-        file.write_all(&(self.vector_count as u32).to_le_bytes())?;
+        file.write_all(&(count as u32).to_le_bytes())?;
         file.flush()?;
+        file.sync_all()?;
 
         Ok(())
     }
@@ -764,11 +816,11 @@ mod tests {
 
         let err = MmapVectorStorage::open(&temp_dir, segment)
             .expect_err("truncated vector file must be rejected");
-        assert!(err.to_string().contains("inconsistent"));
+        assert!(err.to_string().contains("truncated"));
     }
 
     #[test]
-    fn hardening_open_rejects_orphan_vector_tail() {
+    fn hardening_open_recovers_uncommitted_vector_tail() {
         let temp_dir = TempDir::new().unwrap();
         let segment = SegmentOrdinal::new(0);
         let dimension = VectorDimension::new(2).unwrap();
@@ -789,9 +841,40 @@ mod tests {
         file.write_all(&4.0f32.to_le_bytes()).unwrap();
         file.flush().unwrap();
 
-        let err = MmapVectorStorage::open(&temp_dir, segment)
-            .expect_err("unpublished appended vector must be rejected");
-        assert!(err.to_string().contains("inconsistent"));
+        let mut reopened = MmapVectorStorage::open(&temp_dir, segment)
+            .expect("unpublished appended tail should roll back to committed header count");
+        assert_eq!(reopened.vector_count(), 1);
+        assert_eq!(reopened.read_all_vectors().unwrap(), data);
+        assert_eq!(
+            reopened.file_size().unwrap() as usize,
+            MmapVectorStorage::expected_file_size(dimension, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn hardening_open_recovers_partial_uncommitted_tail() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];
+        let refs: Vec<_> = data.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.write_batch(&refs).unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&[0xAA, 0xBB, 0xCC]).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let mut reopened = MmapVectorStorage::open(&temp_dir, segment)
+            .expect("partial uncommitted append must recover committed generation");
+        assert_eq!(reopened.read_all_vectors().unwrap(), data);
+        assert_eq!(
+            reopened.file_size().unwrap() as usize,
+            MmapVectorStorage::expected_file_size(dimension, 1).unwrap()
+        );
     }
 
     #[test]
@@ -818,7 +901,7 @@ mod tests {
 
         let err = MmapVectorStorage::open(&temp_dir, segment)
             .expect_err("impossible header count must be rejected");
-        assert!(err.to_string().contains("inconsistent"));
+        assert!(err.to_string().contains("truncated"));
     }
 
     #[test]
