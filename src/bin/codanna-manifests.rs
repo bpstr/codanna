@@ -1,15 +1,18 @@
 //! Fast local package-manifest dependency discovery.
-#[path = "../knowledge/manifests.rs"]
-mod manifests;
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
+#[path = "../knowledge/manifests.rs"]
+mod manifests;
 use clap::Parser;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(about = "Scan package manifests and link local cross-repository dependencies", version)]
+#[command(
+    about = "Scan package manifests and link local cross-repository dependencies",
+    version
+)]
 struct Cli {
     #[arg(long="root", value_parser=parse_root, required = true)]
     roots: Vec<(String, PathBuf)>,
@@ -34,7 +37,10 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            if error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe) {
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
+            {
                 return std::process::ExitCode::SUCCESS;
             }
             eprintln!("manifests: {error}");
