@@ -1,0 +1,44 @@
+name: Publish validated review continuation
+
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-publish.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/review-20260912
+      - name: Check the existing review branch has not moved
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = 0d0a8f5e5678744ed7fd1764f70f537c2e331a07
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-continuation-validation
+          run-id: 34707295039
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/validated
+      - name: Apply only the exact validated patch and fast-forward the review branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/validated/continuation-tested.patch"
+          echo "a7e38b736ab669aeb0706a77ba9c12dc422b37edee4f186dde8f70930849007b  $patch" | sha256sum --check
+          git apply --index "$patch"
+          git diff --cached --check
+          if git diff --cached --name-only | grep -Eq '^(\.github/|review\.)'; then
+            echo 'Unexpected workflow/source-transfer files in candidate' >&2
+            exit 1
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: propagate review errors and enforce deterministic CLI and parser contracts'
+          git push origin HEAD:refs/heads/fix/review-20260912
