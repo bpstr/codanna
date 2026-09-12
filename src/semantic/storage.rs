@@ -193,6 +193,44 @@ impl SemanticVectorStorage {
             })
     }
 
+    /// Saves borrowed embeddings without cloning their vector payloads.
+    ///
+    /// This is the persistence path used by `SimpleSemanticSearch::save` so
+    /// snapshotting a large semantic index only allocates a small ID/slice
+    /// descriptor vector instead of a second full copy of every embedding.
+    pub fn save_borrowed_batch(
+        &mut self,
+        embeddings: &[(SymbolId, &[f32])],
+    ) -> Result<(), SemanticSearchError> {
+        for (_, embedding) in embeddings {
+            if embedding.len() != self.dimension.get() {
+                return Err(SemanticSearchError::DimensionMismatch {
+                    expected: self.dimension.get(),
+                    actual: embedding.len(),
+                    suggestion: "All embeddings must have the same dimension".to_string(),
+                });
+            }
+        }
+
+        let mut vector_batch = Vec::with_capacity(embeddings.len());
+        for (symbol_id, embedding) in embeddings {
+            let vector_id = VectorId::new(symbol_id.to_u32()).ok_or_else(|| {
+                SemanticSearchError::InvalidId {
+                    id: symbol_id.to_u32(),
+                    suggestion: "Symbol ID must be non-zero".to_string(),
+                }
+            })?;
+            vector_batch.push((vector_id, *embedding));
+        }
+
+        self.storage
+            .write_batch(&vector_batch)
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Failed to save borrowed batch: {e}"),
+                suggestion: "Check disk space and file permissions".to_string(),
+            })
+    }
+
     /// Returns the number of embeddings stored.
     pub fn embedding_count(&self) -> usize {
         self.storage.vector_count()

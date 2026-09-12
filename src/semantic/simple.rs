@@ -544,15 +544,16 @@ impl SimpleSemanticSearch {
 
         let mut storage = SemanticVectorStorage::new(&staging_dir, dimension)?;
 
-        // Convert HashMap to Vec for batch save
-        let embeddings: Vec<(SymbolId, Vec<f32>)> = self
+        // Build a descriptor batch borrowing the existing vectors. Do not
+        // clone embedding payloads during persistence: on large repositories
+        // that temporary copy can dominate peak RSS.
+        let embeddings: Vec<(SymbolId, &[f32])> = self
             .embeddings
             .iter()
-            .map(|(id, embedding)| (*id, embedding.clone()))
+            .map(|(id, embedding)| (*id, embedding.as_slice()))
             .collect();
 
-        // Save all embeddings
-        storage.save_batch(&embeddings)?;
+        storage.save_borrowed_batch(&embeddings)?;
         drop(storage);
 
         let staged_vec = staging_dir.join("segment_0.vec");
