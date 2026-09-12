@@ -3,6 +3,7 @@ use crate::knowledge::*;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Workspace {
     pub repositories: BTreeMap<String, String>,
@@ -10,6 +11,7 @@ pub struct Workspace {
     pub contracts: Vec<ContractSource>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContractSource {
     pub repo: String,
@@ -235,9 +237,11 @@ mod tests {
     use super::*;
     #[test]
     fn exact_operation_links_across_repos() {
+        let openapi =
+            r#"{"openapi":"3.1.0","paths":{"/tasks/{id}":{"get":{"operationId":"getTask"}}}}"#;
         let core = links::build(&Input {
             repo: "core".into(),
-            files: BTreeMap::from([("openapi.json".into(), "{}".into())]),
+            files: BTreeMap::from([("openapi.json".into(), openapi.into())]),
             ..Input::default()
         })
         .unwrap();
@@ -257,20 +261,16 @@ mod tests {
         })
         .unwrap();
         let mut graph = merge(vec![core, client]).unwrap();
-        add_openapi(
-            &mut graph,
-            "core",
-            "openapi.json",
-            r#"{"openapi":"3.1.0","paths":{"/tasks/{id}":{"get":{"operationId":"getTask"}}}}"#,
-        )
-        .unwrap();
+        add_openapi(&mut graph, "core", "openapi.json", openapi).unwrap();
         assert!(graph.edges.iter().any(|e| e.relation == "generated_from" && e.method == "exact_contract_symbol_name"));
     }
     #[test]
     fn ambiguity_is_retained_not_guessed() {
+        let openapi =
+            r#"{"openapi":"3.1.0","paths":{"/tasks":{"get":{"operationId":"getTask"}}}}"#;
         let core = links::build(&Input {
             repo: "core".into(),
-            files: BTreeMap::from([("openapi.json".into(), "{}".into())]),
+            files: BTreeMap::from([("openapi.json".into(), openapi.into())]),
             ..Input::default()
         })
         .unwrap();
@@ -301,13 +301,7 @@ mod tests {
         })
         .unwrap();
         let mut graph = merge(vec![core, client]).unwrap();
-        add_openapi(
-            &mut graph,
-            "core",
-            "openapi.json",
-            r#"{"openapi":"3.1.0","paths":{"/tasks":{"get":{"operationId":"getTask"}}}}"#,
-        )
-        .unwrap();
+        add_openapi(&mut graph, "core", "openapi.json", openapi).unwrap();
         assert!(graph.unresolved.iter().any(|u| u.reason
             == "ambiguous_cross_repo_contract_consumer"
             && u.candidates.len() == 2));
