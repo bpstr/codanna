@@ -1,0 +1,65 @@
+name: Batch 4 vector header invariants
+
+on:
+  push:
+    branches:
+      - hardening/vector-physical-layout
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/vector-physical-layout
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Validate remapped version and requested dimension
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("src/vector/storage.rs")
+          s = path.read_text()
+
+          old = '''        if path.exists() {\n            Self::open(base_path, segment)\n        } else {\n'''
+          new = '''        if path.exists() {\n            let storage = Self::open(base_path, segment)?;\n            if storage.dimension != dimension {\n                return Err(VectorError::DimensionMismatch {\n                    expected: dimension.get(),\n                    actual: storage.dimension.get(),\n                }\n                .into());\n            }\n            Ok(storage)\n        } else {\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "let storage = Self::open(base_path, segment)?;" not in s:
+              raise SystemExit("open_or_create marker missing")
+
+          old = '''            let (_, dimension, count) = Self::read_header(&mmap)?;\n            if dimension != self.dimension {\n'''
+          new = '''            let (version, dimension, count) = Self::read_header(&mmap)?;\n            if version != STORAGE_VERSION {\n                return Err(VectorError::VersionMismatch {\n                    expected: STORAGE_VERSION,\n                    actual: version,\n                }\n                .into());\n            }\n            if dimension != self.dimension {\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "let (version, dimension, count) = Self::read_header(&mmap)?;" not in s:
+              raise SystemExit("remap header marker missing")
+
+          test_marker = '''    #[test]\n    fn test_write_after_read_drops_map_before_writing() {\n'''
+          tests = '''    #[test]\n    fn hardening_open_or_create_rejects_dimension_mismatch() {\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n        drop(storage);\n\n        let err = MmapVectorStorage::open_or_create(\n            &temp_dir,\n            segment,\n            VectorDimension::new(3).unwrap(),\n        )\n        .expect_err("existing storage dimension mismatch must fail");\n        assert!(err.to_string().contains("dimension mismatch"));\n    }\n\n    #[test]\n    fn hardening_remap_rejects_version_change() {\n        use std::io::{Seek, SeekFrom};\n\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];\n        let refs: Vec<(VectorId, &[f32])> = data\n            .iter()\n            .map(|(id, vector)| (*id, vector.as_slice()))\n            .collect();\n        storage.write_batch(&refs).unwrap();\n\n        let path = temp_dir.path().join("segment_0.vec");\n        let mut file = OpenOptions::new().write(true).open(path).unwrap();\n        file.seek(SeekFrom::Start(4)).unwrap();\n        file.write_all(&(STORAGE_VERSION + 1).to_le_bytes()).unwrap();\n        file.flush().unwrap();\n\n        let err = storage\n            .read_all_vectors()\n            .expect_err("remap must reject a changed storage version");\n        assert!(err.to_string().contains("version mismatch"));\n    }\n\n'''
+          if "hardening_open_or_create_rejects_dimension_mismatch" not in s:
+              if test_marker not in s:
+                  raise SystemExit("test marker missing")
+              s = s.replace(test_marker, tests + test_marker, 1)
+
+          path.write_text(s)
+      - name: Format and test storage invariants
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test vector::storage::tests::hardening_open_or_create --lib
+          cargo test vector::storage::tests::hardening_remap --lib
+          cargo test vector::storage::tests --lib
+      - name: Commit invariant checks
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs
+          git commit -m "hardening: validate vector header invariants on reopen"
+          git push origin HEAD:hardening/vector-physical-layout
