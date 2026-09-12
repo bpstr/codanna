@@ -10,9 +10,10 @@ changed = set()
 manifests = [
     ('review.final2.b64', 'd233403ccad2d028fb063d663b77169b79d41b4ff9c752b9311ea151986f9e33'),
     ('review.final3extra.b64', '31f25ffa7ec155553740b18df77353f780e982834e7bd9268285932dfb9b628b'),
+    ('review.final4extra', '18b712b5c149a9a3d95db78978c5bc2c26cd7a22078a469f5dd9d5569094d962'),
 ]
 for filename, digest in manifests:
-    encoded = (root / filename).read_bytes()
+    encoded = (root / filename).read_bytes() if filename.endswith('.b64') else b''.join(p.read_bytes() for p in sorted(root.glob(filename + '.*.b64')))
     if filename == 'review.final2.b64':
         repairs = [
             (b'2ZxVGcp35opW3OgqBwXFctNS6', b'2ZxVGcp35opW7OgqBwXFctNS6'),
@@ -20,8 +21,10 @@ for filename, digest in manifests:
             (b'bHsmKVhnmVF4hVtJ7jEM5jLfc', b'bHsmKVhnmVF4VtJ7jEM5jLfc'),
             (b'hqtFqO1oMHZw4CHCFA/tnD9k', b'hqtFqO1oMHZw64CHCFA/tnD9k'),
         ]
-    else:
+    elif filename == 'review.final3extra.b64':
         repairs = [(b'MvSrIj00om5GAB', b'MvSr00om5GAB')]
+    else:
+        repairs = [(b'nma2XmelkUcz', b'nma2XmWelkUcz')]
     for before, after in repairs:
         assert encoded.count(before) == 1, before
         encoded = encoded.replace(before, after)
