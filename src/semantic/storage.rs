@@ -227,18 +227,17 @@ fn validate_physical_layout(storage: &MmapVectorStorage) -> Result<(), SemanticS
             message: "Semantic vector dimension overflows storage size calculation".to_string(),
             suggestion: "Rebuild the semantic index".to_string(),
         })?;
-    let record_bytes = VECTOR_ID_BYTES.checked_add(dimension_bytes).ok_or_else(|| {
-        SemanticSearchError::StorageError {
+    let record_bytes = VECTOR_ID_BYTES
+        .checked_add(dimension_bytes)
+        .ok_or_else(|| SemanticSearchError::StorageError {
             message: "Semantic vector record size overflow".to_string(),
             suggestion: "Rebuild the semantic index".to_string(),
-        }
-    })?;
-    let count = u64::try_from(storage.vector_count()).map_err(|_| {
-        SemanticSearchError::StorageError {
+        })?;
+    let count =
+        u64::try_from(storage.vector_count()).map_err(|_| SemanticSearchError::StorageError {
             message: "Semantic vector count does not fit storage size calculation".to_string(),
             suggestion: "Rebuild the semantic index".to_string(),
-        }
-    })?;
+        })?;
     let expected = count
         .checked_mul(record_bytes)
         .and_then(|bytes| VECTOR_HEADER_BYTES.checked_add(bytes))
@@ -246,10 +245,13 @@ fn validate_physical_layout(storage: &MmapVectorStorage) -> Result<(), SemanticS
             message: "Semantic vector file size overflows expected layout".to_string(),
             suggestion: "The vector header is corrupt; rebuild the semantic index".to_string(),
         })?;
-    let actual = storage.file_size().map_err(|e| SemanticSearchError::StorageError {
-        message: format!("Failed to inspect semantic vector storage: {e}"),
-        suggestion: "Check file permissions and rebuild the semantic index if needed".to_string(),
-    })?;
+    let actual = storage
+        .file_size()
+        .map_err(|e| SemanticSearchError::StorageError {
+            message: format!("Failed to inspect semantic vector storage: {e}"),
+            suggestion: "Check file permissions and rebuild the semantic index if needed"
+                .to_string(),
+        })?;
 
     if actual != expected {
         return Err(SemanticSearchError::StorageError {
@@ -413,7 +415,8 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let dimension = VectorDimension::new(2).unwrap();
-        let mut storage = SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
+        let mut storage =
+            SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
         storage
             .save_embedding(SymbolId::new(1).unwrap(), &[1.0, 2.0])
             .unwrap();
@@ -434,7 +437,8 @@ mod tests {
     fn hardening_semantic_storage_rejects_truncated_generation() {
         let temp_dir = TempDir::new().unwrap();
         let dimension = VectorDimension::new(2).unwrap();
-        let mut storage = SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
+        let mut storage =
+            SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
         storage
             .save_embedding(SymbolId::new(1).unwrap(), &[1.0, 2.0])
             .unwrap();
