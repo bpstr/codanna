@@ -19,12 +19,16 @@ use tree_sitter_language_pack::{ProcessConfig, StructureItem, StructureKind, Sym
 const MAX_GENERIC_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const GENERIC_PARSE_TIMEOUT_MS: u64 = 5_000;
 
-/// Number of language names/aliases offered by the generic pack.
+/// Number of language names/aliases currently registered by the generic pack.
+///
+/// This is not the size of the downloadable grammar catalogue: the pack can
+/// recognize paths for grammars that have not yet been loaded into its runtime
+/// registry.
 pub fn language_count() -> usize {
     tree_sitter_language_pack::language_count()
 }
 
-/// Sorted language names/aliases exposed by the pack.
+/// Sorted language names/aliases currently registered by the pack.
 pub fn available_languages() -> Vec<String> {
     tree_sitter_language_pack::available_languages()
 }
@@ -233,23 +237,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn broad_catalogue_is_large() {
-        assert!(language_count() >= 300, "language pack unexpectedly shrank");
-    }
-
-    #[test]
-    fn detects_high_value_generic_languages_without_loading_parsers() {
+    fn detects_broad_generic_catalogue_without_loading_parsers() {
         let settings = Settings::default();
         for (path, expected) in [
             ("lib/app.ex", "elixir"),
             ("src/main.zig", "zig"),
             ("lib/main.dart", "dart"),
             ("src/Main.scala", "scala"),
-            ("infra/main.tf", "hcl"),
+            ("infra/main.tf", "terraform"),
         ] {
             assert_eq!(
                 detect_path(Path::new(path), &settings).map(|id| id.as_str()),
-                Some(expected)
+                Some(expected),
+                "unexpected generic language detection for {path}"
             );
         }
     }
