@@ -1,0 +1,112 @@
+name: Review watcher startup
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-startup-check.yml]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: cp review.startup.b64 "$RUNNER_TEMP/"
+      - uses: actions/checkout@v6
+        with:
+          ref: 16c4f5304cb7e51623a4e3f77f0309a2e3409e23
+          persist-credentials: false
+      - name: Apply hash-verified source changes
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          raw = gzip.decompress(base64.b64decode(Path(os.environ['RUNNER_TEMP'], 'review.startup.b64').read_bytes()))
+          assert hashlib.sha256(raw).hexdigest() == 'c93f93e19c9511aac65596eefaa309fcf71d3a740edbf0ddefaf2705c57d4825'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+              assert not path.is_symlink()
+              old = path.read_bytes()
+              assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path, new))
+          for path, new in prepared:
+              path.write_bytes(new)
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: review-final
+          cache-on-failure: true
+      - name: Format and lint
+        run: |
+          cargo fmt --all
+          git diff --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Full default suite
+        run: cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/default-tests.log"
+      - name: Full all-feature suite
+        run: cargo test --locked --all-features --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/all-feature-tests.log"
+      - name: Five immediate-edit legacy notification witnesses
+        run: |
+          for attempt in {1..5}; do
+            cargo test --locked --all-features --test cli_tests test_serve_stdio_dual_generation::serve_stdio_legacy_lane_sends_no_custom_notifications -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/legacy-$attempt.log"
+            grep -q 'test result: ok. 1 passed;' "$RUNNER_TEMP/legacy-$attempt.log"
+          done
+      - name: No-default-features and documentation
+        run: |
+          cargo check --locked --no-default-features
+          RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps --all-features
+      - name: Export tested source
+        run: git diff --binary > "$RUNNER_TEMP/startup.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-startup-validation
+          path: |
+            ${{ runner.temp }}/startup.patch
+            ${{ runner.temp }}/*tests.log
+            ${{ runner.temp }}/legacy-*.log
+          retention-days: 3
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 16c4f5304cb7e51623a4e3f77f0309a2e3409e23
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-startup-validation
+          path: ${{ runner.temp }}/checked
+      - name: Append only validated changes to the existing PR
+        run: |
+          branch=fix/review-20260912
+          base=16c4f5304cb7e51623a4e3f77f0309a2e3409e23
+          actual=$(git ls-remote --exit-code origin "refs/heads/$branch" | cut -f1)
+          test "$actual" = "$base"
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/checked/startup.patch"
+          git diff --cached --check
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: await native watcher readiness before MCP transport admission'
+          git push origin "HEAD:refs/heads/$branch"
