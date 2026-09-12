@@ -60,3 +60,57 @@ The source-patch run is evidence for this fix, not a substitute for the final PR
 checks. Consult the current PR head for Full Test Suite, Quick Check, Hardening,
 and the permanent security/browser workflow outcomes. No paid inference was used;
 source fixtures disable semantic indexing and the tests use local transports.
+
+## Server-observed SSE reconnect regression
+
+After the startup correction, normal runs `34719527440` (Hardening) and
+`34719527436` (Full Test Suite) exposed an intermittent HTTP reconnect-fixture
+failure. The default suite and macOS/Linux watcher witnesses passed. The failed
+assertion was the first session's notification after dropping and recreating its
+SSE response, not a regression in watcher preparation.
+
+The old fixture treated dropping a client `Response` as proof that Hyper had
+already dropped the server's stream. Those are different lifecycle events. The
+locked rmcp 3.1.4 transport intentionally creates an idle shadow GET while an
+older common stream is active, so racing a new GET against unobserved server
+closure did not reliably test reconnection. Its substring-only notification
+check could also mistake an inclusively replayed old event for fresh delivery.
+
+Commit `193f379029cd38f6768efb253d0447752ed2d3c0` changes only the test module and
+adds the already-locked `http-body` package as a direct development dependency:
+
+- A test-only body observer forwards every production body frame unchanged and
+  acknowledges closure only after dropping the inner server response body.
+- The fixture awaits that actual closure before reconnecting, while asserting
+  both Codanna session listeners remain alive for reconnection.
+- The reconnect supplies `Last-Event-ID`. A buffered SSE parser checks complete
+  JSON-RPC events and strictly increasing event identities. A replayed previous
+  notification cannot satisfy the next fresh-delivery assertion.
+- Both clients still must receive each new event; deletion and injected-clock
+  expiry must still remove the correct sessions and enforce ownership.
+
+The five-second bounds remain unchanged. The test does not force the production
+transport closed, sleep before reconnection, resend an event until one arrives,
+or relax/ignore the positive delivery assertions. Production router and session
+implementation bytes are unchanged by this fixture correction.
+
+Successful source run `34720293333` validated the corrected fixture before it was
+appended to the same review branch:
+
+- **Ten out of ten parallel HTTP/TLS pairs passed** (20 executions of two existing
+  tests, not 20 distinct new tests).
+- The normal-parallelism hardening command passed **102 tests**, zero failures.
+- Full default suite: **1,820 passed; zero failed; 59 ignored**.
+- Full all-feature suite: **1,822 passed; zero failed; 59 ignored**.
+- Strict Clippy, no-default-features checking and warning-free public docs passed.
+
+Exact tested fixture patch SHA-256:
+`9776583cf21dab5120b72449afd803d974bb60337420a577560dfe7ac6d3b849`.
+These counts overlap with each other and earlier validation. A first candidate
+correctly failed strict Clippy on an unnecessary trait import; the import was
+removed, the lint stayed enabled, and the entire validation above was rerun.
+
+The permanent PR workflows continue to execute both full feature suites, the
+hardening tests, the review Rust/Node gate and the real Chromium example checks.
+Check the PR's current-head results for final gate status; historical source-run
+success alone is not a substitute. Nothing was merged or force-pushed.
