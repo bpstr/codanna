@@ -1,0 +1,80 @@
+name: Apply non-finite semantic hardening
+on:
+  push:
+    branches: [hardening/non-finite-semantic-vectors]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/non-finite-semantic-vectors
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply focused patch
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/semantic/simple.rs')
+          s = p.read_text()
+
+          old = '''        let embedding = embeddings.into_iter().next().unwrap();\n\n        // Validate dimensions\n        if embedding.len() != self.dimensions {\n'''
+          new = '''        let embedding = embeddings.into_iter().next().unwrap();\n\n        // Validate dimensions and numeric integrity before the vector can\n        // reach similarity ranking. NaN/Inf makes PartialOrd undefined and\n        // historically could panic sorting through partial_cmp(...).unwrap().\n        if embedding.iter().any(|value| !value.is_finite()) {\n            return Err(SemanticSearchError::EmbeddingError(\n                "Embedding contains non-finite values".to_string(),\n            ));\n        }\n        if embedding.len() != self.dimensions {\n'''
+          if old not in s:
+              raise SystemExit('index_doc_comment validation marker not found')
+          s = s.replace(old, new, 1)
+
+          old_store = '''            if embedding.len() == self.dimensions {\n                self.embeddings.insert(symbol_id, embedding);\n                self.symbol_languages.insert(symbol_id, language);\n                count += 1;\n            } else {\n                dropped += 1;\n            }\n'''
+          new_store = '''            if embedding.len() == self.dimensions\n                && embedding.iter().all(|value| value.is_finite())\n            {\n                self.embeddings.insert(symbol_id, embedding);\n                self.symbol_languages.insert(symbol_id, language);\n                count += 1;\n            } else {\n                dropped += 1;\n            }\n'''
+          if old_store not in s:
+              raise SystemExit('store_embeddings block not found')
+          s = s.replace(old_store, new_store, 1)
+          s = s.replace('b.1.partial_cmp(&a.1).unwrap()', 'b.1.total_cmp(&a.1)')
+
+          test_marker = '\n#[cfg(test)]\nmod tests {'
+          test = r'''
+
+#[cfg(test)]
+mod hardening_non_finite_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_non_finite_embeddings_are_dropped_and_search_never_panics() {
+        let mut search = SimpleSemanticSearch::new_empty(2, "test");
+        let good = SymbolId::new(1).unwrap();
+        let bad = SymbolId::new(2).unwrap();
+        let stored = search.store_embeddings(vec![
+            (good, vec![1.0, 0.0], "rust".to_string()),
+            (bad, vec![f32::NAN, 0.0], "rust".to_string()),
+        ]);
+        assert_eq!(stored, 1);
+        let result = search
+            .search_with_embedding(&[1.0, 0.0], 10, -1.0)
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, good);
+    }
+}
+'''
+          if test_marker not in s:
+              raise SystemExit('test module marker not found')
+          s = s.replace(test_marker, test + test_marker, 1)
+          p.write_text(s)
+      - name: Format
+        run: cargo fmt --all
+      - name: Test semantic hardening
+        run: cargo test hardening_non_finite --all-features -- --nocapture
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/zz-patch-nonfinite.yml
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/semantic/simple.rs .github/workflows/zz-patch-nonfinite.yml
+          git commit -m "hardening: reject non-finite semantic vectors"
+          git push origin HEAD:hardening/non-finite-semantic-vectors
