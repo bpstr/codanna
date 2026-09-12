@@ -92,15 +92,27 @@ fn shared_recall_prefers_users_and_finds_assistant_only_terms() {
     let c = temp.path().join("codex.jsonl");
     let a = temp.path().join("claude.jsonl");
     fs::write(&c, jsonl(&[codex("user", "status bar layout")])).unwrap();
-    fs::write(&a, jsonl(&[claude("assistant", "status bar layout"), claude("user", "separate topic")])).unwrap();
+    fs::write(
+        &a,
+        jsonl(&[
+            claude("assistant", "status bar layout"),
+            claude("user", "separate topic"),
+        ]),
+    )
+    .unwrap();
     store.import("assign", Provider::Codex, &c).unwrap();
     store.import("assign", Provider::Claude, &a).unwrap();
     let hits = store.search("assign", "status bar", 8, None, None).unwrap();
     assert_eq!(hits["total_matches"], 2);
     assert_eq!(hits["results"][0]["message"]["role"], "user");
     let id = hits["results"][1]["message"]["id"].as_str().unwrap();
-    assert_eq!(store.read("assign", id).unwrap()["message"]["text"], "status bar layout");
-    let answers = store.search("assign", "status bar", 8, Some("assistant"), None).unwrap();
+    assert_eq!(
+        store.read("assign", id).unwrap()["message"]["text"],
+        "status bar layout"
+    );
+    let answers = store
+        .search("assign", "status bar", 8, Some("assistant"), None)
+        .unwrap();
     assert_eq!(answers["total_matches"], 1);
     assert_eq!(answers["results"][0]["message"]["provider"], "claude");
 }
@@ -114,9 +126,16 @@ fn workspace_isolation_in_search_read_and_forget() {
     let imported = store.import("private", Provider::Codex, &file).unwrap();
     let hits = store.search("private", "status", 8, None, None).unwrap();
     let id = hits["results"][0]["message"]["id"].as_str().unwrap();
-    assert_eq!(store.search("other", "status", 8, None, None).unwrap()["total_matches"], 0);
+    assert_eq!(
+        store.search("other", "status", 8, None, None).unwrap()["total_matches"],
+        0
+    );
     assert!(store.read("other", id).is_err());
-    assert!(store.forget("other", imported["source_id"].as_str().unwrap()).is_err());
+    assert!(
+        store
+            .forget("other", imported["source_id"].as_str().unwrap())
+            .is_err()
+    );
 }
 
 #[test]
@@ -129,16 +148,33 @@ fn unchanged_import_replacement_failure_and_forget() {
     let original = jsonl(&[codex("user", "old status bar")]);
     fs::write(&file, &original).unwrap();
     let imported = store.import("assign", Provider::Codex, &file).unwrap();
-    assert_eq!(store.import("assign", Provider::Codex, &file).unwrap()["unchanged"], true);
+    assert_eq!(
+        store.import("assign", Provider::Codex, &file).unwrap()["unchanged"],
+        true
+    );
     fs::write(&file, format!("{original}broken\n")).unwrap();
     assert!(store.import("assign", Provider::Codex, &file).is_err());
-    assert_eq!(reader.search("assign", "old", 8, None, None).unwrap()["total_matches"], 1);
+    assert_eq!(
+        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
+        1
+    );
     fs::write(&file, jsonl(&[codex("user", "new stable layout")])).unwrap();
     store.import("assign", Provider::Codex, &file).unwrap();
-    assert_eq!(reader.search("assign", "old", 8, None, None).unwrap()["total_matches"], 0);
-    assert_eq!(reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"], 1);
-    store.forget("assign", imported["source_id"].as_str().unwrap()).unwrap();
-    assert_eq!(reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"], 0);
+    assert_eq!(
+        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
+        0
+    );
+    assert_eq!(
+        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
+        1
+    );
+    store
+        .forget("assign", imported["source_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
+        0
+    );
     assert!(file.exists());
 }
 
@@ -153,10 +189,17 @@ fn query_bounds_unknown_fields_and_unicode_preview() {
     assert!(store.search("assign", "status", 0, None, None).is_err());
     assert!(store.search("assign", "status", 21, None, None).is_err());
     assert!(store.search("assign", "", 8, None, None).is_err());
-    assert!(store.search("assign", "status", 8, Some("system"), None).is_err());
-    assert!(serde_json::from_value::<super::server::SearchRequest>(json!({
-        "query":"status", "workspace":"escape"
-    })).is_err());
+    assert!(
+        store
+            .search("assign", "status", 8, Some("system"), None)
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<super::server::SearchRequest>(json!({
+            "query":"status", "workspace":"escape"
+        }))
+        .is_err()
+    );
     let hit = store.search("assign", "status", 8, None, None).unwrap();
     assert_eq!(hit["results"][0]["preview_truncated"], true);
     let id = hit["results"][0]["message"]["id"].as_str().unwrap();
@@ -168,8 +211,12 @@ fn rejects_other_index_schema_and_nonempty_directory() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("keep.txt"), "do not change").unwrap();
     assert!(Store::open(temp.path(), true).is_err());
-    assert_eq!(fs::read_to_string(temp.path().join("keep.txt")).unwrap(), "do not change");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("keep.txt")).unwrap(),
+        "do not change"
+    );
     let other = tempfile::tempdir().unwrap();
-    tantivy::Index::create_in_dir(other.path(), tantivy::schema::Schema::builder().build()).unwrap();
+    tantivy::Index::create_in_dir(other.path(), tantivy::schema::Schema::builder().build())
+        .unwrap();
     assert!(Store::open(other.path(), true).is_err());
 }

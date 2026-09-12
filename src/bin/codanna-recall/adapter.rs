@@ -68,20 +68,33 @@ fn text_content(content: &Value, provider: Provider) -> String {
     if let Some(text) = content.as_str() {
         return text.to_owned();
     }
-    content.as_array().into_iter().flatten().filter_map(|block| {
-        let kind = block.get("type")?.as_str()?;
-        let accepted = match provider {
-            Provider::Codex => matches!(kind, "input_text" | "output_text"),
-            Provider::Claude => kind == "text",
-        };
-        accepted.then(|| block.get("text").and_then(Value::as_str)).flatten()
-    }).collect::<Vec<_>>().join("\n")
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|block| {
+            let kind = block.get("type")?.as_str()?;
+            let accepted = match provider {
+                Provider::Codex => matches!(kind, "input_text" | "output_text"),
+                Provider::Claude => kind == "text",
+            };
+            accepted
+                .then(|| block.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn injected_user_context(text: &str) -> bool {
     let text = text.trim_start();
-    ["# AGENTS.md instructions", "<environment_context>", "<permissions instructions>"]
-        .iter().any(|prefix| text.starts_with(prefix))
+    [
+        "# AGENTS.md instructions",
+        "<environment_context>",
+        "<permissions instructions>",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 /// Only newline-terminated records are committed; an active partial tail waits.
@@ -92,7 +105,10 @@ pub fn parse(
     source_id: &str,
     source_path: &str,
 ) -> Result<Transcript> {
-    ensure!(bytes.len() <= MAX_FILE, "transcript exceeds 32 MiB import limit");
+    ensure!(
+        bytes.len() <= MAX_FILE,
+        "transcript exceeds 32 MiB import limit"
+    );
     let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     let text = std::str::from_utf8(&bytes[..complete]).context("transcript is not UTF-8")?;
     let mut messages = BTreeMap::new();
@@ -130,7 +146,8 @@ pub fn parse(
             }
             Provider::Claude => {
                 if !matches!(kind, "user" | "assistant")
-                    || ["isMeta", "isCompactSummary", "isSidechain"].iter()
+                    || ["isMeta", "isCompactSummary", "isSidechain"]
+                        .iter()
                         .any(|key| value.get(*key).and_then(Value::as_bool) == Some(true))
                 {
                     skipped += 1;
@@ -156,40 +173,72 @@ pub fn parse(
             skipped += 1;
             continue;
         }
-        ensure!(body.len() <= MAX_MESSAGE, "message at line {number} exceeds 64 KiB");
+        ensure!(
+            body.len() <= MAX_MESSAGE,
+            "message at line {number} exceeds 64 KiB"
+        );
         let native_id = match provider {
             Provider::Codex => payload.get("id"),
             Provider::Claude => value.get("uuid"),
-        }.and_then(Value::as_str).map(str::to_owned);
-        let timestamp = value.get("timestamp").and_then(Value::as_str).map(str::to_owned);
-        ensure!(native_id.as_ref().is_none_or(|id| id.len() <= 256), "message ID too long");
-        ensure!(timestamp.as_ref().is_none_or(|time| time.len() <= 128), "timestamp too long");
+        }
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        ensure!(
+            native_id.as_ref().is_none_or(|id| id.len() <= 256),
+            "message ID too long"
+        );
+        ensure!(
+            timestamp.as_ref().is_none_or(|time| time.len() <= 128),
+            "timestamp too long"
+        );
         ensure!(thread.len() <= 256, "thread ID too long");
         let position = number.to_string();
         let identity = native_id.as_deref().unwrap_or(&position);
         let id = digest(&[source_id, role, identity]);
         let message = Message {
-            id: id.clone(), source_id: source_id.to_owned(),
-            source_path: source_path.to_owned(), provider: provider.name().to_owned(),
-            thread_id: thread.clone(), native_message_id: native_id, timestamp,
-            line: number, role: role.to_owned(), content_sha256: content_hash(body.as_bytes()),
+            id: id.clone(),
+            source_id: source_id.to_owned(),
+            source_path: source_path.to_owned(),
+            provider: provider.name().to_owned(),
+            thread_id: thread.clone(),
+            native_message_id: native_id,
+            timestamp,
+            line: number,
+            role: role.to_owned(),
+            content_sha256: content_hash(body.as_bytes()),
             text: body,
         };
         if messages.insert(id, message).is_some() {
             duplicates += 1;
         }
-        ensure!(messages.len() <= MAX_MESSAGES, "transcript exceeds 20,000 messages");
+        ensure!(
+            messages.len() <= MAX_MESSAGES,
+            "transcript exceeds 20,000 messages"
+        );
     }
-    ensure!(recognized > 0, "no supported user/assistant records; wrong format or unfinished transcript");
+    ensure!(
+        recognized > 0,
+        "no supported user/assistant records; wrong format or unfinished transcript"
+    );
     let mut messages: Vec<Message> = messages.into_values().collect();
     for message in &mut messages {
         if message.thread_id.is_empty() {
-            message.thread_id = if thread.is_empty() { source_id.to_owned() } else { thread.clone() };
+            message.thread_id = if thread.is_empty() {
+                source_id.to_owned()
+            } else {
+                thread.clone()
+            };
         }
     }
     messages.sort_by_key(|message| message.line);
     Ok(Transcript {
-        messages, skipped_records: skipped, duplicate_records: duplicates,
+        messages,
+        skipped_records: skipped,
+        duplicate_records: duplicates,
         pending_tail_bytes: bytes.len() - complete,
     })
 }
