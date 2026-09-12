@@ -121,8 +121,9 @@ default = ["http-server"]
 http-server = ["axum", "tower", "tower-http"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
 # Optional local embedding acceleration. CPU remains the default build/runtime.
-gpu-coreml = ["ort/coreml"]
-gpu-cuda = ["ort/cuda"]
+# Target-scoped aliases keep `--all-features` portable across the release matrix.
+gpu-coreml = ["dep:ort-coreml"]
+gpu-cuda = ["dep:ort-cuda"]
 gpu-embeddings = ["gpu-coreml", "gpu-cuda"]
 axum = ["dep:axum"]
 tower = ["dep:tower"]
@@ -167,3 +168,9 @@ harness = false
 
 [target."cfg(windows)".dependencies]
 dunce = "1.0.5"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+ort-coreml = { package = "ort", version = "=2.0.0-rc.10", default-features = false, optional = true, features = ["coreml"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+ort-cuda = { package = "ort", version = "=2.0.0-rc.10", default-features = false, optional = true, features = ["cuda"] }
