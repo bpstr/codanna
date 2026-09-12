@@ -39,6 +39,8 @@ do
   run_tests --lib "$module" || status=1
 done
 run_tests --test cli_tests test_serve_http_sessionless || status=1
+# Real immediate-edit wire witness: handler unit tests alone miss startup races.
+run_tests --test cli_tests serve_stdio_legacy_lane_sends_no_custom_notifications || status=1
 run_tests --test cli_tests test_review_cli_contracts || status=1
 run_tests --test parsers_tests test_typescript_alias_resolution || status=1
 run_tests --test parsers_tests test_typescript_pipeline_resolution || status=1
