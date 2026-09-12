@@ -116,7 +116,10 @@ impl Store {
         let searcher = self.reader.searcher();
         let mut clauses = self.filtered(workspace, kind);
         clauses.push((Occur::Must, term(self.f.id, id)));
-        let hits = searcher.search(&BooleanQuery::new(clauses), &TopDocs::with_limit(1))?;
+        let hits = searcher.search(
+            &BooleanQuery::new(clauses),
+            &TopDocs::with_limit(1).order_by_score(),
+        )?;
         hits.first()
             .map(|(_, address)| searcher.doc(*address).map_err(Into::into))
             .transpose()
@@ -133,6 +136,11 @@ impl Store {
         let source_path = canonical.to_str().context("source path is not UTF-8")?;
         ensure!(source_path.len() <= 4096, "source path too long");
         let source_id = adapter::digest(&[workspace, provider.name(), source_path]);
+        // Hold the writer lock before reading so an older import cannot publish
+        // a stale source snapshot after another importer commits newer content.
+        let mut writer = self
+            .index
+            .writer_with_num_threads::<TantivyDocument>(1, 20_000_000)?;
         let mut bytes = Vec::new();
         File::open(&canonical)?
             .take(adapter::MAX_FILE as u64 + 1)
@@ -142,15 +150,11 @@ impl Store {
             "transcript exceeds 32 MiB import limit"
         );
         let hash = adapter::content_hash(&bytes);
-        // The Tantivy writer lock serializes the hash check and publication.
-        let mut writer = self
-            .index
-            .writer_with_num_threads::<TantivyDocument>(1, 20_000_000)?;
-        if let Some(old) = self.lookup(workspace, "source", &source_id)? {
-            if string(&old, self.f.hash)? == hash {
-                return Ok(json!({"source_id": source_id, "unchanged": true,
-                    "coverage": serde_json::from_str::<Json>(string(&old, self.f.payload)?)?}));
-            }
+        if let Some(old) = self.lookup(workspace, "source", &source_id)?
+            && string(&old, self.f.hash)? == hash
+        {
+            return Ok(json!({"source_id": source_id, "unchanged": true,
+                "coverage": serde_json::from_str::<Json>(string(&old, self.f.payload)?)?}));
         }
         // Parse/validate completely before staging ANY deletion of old evidence.
         let transcript = adapter::parse(&bytes, provider, &source_id, source_path)?;
@@ -239,7 +243,7 @@ impl Store {
         let searcher = self.reader.searcher();
         let (total, hits) = searcher.search(
             &BooleanQuery::new(clauses),
-            &(Count, TopDocs::with_limit(limit)),
+            &(Count, TopDocs::with_limit(limit).order_by_score()),
         )?;
         let mut results = Vec::new();
         for (score, address) in hits {
