@@ -62,6 +62,16 @@ jobs:
                   path.write_bytes(new)
                   changed.add(path)
               print(f'Applied {len(prepared)} verified source changes')
+          path = Path('src/indexing/pipeline/stages/write.rs')
+          text = path.read_text()
+          before = '        poison_writer(index);\n        assert!(stage.flush().is_err());'
+          after = '''        // Force actual metadata publication to fail without permission or timing assumptions.
+                  let meta_path = dir.path().join("meta.json");
+                  std::fs::remove_file(&meta_path).unwrap();
+                  std::fs::create_dir(&meta_path).unwrap();
+                  assert!(stage.flush().is_err());'''
+          assert text.count(before) == 1
+          path.write_text(text.replace(before, after))
           Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').write_text('\n'.join(str(p) for p in sorted(changed) if p.suffix == '.rs'))
           PY
       - uses: dtolnay/rust-toolchain@stable
@@ -121,7 +131,6 @@ jobs:
           fi
           git switch -c "$branch"
           git apply --index "$RUNNER_TEMP/validated/review-tested.patch"
-          # Workflow creation is performed separately through the authorized connector.
           git reset HEAD -- .github/workflows/review-regressions.yml
           rm .github/workflows/review-regressions.yml
           git diff --cached --check
