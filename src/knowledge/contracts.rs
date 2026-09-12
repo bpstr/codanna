@@ -59,7 +59,7 @@ pub fn add_openapi(graph: &mut Graph, repo: &str, path: &str, text: &str) -> Res
         .and_then(Value::as_str)
         .ok_or("missing openapi version")?;
     if !version.starts_with("3.") {
-        return Err("only OpenAPI 3.x is supported").into();
+        return Err("only OpenAPI 3.x is supported".into());
     }
     let span = Span {
         repo: repo.into(),
@@ -123,7 +123,7 @@ pub fn add_openapi(graph: &mut Graph, repo: &str, path: &str, text: &str) -> Res
             }
         }
     }
-    if let Some(schemas) = object
+    if let Some(schemas) = value
         .pointer("/components/schemas")
         .and_then(Value::as_object)
     {
@@ -134,7 +134,7 @@ pub fn add_openapi(graph: &mut Graph, repo: &str, path: &str, text: &str) -> Res
                 Node {
                     id: schema_id.clone(),
                     kind: Kind::Schema,
-                    label: name.clone(),
+                    label: name.to_string(),
                     source: span.clone(),
                     excerpt: excerpt(&schema.to_string()),
                 },
@@ -155,7 +155,7 @@ pub fn add_openapi(graph: &mut Graph, repo: &str, path: &str, text: &str) -> Res
                         Node {
                             id: id.clone(),
                             kind: Kind::Field,
-                            label: name.clone(),
+                            label: name.to_string(),
                             source: span.clone(),
                             excerpt: format!("{name} field of {}", graph.nodes[&schema_id].label),
                         },
