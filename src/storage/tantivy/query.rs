@@ -1004,6 +1004,11 @@ impl DocumentIndex {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
+            let imported_name = doc
+                .get_first(self.schema.context)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             let is_glob = doc
                 .get_first(self.schema.import_is_glob)
                 .and_then(|v| v.as_u64())
@@ -1018,6 +1023,7 @@ impl DocumentIndex {
 
             imports.push(crate::parsing::Import {
                 path: import_path,
+                imported_name,
                 alias,
                 file_id,
                 is_glob,
@@ -2300,6 +2306,7 @@ mod tests {
             // Store external imports (the data we're testing persistence for)
             let import1 = crate::parsing::Import {
                 path: "indicatif::ProgressBar".to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -2308,6 +2315,7 @@ mod tests {
 
             let import2 = crate::parsing::Import {
                 path: "serde::Serialize".to_string(),
+                imported_name: Some("Serialize".to_string()),
                 alias: Some("SerTrait".to_string()),
                 file_id,
                 is_glob: false,
@@ -2348,6 +2356,7 @@ mod tests {
                 .find(|i| i.path == "serde::Serialize")
                 .unwrap();
             assert_eq!(import2.alias.as_deref(), Some("SerTrait"));
+            assert_eq!(import2.imported_name.as_deref(), Some("Serialize"));
             assert!(!import2.is_glob);
             assert!(!import2.is_type_only);
         }
@@ -2378,6 +2387,7 @@ mod tests {
 
         let import = crate::parsing::Import {
             path: "std::collections::HashMap".to_string(),
+            imported_name: None,
             alias: None,
             file_id,
             is_glob: false,
@@ -2685,6 +2695,7 @@ mod tests {
             index
                 .store_import(&crate::parsing::Import {
                     path: format!("dep::module_{i}"),
+                    imported_name: None,
                     alias: None,
                     file_id,
                     is_glob: false,

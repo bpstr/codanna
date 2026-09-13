@@ -359,6 +359,13 @@ impl DocumentIndex {
         doc.add_u64(self.schema.import_file_id, import.file_id.value() as u64);
         doc.add_text(self.schema.import_path, &import.path);
 
+        // Import documents do not otherwise use the generic stored context
+        // field. Reusing it keeps existing Tantivy schemas readable while
+        // preserving an aliased named import's exported name.
+        if let Some(imported_name) = &import.imported_name {
+            doc.add_text(self.schema.context, imported_name);
+        }
+
         if let Some(alias) = &import.alias {
             doc.add_text(self.schema.import_alias, alias);
         }

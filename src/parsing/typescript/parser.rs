@@ -1537,15 +1537,16 @@ impl TypeScriptParser {
                         for ni in child.children(&mut nc) {
                             if ni.kind() == "import_specifier" {
                                 let mut sp = ni.walk();
-                                let mut local: Option<String> = None;
-                                // Prefer the aliased local name if present
-                                for part in ni.children(&mut sp) {
-                                    if part.kind() == "identifier" {
-                                        local = Some(code[part.byte_range()].to_string());
-                                    }
-                                }
+                                let names: Vec<String> = ni
+                                    .children(&mut sp)
+                                    .filter(|part| part.kind() == "identifier")
+                                    .map(|part| code[part.byte_range()].to_string())
+                                    .collect();
+                                let imported_name = names.first().cloned();
+                                let local = names.last().cloned();
                                 imports.push(Import {
                                     path: source_path.to_string(),
+                                    imported_name,
                                     alias: local,
                                     file_id,
                                     is_glob: false,
@@ -1579,6 +1580,7 @@ impl TypeScriptParser {
                 // Namespace import: import * as utils from './utils'
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: namespace_name,
                     file_id,
                     is_glob: true,
@@ -1589,6 +1591,7 @@ impl TypeScriptParser {
                 // We create one import with the default as alias
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1601,6 +1604,7 @@ impl TypeScriptParser {
                 );
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1613,6 +1617,7 @@ impl TypeScriptParser {
             // Side-effect import (no import clause)
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -1647,6 +1652,7 @@ impl TypeScriptParser {
             // export * from './module'
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: true,
@@ -1656,6 +1662,7 @@ impl TypeScriptParser {
             // Named re-exports - just track the module being imported from
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -3250,11 +3257,16 @@ export { default as MyButton } from './Button';
         );
 
         // Check for aliased helper import
-        assert!(
-            imports
-                .iter()
-                .any(|i| i.path == "./helper" && i.alias == Some("H".to_string()))
-        );
+        assert!(imports.iter().any(|i| {
+            i.path == "./helper"
+                && i.alias.as_deref() == Some("H")
+                && i.imported_name.as_deref() == Some("Helper")
+        }));
+        assert!(imports.iter().any(|i| {
+            i.path == "react"
+                && i.alias.as_deref() == Some("useStateHook")
+                && i.imported_name.as_deref() == Some("useState")
+        }));
 
         println!("✅ Complex patterns handled correctly");
     }

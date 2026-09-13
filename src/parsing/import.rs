@@ -10,6 +10,9 @@ use crate::FileId;
 pub struct Import {
     /// The path being imported (e.g., "std::collections::HashMap")
     pub path: String,
+    /// The symbol name exported by the target module when it differs from
+    /// the local binding (TypeScript/JavaScript: `Foo as LocalFoo`).
+    pub imported_name: Option<String>,
     /// The alias if any (e.g., "use foo::Bar as Baz")
     pub alias: Option<String>,
     /// Location in the file where this import appears

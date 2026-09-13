@@ -1040,15 +1040,16 @@ impl JavaScriptParser {
                         for ni in child.children(&mut nc) {
                             if ni.kind() == "import_specifier" {
                                 let mut sp = ni.walk();
-                                let mut local: Option<String> = None;
-                                // Prefer the aliased local name if present
-                                for part in ni.children(&mut sp) {
-                                    if part.kind() == "identifier" {
-                                        local = Some(code[part.byte_range()].to_string());
-                                    }
-                                }
+                                let names: Vec<String> = ni
+                                    .children(&mut sp)
+                                    .filter(|part| part.kind() == "identifier")
+                                    .map(|part| code[part.byte_range()].to_string())
+                                    .collect();
+                                let imported_name = names.first().cloned();
+                                let local = names.last().cloned();
                                 imports.push(Import {
                                     path: source_path.to_string(),
+                                    imported_name,
                                     alias: local,
                                     file_id,
                                     is_glob: false,
@@ -1082,6 +1083,7 @@ impl JavaScriptParser {
                 // Namespace import: import * as utils from './utils'
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: namespace_name,
                     file_id,
                     is_glob: true,
@@ -1092,6 +1094,7 @@ impl JavaScriptParser {
                 // We create one import with the default as alias
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1104,6 +1107,7 @@ impl JavaScriptParser {
                 );
                 imports.push(Import {
                     path: source_path.to_string(),
+                    imported_name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1116,6 +1120,7 @@ impl JavaScriptParser {
             // Side-effect import (no import clause)
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -1147,6 +1152,7 @@ impl JavaScriptParser {
             // export * from './module'
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: true,
@@ -1156,6 +1162,7 @@ impl JavaScriptParser {
             // Named re-exports - just track the module being imported from
             imports.push(Import {
                 path: source_path.to_string(),
+                imported_name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -1963,7 +1970,7 @@ mod tests {
         let file_id = FileId::new(1).unwrap();
 
         let code = r#"
-import { Component, useState } from 'react';
+import { Component, useState as useStateHook } from 'react';
 import React from 'react';
 import * as utils from './utils';
 import './styles.css';
@@ -1996,11 +2003,11 @@ export * from './common';
                 .iter()
                 .any(|i| i.path == "react" && i.alias == Some("Component".to_string()))
         );
-        assert!(
-            imports
-                .iter()
-                .any(|i| i.path == "react" && i.alias == Some("useState".to_string()))
-        );
+        assert!(imports.iter().any(|i| {
+            i.path == "react"
+                && i.alias.as_deref() == Some("useStateHook")
+                && i.imported_name.as_deref() == Some("useState")
+        }));
         // Default import has alias
         assert!(
             imports
@@ -2035,7 +2042,11 @@ export * from './common';
 
         let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, file_id, &mut counter);
-        // Should produce exactly one function symbol named createChat with Public visibility
+        assert_eq!(
+            symbols.len(),
+            1,
+            "an exported declaration must be extracted exactly once: {symbols:?}"
+        );
         assert!(
             symbols
                 .iter()

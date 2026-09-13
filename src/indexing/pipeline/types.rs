@@ -71,6 +71,7 @@ impl RawSymbol {
 #[derive(Debug, Clone)]
 pub struct RawImport {
     pub path: String,
+    pub imported_name: Option<String>,
     pub alias: Option<String>,
     pub is_glob: bool,
     pub is_type_only: bool,
@@ -80,6 +81,7 @@ impl RawImport {
     pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
+            imported_name: None,
             alias: None,
             is_glob: false,
             is_type_only: false,
@@ -88,6 +90,11 @@ impl RawImport {
 
     pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
         self.alias = Some(alias.into());
+        self
+    }
+
+    pub fn with_imported_name(mut self, imported_name: impl Into<String>) -> Self {
+        self.imported_name = Some(imported_name.into());
         self
     }
 
@@ -106,6 +113,7 @@ impl RawImport {
         Import {
             file_id,
             path: self.path,
+            imported_name: self.imported_name,
             alias: self.alias,
             is_glob: self.is_glob,
             is_type_only: self.is_type_only,
@@ -1290,6 +1298,7 @@ mod tests {
         batch2.imports.push(Import {
             file_id: FileId::new(1).unwrap(),
             path: "test".to_string(),
+            imported_name: None,
             alias: None,
             is_glob: false,
             is_type_only: false,
@@ -1316,6 +1325,7 @@ mod tests {
         Import {
             file_id: FileId::new(1).unwrap(),
             path: path.to_string(),
+            imported_name: None,
             alias: alias.map(String::from),
             is_glob: false,
             is_type_only: false,

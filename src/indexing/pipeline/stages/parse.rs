@@ -234,6 +234,9 @@ fn parse_with_parser(
                 })
                 .unwrap_or(imp.path);
             let mut raw = RawImport::new(&path);
+            if let Some(imported_name) = imp.imported_name {
+                raw = raw.with_imported_name(imported_name);
+            }
             if let Some(alias) = imp.alias {
                 raw = raw.with_alias(alias);
             }

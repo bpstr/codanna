@@ -1498,6 +1498,7 @@ impl GoParser {
         if let Some(path) = import_path {
             let import = Import {
                 path,
+                imported_name: None,
                 alias: if is_dot_import {
                     Some(".".to_string())
                 } else if is_blank_import {
