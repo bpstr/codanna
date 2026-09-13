@@ -3669,7 +3669,7 @@ mod tests {
         std::fs::write(pkg.join("generated/b.py"), "def b():\n    pass\n").unwrap();
         std::fs::write(root.join("vendor/c.py"), "def c():\n    pass\n").unwrap();
         std::fs::write(pkg.join(".hidden.py"), "def h():\n    pass\n").unwrap();
-        std::fs::write(pkg.join("d.txt"), "not code").unwrap();
+        std::fs::write(pkg.join("d.codanna-unknown"), "not code").unwrap();
         std::fs::write(pkg.join("newmod/e.py"), "def e():\n    pass\n").unwrap();
 
         let mut settings = Settings {

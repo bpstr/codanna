@@ -436,7 +436,7 @@ mod snapshot_tests {
         let root = dir.path().canonicalize().unwrap();
         std::fs::write(root.join("one.rs"), "pub fn one() {}\n").unwrap();
         std::fs::write(root.join("two.rs"), "pub fn two() {}\n").unwrap();
-        std::fs::write(root.join("notes.txt"), "not indexed").unwrap();
+        std::fs::write(root.join("notes.codanna-unknown"), "not indexed").unwrap();
         let walker = FileWalker::new(Arc::new(Settings::default()));
         for (entries, files, bytes, expected) in [
             (2, 10, 1024, "entry"),
