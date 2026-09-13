@@ -22,6 +22,7 @@ pub enum Language {
     Java,
     Kotlin,
     Lua,
+    Nix,
     Swift,
     Svelte,
 }
@@ -48,6 +49,7 @@ impl Language {
             Language::Java => super::LanguageId::new("java"),
             Language::Kotlin => super::LanguageId::new("kotlin"),
             Language::Lua => super::LanguageId::new("lua"),
+            Language::Nix => super::LanguageId::new("nix"),
             Language::Swift => super::LanguageId::new("swift"),
             Language::Svelte => super::LanguageId::new("svelte"),
         }
@@ -113,6 +115,7 @@ impl Language {
             "java" => Some(Language::Java),
             "kt" | "kts" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
+            "nix" => Some(Language::Nix),
             "swift" => Some(Language::Swift),
             "svelte" => Some(Language::Svelte),
             _ => None,
@@ -145,6 +148,7 @@ impl Language {
             Language::Java => &["java"],
             Language::Kotlin => &["kt", "kts"],
             Language::Lua => &["lua"],
+            Language::Nix => &["nix"],
             Language::Swift => &["swift"],
             Language::Svelte => &["svelte"],
         }
@@ -167,6 +171,7 @@ impl Language {
             Language::Java => "java",
             Language::Kotlin => "kotlin",
             Language::Lua => "lua",
+            Language::Nix => "nix",
             Language::Swift => "swift",
             Language::Svelte => "svelte",
         }
@@ -189,6 +194,7 @@ impl Language {
             Language::Java => "Java",
             Language::Kotlin => "Kotlin",
             Language::Lua => "Lua",
+            Language::Nix => "Nix",
             Language::Swift => "Swift",
             Language::Svelte => "Svelte",
         }
