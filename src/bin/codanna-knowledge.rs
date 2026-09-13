@@ -1,4 +1,6 @@
 //! Opt-in companion CLI; never changes Codanna's existing indexes.
+#[path = "../knowledge/agent.rs"]
+mod agent;
 #[path = "../knowledge/architecture.rs"]
 mod architecture;
 #[path = "../knowledge/context.rs"]
@@ -95,6 +97,28 @@ enum Action {
         graph: PathBuf,
         #[arg(long, default_value_t = 20)]
         hubs: usize,
+    },
+    /// Reverse-dependency impact map for changed files, including cross-repository risk.
+    Impact {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long)]
+        repo: String,
+        #[arg(long = "file", required = true)]
+        files: Vec<String>,
+        #[arg(long, default_value_t = 3)]
+        max_depth: usize,
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+    },
+    /// Conservative zero-incoming-edge dead-code candidates. Never proof of deletion safety.
+    DeadCode {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
 }
 fn parse_root(value: &str) -> Result<(String, String), String> {
@@ -200,6 +224,30 @@ fn run() -> knowledge::Result<()> {
         Action::Architecture { graph, hubs } => {
             let graph = knowledge::io::load(&graph)?;
             serde_json::to_value(architecture::analyze(&graph, hubs)?)?
+        }
+        Action::Impact {
+            graph,
+            repo,
+            files,
+            max_depth,
+            max_nodes,
+        } => {
+            let graph = knowledge::io::load(&graph)?;
+            let index = agent::AnalysisIndex::new(&graph);
+            serde_json::to_value(index.impact(
+                &graph,
+                &agent::ImpactRequest {
+                    repo,
+                    files,
+                    max_depth,
+                    max_nodes,
+                },
+            )?)?
+        }
+        Action::DeadCode { graph, repo, limit } => {
+            let graph = knowledge::io::load(&graph)?;
+            let index = agent::AnalysisIndex::new(&graph);
+            serde_json::to_value(index.dead_code(&graph, &agent::DeadCodeRequest { repo, limit })?)?
         }
     };
     let mut out = std::io::stdout().lock();
