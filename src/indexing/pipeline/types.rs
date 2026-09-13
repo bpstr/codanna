@@ -878,8 +878,12 @@ impl SymbolLookupCache {
     /// Note: This queries Tantivy for all symbols, which is expensive for large indexes.
     /// For bulk indexing, prefer building the cache during INDEX stage.
     pub fn from_index(index: &crate::storage::DocumentIndex) -> PipelineResult<Self> {
-        // Get total count to pre-allocate
-        let count = index.document_count().unwrap_or(0) as usize;
+        // Get the exact symbol count to pre-allocate. Count failures are
+        // storage failures, not an empty index: swallowing them can turn a
+        // damaged index into a misleadingly incomplete resolution cache.
+        let count = index
+            .count_symbols()
+            .map_err(|e| PipelineError::Index(crate::IndexError::Storage(e)))?;
         let cache = Self::with_capacity(count);
 
         // Visit every symbol row without a fixed result cap. `get_all_symbols`
