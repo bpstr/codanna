@@ -104,18 +104,10 @@ impl UnifiedWatcher {
             );
         }
 
-        // FSEvents restarts its stream whenever a non-recursive path is added
-        // and has a practical path-count ceiling. On macOS the registered
-        // handler roots below are watched recursively, so thousands of
-        // individual directory registrations are both redundant and harmful.
-        #[cfg(not(target_os = "macos"))]
-        for dir in new_dirs {
-            self.watch_directory(&dir)?;
-        }
-        #[cfg(target_os = "macos")]
-        let _ = new_dirs;
-
+        // FSEvents watches roots recursively; register those first so the
+        // per-directory batch can skip paths they already cover.
         self.register_handler_roots().await;
+        self.watch_directories(&new_dirs)?;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -195,64 +187,53 @@ impl UnifiedWatcher {
         }
     }
 
-    /// Watch a directory for changes.
-    fn watch_directory(&mut self, dir: &PathBuf) -> Result<(), WatchError> {
-        let watch_path = if dir.is_absolute() {
-            dir.clone()
-        } else {
-            self.workspace_root.join(dir)
-        };
-
-        match self
-            ._watcher
-            .watch(&watch_path, RecursiveMode::NonRecursive)
-        {
-            Ok(_) => {
-                crate::debug_event!(
-                    "watcher",
-                    "watching",
-                    "{}",
-                    crate::parsing::paths::render_absolute_path(&watch_path).display()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[watcher] failed to watch {}: {e}",
-                    crate::parsing::paths::render_absolute_path(&watch_path).display()
-                );
-                // Continue - don't fail completely
-                Ok(())
-            }
+    /// Register a batch without restarting the platform event stream per path.
+    fn watch_directories(&mut self, dirs: &[PathBuf]) -> Result<(), WatchError> {
+        let watch_paths: Vec<_> = dirs
+            .iter()
+            .map(|dir| {
+                if dir.is_absolute() {
+                    dir.clone()
+                } else {
+                    self.workspace_root.join(dir)
+                }
+            })
+            .filter(|path| {
+                !cfg!(target_os = "macos")
+                    || !self.handler_roots.iter().any(|root| path.starts_with(root))
+            })
+            .collect();
+        if watch_paths.is_empty() {
+            return Ok(());
         }
-    }
-
-    /// Register a handler root. macOS uses one recursive FSEvents root
-    /// instead of thousands of NonRecursive paths; other platforms retain the
-    /// existing per-directory strategy.
-    fn watch_handler_root(&mut self, root: &PathBuf) -> Result<(), WatchError> {
-        #[cfg(target_os = "macos")]
-        {
-            let watch_path = if root.is_absolute() {
-                root.clone()
-            } else {
-                self.workspace_root.join(root)
-            };
-            match self._watcher.watch(&watch_path, RecursiveMode::Recursive) {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    tracing::warn!(
-                        "[watcher] failed to watch recursive root {}: {e}",
+        // FSEvents has a finite path list. Recursive roots avoid one native
+        // watch per source directory; handlers still enforce ignore rules.
+        let mode = if cfg!(target_os = "macos") {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        let mut paths = self._watcher.paths_mut();
+        for watch_path in watch_paths {
+            match paths.add(&watch_path, mode) {
+                Ok(_) => {
+                    crate::debug_event!(
+                        "watcher",
+                        "watching",
+                        "{}",
                         crate::parsing::paths::render_absolute_path(&watch_path).display()
                     );
-                    Ok(())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[watcher] failed to watch {}: {e}",
+                        crate::parsing::paths::render_absolute_path(&watch_path).display()
+                    );
                 }
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.watch_directory(root)
-        }
+        paths.commit()?;
+        Ok(())
     }
 
     /// Handle an incoming file event.
@@ -348,12 +329,16 @@ impl UnifiedWatcher {
             }
             roots.extend(handler_roots);
         }
-        for root in &roots {
-            if self.registry.add_watch_dir(root.clone()) {
-                if let Err(e) = self.watch_handler_root(root) {
-                    tracing::warn!("[watcher] failed to watch root: {e}");
-                }
-            }
+        let new_roots: Vec<_> = roots
+            .iter()
+            .filter(|root| {
+                let new_dir = self.registry.add_watch_dir((*root).clone());
+                new_dir || (cfg!(target_os = "macos") && !self.handler_roots.contains(root))
+            })
+            .cloned()
+            .collect();
+        if let Err(e) = self.watch_directories(&new_roots) {
+            tracing::warn!("[watcher] failed to watch roots: {e}");
         }
         self.handler_roots = roots;
         self.batch_sync_roots = sync_roots;
@@ -376,15 +361,12 @@ impl UnifiedWatcher {
             )
         };
 
-        for dir in dirs {
-            if self.registry.add_watch_dir(dir.clone()) {
-                #[cfg(not(target_os = "macos"))]
-                if let Err(e) = self.watch_directory(&dir) {
-                    tracing::warn!("[watcher] failed to watch created dir: {e}");
-                }
-                // macOS recursive handler-root watches already cover the new
-                // subtree; registry membership is still tracked for routing.
-            }
+        let new_dirs: Vec<_> = dirs
+            .into_iter()
+            .filter(|dir| self.registry.add_watch_dir(dir.clone()))
+            .collect();
+        if let Err(e) = self.watch_directories(&new_dirs) {
+            tracing::warn!("[watcher] failed to watch created directories: {e}");
         }
         if !files.is_empty() {
             crate::log_event!(
@@ -864,16 +846,10 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
 
-        // Watch any new directories. Recursive handler-root watches already
-        // cover them on macOS.
-        #[cfg(not(target_os = "macos"))]
-        for dir in dirs_to_watch {
-            if let Err(e) = self.watch_directory(&dir) {
-                tracing::warn!("[watcher] failed to watch new directory: {e}");
-            }
+        // Watch any new directories.
+        if let Err(e) = self.watch_directories(&dirs_to_watch) {
+            tracing::warn!("[watcher] failed to watch new directories: {e}");
         }
-        #[cfg(target_os = "macos")]
-        let _ = dirs_to_watch;
 
         // Config reload can add or drop roots; re-register them.
         self.register_handler_roots().await;
