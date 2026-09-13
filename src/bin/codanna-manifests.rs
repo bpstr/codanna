@@ -1,6 +1,8 @@
 //! Fast local package-manifest dependency discovery.
+#[allow(dead_code)]
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
+#[allow(dead_code)]
 #[path = "../knowledge/manifests.rs"]
 mod manifests;
 use clap::Parser;

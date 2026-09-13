@@ -15,7 +15,7 @@ pub enum ParseError {
     FileNotFound { path: String },
 
     #[error(
-        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, clj, cpp, cs, gd, java, kt, lua, swift)"
+        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, clj, cpp, cs, gd, java, kt, lua, swift, rb, sh)"
     )]
     UnsupportedLanguage { extension: String },
 
@@ -271,6 +271,8 @@ pub fn execute_parse(
         Language::Kotlin => tree_sitter_kotlin::language(),
         Language::Lua => tree_sitter_lua::LANGUAGE.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::Bash => tree_sitter_bash::LANGUAGE.into(),
     };
 
     parser

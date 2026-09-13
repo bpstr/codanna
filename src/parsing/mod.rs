@@ -21,6 +21,7 @@ pub mod php;
 pub mod python;
 pub mod registry;
 pub mod resolution;
+pub mod ruby_bash;
 pub mod rust;
 pub mod swift;
 pub mod typescript;
@@ -57,6 +58,7 @@ pub use resolution::{
     CallerContext, GenericInheritanceResolver, GenericResolutionContext, InheritanceResolver,
     PipelineSymbolCache, ResolutionScope, ResolveResult, ScopeLevel,
 };
+pub use ruby_bash::{BashLanguage, LightweightBehavior, LightweightParser, RubyLanguage};
 pub use rust::{RustBehavior, RustParser};
 pub use swift::{SwiftBehavior, SwiftParser};
 pub use typescript::{TypeScriptBehavior, TypeScriptParser};

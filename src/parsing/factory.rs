@@ -7,9 +7,9 @@ use super::{
     CBehavior, CParser, CSharpBehavior, CSharpParser, ClojureBehavior, ClojureParser, CppBehavior,
     CppParser, GdscriptBehavior, GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser,
     JavaScriptBehavior, JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior,
-    LanguageId, LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior,
-    PythonParser, RustBehavior, RustParser, SwiftBehavior, SwiftParser, TypeScriptBehavior,
-    TypeScriptParser, get_registry,
+    LanguageId, LanguageParser, LightweightBehavior, LightweightParser, LuaBehavior, LuaParser,
+    PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser, SwiftBehavior,
+    SwiftParser, TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -190,6 +190,12 @@ impl ParserFactory {
                 let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Ruby => Ok(Box::new(
+                LightweightParser::ruby().map_err(IndexError::General)?,
+            )),
+            Language::Bash => Ok(Box::new(
+                LightweightParser::bash().map_err(IndexError::General)?,
+            )),
         }
     }
 
@@ -336,6 +342,14 @@ impl ParserFactory {
                     behavior: Box::new(SwiftBehavior::new()),
                 }
             }
+            Language::Ruby => ParserWithBehavior {
+                parser: Box::new(LightweightParser::ruby().map_err(IndexError::General)?),
+                behavior: Box::new(LightweightBehavior::ruby()),
+            },
+            Language::Bash => ParserWithBehavior {
+                parser: Box::new(LightweightParser::bash().map_err(IndexError::General)?),
+                behavior: Box::new(LightweightBehavior::bash()),
+            },
         };
 
         Ok(result)
@@ -378,6 +392,8 @@ impl ParserFactory {
             Language::Rust,
             Language::Swift,
             Language::TypeScript,
+            Language::Ruby,
+            Language::Bash,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))
