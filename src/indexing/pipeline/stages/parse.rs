@@ -8,7 +8,8 @@ use crate::indexing::pipeline::types::{
     FileContent, ParsedFile, PipelineError, PipelineResult, RawImport, RawRelationship, RawSymbol,
 };
 use crate::parsing::{
-    LanguageBehavior, LanguageId, LanguageParser, get_registry, normalize_for_module_path,
+    LanguageBehavior, LanguageId, LanguageParser, generic_pack, get_registry,
+    normalize_for_module_path,
 };
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
@@ -76,21 +77,37 @@ fn create_parser(
 }
 
 /// Detect language from file extension.
-fn detect_language(path: &Path) -> PipelineResult<LanguageId> {
+fn detect_language(path: &Path, settings: &Settings) -> PipelineResult<LanguageId> {
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
+    {
+        let registry = get_registry();
+        let registry = registry.lock().map_err(|e| PipelineError::Parse {
+            path: path.to_path_buf(),
+            reason: format!("Failed to acquire registry lock: {e}"),
+        })?;
+        if let Some(definition) = registry.get_by_extension(extension) {
+            if definition.is_enabled(settings) {
+                return Ok(definition.id());
+            }
+            return Err(PipelineError::UnsupportedFileType {
+                path: path.to_path_buf(),
+            });
+        }
+    }
+
+    generic_pack::detect_path(path, settings).ok_or_else(|| PipelineError::UnsupportedFileType {
+        path: path.to_path_buf(),
+    })
+}
+
+fn is_registered_language(language_id: LanguageId) -> PipelineResult<bool> {
     let registry = get_registry();
     let registry = registry.lock().map_err(|e| PipelineError::Parse {
-        path: path.to_path_buf(),
+        path: Default::default(),
         reason: format!("Failed to acquire registry lock: {e}"),
     })?;
-
-    registry
-        .get_by_extension(extension)
-        .map(|def| def.id())
-        .ok_or_else(|| PipelineError::UnsupportedFileType {
-            path: path.to_path_buf(),
-        })
+    Ok(registry.get(language_id).is_some())
 }
 
 /// Construct one parser per language present in `files`.
@@ -103,11 +120,15 @@ fn detect_language(path: &Path) -> PipelineResult<LanguageId> {
 pub fn preflight_file_parsers(files: &[PathBuf], settings: &Settings) -> PipelineResult<()> {
     let mut seen = std::collections::HashSet::new();
     for path in files {
-        let Ok(language_id) = detect_language(path) else {
+        let Ok(language_id) = detect_language(path, settings) else {
             continue;
         };
         if seen.insert(language_id) {
-            create_parser(language_id, settings)?;
+            if is_registered_language(language_id)? {
+                create_parser(language_id, settings)?;
+            } else {
+                generic_pack::prewarm(language_id)?;
+            }
         }
     }
     Ok(())
@@ -163,7 +184,17 @@ pub fn parse_file_with_root(
     settings: &Settings,
     module_root: Option<&Path>,
 ) -> PipelineResult<ParsedFile> {
-    let language_id = detect_language(&content.path)?;
+    let language_id = detect_language(&content.path, settings)?;
+
+    if !is_registered_language(language_id)? {
+        return generic_pack::parse(
+            content.path,
+            content.hash,
+            &content.content,
+            language_id,
+            module_root,
+        );
+    }
 
     PARSER_CACHE.with(|cache| {
         let mut cache_ref = cache.borrow_mut();
@@ -551,7 +582,7 @@ mod tests {
     #[test]
     fn test_detect_language_rust() {
         let path = Path::new("test.rs");
-        let result = detect_language(path);
+        let result = detect_language(path, &Settings::default());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_str(), "rust");
     }
@@ -559,7 +590,7 @@ mod tests {
     #[test]
     fn test_detect_language_typescript() {
         let path = Path::new("app.ts");
-        let result = detect_language(path);
+        let result = detect_language(path, &Settings::default());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_str(), "typescript");
     }
@@ -567,7 +598,7 @@ mod tests {
     #[test]
     fn test_detect_language_unknown() {
         let path = Path::new("file.xyz");
-        let result = detect_language(path);
+        let result = detect_language(path, &Settings::default());
         assert!(result.is_err());
     }
 

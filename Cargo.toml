@@ -72,6 +72,7 @@ tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-bash = "0.25.1"
+tree-sitter-language-pack = "=1.16.2"
 walkdir = "2.5.0"
 # Pinned: fastembed >=5.7 uses ort 2.0.0-rc.11 (ONNX Runtime 1.23) whose
 # prebuilt binaries require glibc 2.38+. Homebrew Linux CI runs Ubuntu 22.04
