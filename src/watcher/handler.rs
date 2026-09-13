@@ -27,6 +27,7 @@ pub enum WatchAction {
     ReloadConfig {
         added: Vec<PathBuf>,
         removed: Vec<PathBuf>,
+        current: Vec<PathBuf>,
     },
 
     /// No action needed (e.g., file unchanged).

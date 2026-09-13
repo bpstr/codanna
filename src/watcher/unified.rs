@@ -107,7 +107,7 @@ impl UnifiedWatcher {
         // FSEvents watches roots recursively; register those first so the
         // per-directory batch can skip paths they already cover.
         self.register_handler_roots().await;
-        self.watch_directories(&new_dirs)?;
+        self.watch_directories(&new_dirs, false)?;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -188,7 +188,11 @@ impl UnifiedWatcher {
     }
 
     /// Register a batch without restarting the platform event stream per path.
-    fn watch_directories(&mut self, dirs: &[PathBuf]) -> Result<(), WatchError> {
+    fn watch_directories(
+        &mut self,
+        dirs: &[PathBuf],
+        recursive_roots: bool,
+    ) -> Result<(), WatchError> {
         let watch_paths: Vec<_> = dirs
             .iter()
             .map(|dir| {
@@ -199,7 +203,8 @@ impl UnifiedWatcher {
                 }
             })
             .filter(|path| {
-                !cfg!(target_os = "macos")
+                recursive_roots
+                    || !cfg!(target_os = "macos")
                     || !self.handler_roots.iter().any(|root| path.starts_with(root))
             })
             .collect();
@@ -208,7 +213,7 @@ impl UnifiedWatcher {
         }
         // FSEvents has a finite path list. Recursive roots avoid one native
         // watch per source directory; handlers still enforce ignore rules.
-        let mode = if cfg!(target_os = "macos") {
+        let mode = if cfg!(target_os = "macos") && recursive_roots {
             RecursiveMode::Recursive
         } else {
             RecursiveMode::NonRecursive
@@ -337,7 +342,7 @@ impl UnifiedWatcher {
             })
             .cloned()
             .collect();
-        if let Err(e) = self.watch_directories(&new_roots) {
+        if let Err(e) = self.watch_directories(&new_roots, true) {
             tracing::warn!("[watcher] failed to watch roots: {e}");
         }
         self.handler_roots = roots;
@@ -365,7 +370,7 @@ impl UnifiedWatcher {
             .into_iter()
             .filter(|dir| self.registry.add_watch_dir(dir.clone()))
             .collect();
-        if let Err(e) = self.watch_directories(&new_dirs) {
+        if let Err(e) = self.watch_directories(&new_dirs, false) {
             tracing::warn!("[watcher] failed to watch created directories: {e}");
         }
         if !files.is_empty() {
@@ -753,7 +758,16 @@ impl UnifiedWatcher {
                 }
             }
 
-            WatchAction::ReloadConfig { added, removed } => {
+            WatchAction::ReloadConfig {
+                added,
+                removed,
+                current,
+            } => {
+                // The running facade and pipeline own an Arc snapshot of the
+                // startup settings. Refresh it before indexing so subsequent
+                // discovery and CodeFileHandler eligibility see new roots.
+                self.facade.write().await.reload_indexed_paths(current);
+
                 if !added.is_empty() {
                     crate::log_event!("config", "adding directories", "{}", added.len());
                     for path in &added {
@@ -846,13 +860,47 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
 
-        // Watch any new directories.
-        if let Err(e) = self.watch_directories(&dirs_to_watch) {
+        // Config reload can add or drop roots. Register roots first so macOS
+        // can cover a large new tree with one recursive FSEvents path.
+        let previous_roots = self.handler_roots.clone();
+        self.register_handler_roots().await;
+        let added_roots: Vec<_> = self
+            .handler_roots
+            .iter()
+            .filter(|root| !previous_roots.contains(root))
+            .cloned()
+            .collect();
+
+        // Watch any new directories not already covered by a recursive root.
+        if let Err(e) = self.watch_directories(&dirs_to_watch, false) {
             tracing::warn!("[watcher] failed to watch new directories: {e}");
         }
 
-        // Config reload can add or drop roots; re-register them.
-        self.register_handler_roots().await;
+        // Close the index-then-register race: a file can land after config
+        // indexing completes but before the new native root is committed.
+        // With the watch active, one incremental truth scan catches that gap;
+        // later writes are queued by the native watcher.
+        if !added_roots.is_empty() {
+            let mut pending = crate::indexing::pipeline::PendingResolution::default();
+            let mut indexer = self.facade.write().await;
+            for root in &added_roots {
+                if let Err(e) = indexer.index_directory_deferred(root, false, &mut pending) {
+                    tracing::error!("[watcher] new-root catch-up failed: {e}");
+                }
+            }
+            if let Err(e) = indexer.resolve_deferred(pending) {
+                tracing::error!("[watcher] new-root catch-up resolution failed: {e}");
+            }
+            drop(indexer);
+            for handler in &self.handlers {
+                if let Err(e) = handler.refresh_paths().await {
+                    tracing::warn!(
+                        "[watcher] failed to refresh {} handler after root catch-up: {e}",
+                        handler.name()
+                    );
+                }
+            }
+        }
 
         crate::log_event!(
             "watcher",

@@ -1046,6 +1046,26 @@ impl IndexFacade {
         self.indexed_paths = paths.into_iter().collect();
     }
 
+    /// Replace the configured source roots used by the facade and its pipeline.
+    ///
+    /// The file watcher calls this before indexing roots introduced by a live
+    /// settings reload. Keeping only `indexed_paths` up to date is insufficient:
+    /// discovery and file eligibility both read the facade's settings snapshot.
+    pub fn reload_indexed_paths(&mut self, paths: Vec<PathBuf>) {
+        let canonical_paths: Vec<PathBuf> = paths
+            .into_iter()
+            .map(|path| path.canonicalize().unwrap_or(path))
+            .collect();
+        let mut settings = (*self.settings).clone();
+        settings.indexing.indexed_paths = canonical_paths.clone();
+        settings.indexed_paths_cache = canonical_paths.clone();
+        let settings = Arc::new(settings);
+
+        self.indexed_paths = canonical_paths.into_iter().collect();
+        self.pipeline = Pipeline::with_settings(Arc::clone(&settings));
+        self.settings = settings;
+    }
+
     // =========================================================================
     // Mutation Methods (delegate to Pipeline)
     // =========================================================================
@@ -4566,5 +4586,32 @@ mod tests {
             .index_directories_with_options(&dirs, false, false, false, None)
             .unwrap();
         assert_cross_root_edge(&facade, "post-edit");
+    }
+
+    #[test]
+    fn reloaded_roots_update_facade_and_pipeline_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_root = dir.path().join("old");
+        let new_root = dir.path().join("new");
+        std::fs::create_dir_all(&old_root).unwrap();
+        std::fs::create_dir_all(&new_root).unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        settings.add_indexed_path(old_root).unwrap();
+        let mut facade = IndexFacade::new(Arc::new(settings)).unwrap();
+
+        let new_root = new_root.canonicalize().unwrap();
+        facade.reload_indexed_paths(vec![new_root.clone()]);
+
+        assert_eq!(facade.settings.indexed_paths_cache, vec![new_root.clone()]);
+        assert_eq!(
+            facade.pipeline.settings().indexed_paths_cache,
+            vec![new_root.clone()]
+        );
+        assert_eq!(facade.get_indexed_paths(), &HashSet::from([new_root]));
     }
 }

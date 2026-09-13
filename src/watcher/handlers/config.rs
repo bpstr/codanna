@@ -30,7 +30,7 @@ impl ConfigFileHandler {
             reason: format!("Failed to load config: {e}"),
         })?;
 
-        let initial_paths: HashSet<PathBuf> = config.indexing.indexed_paths.into_iter().collect();
+        let initial_paths: HashSet<PathBuf> = config.indexed_paths_cache.into_iter().collect();
 
         Ok(Self {
             settings_path,
@@ -39,20 +39,21 @@ impl ConfigFileHandler {
     }
 
     /// Compute diff between current and previous indexed_paths.
-    async fn compute_diff(&self) -> Result<(Vec<PathBuf>, Vec<PathBuf>), WatchError> {
+    async fn compute_diff(&self) -> Result<(Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>), WatchError> {
         // Reload config
         let new_config =
             Settings::load_from(&self.settings_path).map_err(|e| WatchError::ConfigError {
                 reason: format!("Failed to reload config: {e}"),
             })?;
 
-        let new_paths: HashSet<PathBuf> = new_config.indexing.indexed_paths.into_iter().collect();
+        let new_paths: HashSet<PathBuf> = new_config.indexed_paths_cache.into_iter().collect();
 
         let last_paths = self.last_indexed_paths.read().await;
 
         // Compute added and removed
         let added: Vec<PathBuf> = new_paths.difference(&last_paths).cloned().collect();
         let removed: Vec<PathBuf> = last_paths.difference(&new_paths).cloned().collect();
+        let current: Vec<PathBuf> = new_paths.iter().cloned().collect();
 
         // Update stored paths if there were changes
         if !added.is_empty() || !removed.is_empty() {
@@ -61,7 +62,7 @@ impl ConfigFileHandler {
             *write_lock = new_paths;
         }
 
-        Ok((added, removed))
+        Ok((added, removed, current))
     }
 }
 
@@ -85,14 +86,18 @@ impl WatchHandler for ConfigFileHandler {
         // Small delay to ensure file write is complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let (added, removed) = self.compute_diff().await?;
+        let (added, removed, current) = self.compute_diff().await?;
 
         if added.is_empty() && removed.is_empty() {
             // indexed_paths unchanged
             return Ok(WatchAction::None);
         }
 
-        Ok(WatchAction::ReloadConfig { added, removed })
+        Ok(WatchAction::ReloadConfig {
+            added,
+            removed,
+            current,
+        })
     }
 
     async fn on_delete(&self, _path: &Path) -> Result<WatchAction, WatchError> {
