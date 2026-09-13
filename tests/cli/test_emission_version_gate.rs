@@ -477,7 +477,11 @@ fn serve_twice_in_fresh_workspace_serves_all_tools() {
         !instructions.contains("INDEX STALE"),
         "first serve is not stale\n{instructions}"
     );
-    assert_eq!(tool_count, 9, "first serve lists all tools");
+    assert_eq!(
+        tool_count,
+        codanna::mcp::catalog::ToolKind::ALL.len(),
+        "first serve lists all tools"
+    );
     assert!(status.success(), "first serve exits clean, got {status:?}");
 
     // Reproducer precondition: the skeleton exists with no stored
@@ -496,7 +500,11 @@ fn serve_twice_in_fresh_workspace_serves_all_tools() {
         !instructions.contains("INDEX STALE"),
         "a fresh skeleton is not stale\n{instructions}"
     );
-    assert_eq!(tool_count, 9, "second serve lists all tools");
+    assert_eq!(
+        tool_count,
+        codanna::mcp::catalog::ToolKind::ALL.len(),
+        "second serve lists all tools"
+    );
     assert!(
         status.success(),
         "second serve exits clean, not with the gate code, got {status:?}"

@@ -281,7 +281,11 @@ fn serve_http_stateless_request_without_session() {
     let tools = payload["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("stateless tools/list returns tools\n{payload}"));
-    assert_eq!(tools.len(), 9, "all 9 tools served sessionless\n{payload}");
+    assert_eq!(
+        tools.len(),
+        codanna::mcp::catalog::ToolKind::ALL.len(),
+        "all tools served sessionless\n{payload}"
+    );
 }
 
 /// A legacy client completes the initialize handshake, receives an
@@ -345,8 +349,8 @@ fn serve_http_legacy_client_keeps_session() {
     let payload = response_payload(&body);
     assert_eq!(
         payload["result"]["tools"].as_array().map(Vec::len),
-        Some(9),
-        "all 9 tools on the legacy session\n{payload}"
+        Some(codanna::mcp::catalog::ToolKind::ALL.len()),
+        "all tools on the legacy session\n{payload}"
     );
 }
 
@@ -397,7 +401,7 @@ fn serve_http_no_event_ids_and_reissue_succeeds() {
     );
     assert_eq!(
         payload["result"]["tools"].as_array().map(Vec::len),
-        Some(9),
+        Some(codanna::mcp::catalog::ToolKind::ALL.len()),
         "re-issue serves the full result\n{payload}"
     );
 }
@@ -449,7 +453,7 @@ fn serve_http_stateless_missing_meta_invalid_params() {
     let payload = response_payload(&resp_body);
     assert_eq!(
         payload["result"]["tools"].as_array().map(Vec::len),
-        Some(9),
+        Some(codanna::mcp::catalog::ToolKind::ALL.len()),
         "well-formed request still serves\n{payload}"
     );
 }
@@ -501,7 +505,7 @@ fn serve_http_stateless_missing_protocol_header_coded() {
     let payload = response_payload(&resp_body);
     assert_eq!(
         payload["result"]["tools"].as_array().map(Vec::len),
-        Some(9),
+        Some(codanna::mcp::catalog::ToolKind::ALL.len()),
         "well-formed request still serves\n{payload}"
     );
 }

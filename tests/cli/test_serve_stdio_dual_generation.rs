@@ -256,8 +256,8 @@ fn serve_stdio_answers_discover_and_serves_stateless_request() {
         .unwrap_or_else(|| panic!("stateless tools/list returns tools\n{tools}"));
     assert_eq!(
         list.len(),
-        9,
-        "all 9 tools served without a handshake\n{tools}"
+        codanna::mcp::catalog::ToolKind::ALL.len(),
+        "all tools served without a handshake\n{tools}"
     );
 
     drop(session.stdin);
@@ -317,7 +317,11 @@ fn serve_stdio_legacy_handshake_unaffected() {
     let list = tools["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("legacy tools/list returns tools\n{tools}"));
-    assert_eq!(list.len(), 9, "all 9 tools on the legacy session\n{tools}");
+    assert_eq!(
+        list.len(),
+        codanna::mcp::catalog::ToolKind::ALL.len(),
+        "all tools on the legacy session\n{tools}"
+    );
 
     drop(session.stdin);
     let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
@@ -472,7 +476,7 @@ fn serve_stdio_unsupported_version_fails_closed_per_request() {
     let tools = recv_json(&session.rx);
     assert_eq!(
         tools["result"]["tools"].as_array().map(Vec::len),
-        Some(9),
+        Some(codanna::mcp::catalog::ToolKind::ALL.len()),
         "server keeps serving after the refusal\n{tools}"
     );
 
