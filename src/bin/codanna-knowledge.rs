@@ -1,26 +1,24 @@
 //! Opt-in companion CLI; never changes Codanna's existing indexes.
 #[path = "../knowledge/context.rs"]
 mod context;
+#[path = "../knowledge/contracts.rs"]
+mod contracts;
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
 #[allow(dead_code)]
 #[path = "../knowledge/service.rs"]
 mod service;
-
 use clap::{Parser, Subcommand};
 use std::io::Write;
 use std::path::PathBuf;
-
 #[derive(Parser)]
 #[command(about = "Evidence-linked code and documentation snapshots", version)]
 struct Cli {
     #[command(subcommand)]
     command: Action,
 }
-
 #[derive(Subcommand)]
 enum Action {
-    /// Build a replacement snapshot from the existing Codanna symbol index.
     Index {
         #[arg(long, default_value = ".")]
         root: PathBuf,
@@ -31,13 +29,11 @@ enum Action {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Incoming/outgoing references. Ambiguous names require an entity id.
     Links {
         #[arg(long, default_value = ".codanna/knowledge.json")]
         graph: PathBuf,
         entity: String,
     },
-    /// Bounded implementation, documentation and validation context.
     Context {
         #[arg(long, default_value = ".codanna/knowledge.json")]
         graph: PathBuf,
@@ -56,7 +52,6 @@ enum Action {
         #[arg(long, default_value_t = 2)]
         max_depth: usize,
     },
-    /// Shortest association path (not execution order), excluding candidates.
     Path {
         #[arg(long, default_value = ".codanna/knowledge.json")]
         graph: PathBuf,
@@ -65,13 +60,22 @@ enum Action {
         #[arg(long, default_value_t = 6)]
         max_depth: usize,
     },
-    /// Read-only stdio MCP server. Restart after publishing a new snapshot.
     Serve {
         #[arg(long, default_value = ".codanna/knowledge.json")]
         graph: PathBuf,
     },
+    /// Merge repository snapshots and optionally attach OpenAPI 3.x JSON contracts.
+    Workspace {
+        #[arg(long = "graph", required = true)]
+        graphs: Vec<PathBuf>,
+        #[arg(long)]
+        openapi_repo: Option<String>,
+        #[arg(long)]
+        openapi_path: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
-
 fn run() -> knowledge::Result<()> {
     let result = match Cli::parse().command {
         Action::Index {
@@ -89,7 +93,7 @@ fn run() -> knowledge::Result<()> {
         Action::Links { graph, entity } => {
             let graph = knowledge::io::load(&graph)?;
             let node = graph.resolve(&entity)?;
-            serde_json::json!({"node":node,"incoming":graph.edges.iter().filter(|e| e.to == node.id).collect::<Vec<_>>(),"outgoing":graph.edges.iter().filter(|e| e.from == node.id).collect::<Vec<_>>(),"unresolved":graph.unresolved.iter().filter(|r| r.from == node.id).collect::<Vec<_>>(),"limitations":graph.limitations})
+            serde_json::json!({"node":node,"incoming":graph.edges.iter().filter(|e|e.to==node.id).collect::<Vec<_>>(),"outgoing":graph.edges.iter().filter(|e|e.from==node.id).collect::<Vec<_>>(),"unresolved":graph.unresolved.iter().filter(|r|r.from==node.id).collect::<Vec<_>>(),"limitations":graph.limitations})
         }
         Action::Context {
             graph,
@@ -125,14 +129,41 @@ fn run() -> knowledge::Result<()> {
             serde_json::to_value(context::path(&graph, &source, &target, max_depth)?)?
         }
         Action::Serve { graph } => return service::serve(&graph),
+        Action::Workspace {
+            graphs,
+            openapi_repo,
+            openapi_path,
+            out,
+        } => {
+            let loaded = graphs
+                .iter()
+                .map(|p| knowledge::io::load(p))
+                .collect::<knowledge::Result<Vec<_>>>()?;
+            let mut graph = contracts::merge(loaded)?;
+            match (openapi_repo, openapi_path) {
+                (Some(repo), Some(path)) => {
+                    let text = String::from_utf8(knowledge::io::read_bounded(
+                        &path,
+                        knowledge::MAX_FILE_BYTES as u64,
+                    )?)?;
+                    let relative = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .ok_or("invalid OpenAPI filename")?;
+                    contracts::add_openapi(&mut graph, &repo, relative, &text)?;
+                }
+                (None, None) => {}
+                _ => return Err("openapi-repo and openapi-path must be supplied together".into()),
+            };
+            knowledge::io::save(&graph, &out)?;
+            serde_json::json!({"repositories":graph.repositories.keys().collect::<Vec<_>>(),"nodes":graph.nodes.len(),"edges":graph.edges.len(),"unresolved":graph.unresolved.len(),"snapshot":out})
+        }
     };
     let mut out = std::io::stdout().lock();
-    // Compact JSON is required for the context byte budget; transport newline excluded.
     serde_json::to_writer(&mut out, &result)?;
     writeln!(out)?;
     Ok(())
 }
-
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
