@@ -414,16 +414,9 @@ impl Settings {
     /// Create settings specifically for init_config_file
     /// This populates all dynamic fields based on the current environment
     pub fn for_init() -> Result<Self, Box<dyn std::error::Error>> {
-        // getcwd resolves symlinks on unix but not necessarily elsewhere;
-        // the recorded root must be canonical (see normalize_loaded).
-        let cwd = std::env::current_dir()?;
-        let settings = Self {
-            workspace_root: Some(cwd.canonicalize().unwrap_or(cwd)),
-            // All other fields use defaults (including registry languages)
-            ..Self::default()
-        };
-
-        Ok(settings)
+        // The default .codanna/settings.toml discovers its workspace from its
+        // own location. Omitting an absolute root keeps the file shareable.
+        Ok(Self::default())
     }
 
     /// Load configuration from all sources
@@ -536,12 +529,23 @@ impl Settings {
 
     /// Load configuration from a specific file
     pub fn load_from(path: impl AsRef<std::path::Path>) -> Result<Self, Box<figment::Error>> {
+        let path = path.as_ref().to_path_buf();
+        let detected_root = path.parent().and_then(|config_dir| {
+            (config_dir.file_name()?.to_str()? == crate::init::local_dir_name())
+                .then(|| config_dir.parent().map(PathBuf::from))
+                .flatten()
+        });
         Figment::new()
             .merge(Serialized::defaults(Settings::default()))
-            .merge(Toml::file(path))
+            .merge(Toml::file(&path))
             .merge(Env::prefixed("CI_").split("_"))
             .extract()
-            .map(Settings::normalize_loaded)
+            .map(move |mut settings: Settings| {
+                if settings.workspace_root.is_none() {
+                    settings.workspace_root = detected_root;
+                }
+                settings.normalize_loaded()
+            })
             .map_err(Box::new)
     }
 
@@ -550,10 +554,24 @@ impl Settings {
         &self,
         path: impl AsRef<std::path::Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let parent = path.as_ref().parent().ok_or("Invalid path")?;
+        let path = path.as_ref();
+        let parent = path.parent().ok_or("Invalid path")?;
         std::fs::create_dir_all(parent)?;
 
-        let toml_string = toml::to_string_pretty(self)?;
+        let mut portable = self.clone();
+        if parent.file_name().and_then(|name| name.to_str()) == Some(crate::init::local_dir_name())
+            && let (Some(config_root), Some(workspace_root)) =
+                (parent.parent(), portable.workspace_root.as_ref())
+            && config_root
+                .canonicalize()
+                .unwrap_or_else(|_| config_root.to_path_buf())
+                == workspace_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| workspace_root.clone())
+        {
+            portable.workspace_root = None;
+        }
+        let toml_string = toml::to_string_pretty(&portable)?;
         let toml_with_comments = Self::add_config_comments(toml_string);
         std::fs::write(path, toml_with_comments)?;
 
@@ -1093,6 +1111,45 @@ indexed_paths = ["{path1_str}", "{path2_str}"]
             .canonicalize()
             .unwrap();
         assert_eq!(canonical_loaded, canonical_test);
+    }
+
+    #[test]
+    fn repository_local_paths_remain_portable_when_settings_move() {
+        let dir = TempDir::new().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        let local_dir = crate::init::local_dir_name();
+        for root in [&first, &second] {
+            fs::create_dir_all(root.join(local_dir)).unwrap();
+            fs::create_dir(root.join("src")).unwrap();
+        }
+
+        let mut settings = Settings {
+            workspace_root: Some(first.canonicalize().unwrap()),
+            ..Default::default()
+        };
+        settings.add_indexed_path(first.join("src")).unwrap();
+        assert_eq!(settings.indexing.indexed_paths, vec![PathBuf::from("src")]);
+        assert_eq!(
+            settings.indexed_paths_cache,
+            vec![first.join("src").canonicalize().unwrap()]
+        );
+
+        let first_config = first.join(local_dir).join("settings.toml");
+        settings.save(&first_config).unwrap();
+        let serialized = fs::read_to_string(&first_config).unwrap();
+        assert!(!serialized.contains("workspace_root ="));
+        assert!(serialized.contains("indexed_paths = [\"src\"]"));
+
+        let second_config = second.join(local_dir).join("settings.toml");
+        fs::copy(first_config, &second_config).unwrap();
+        let moved = Settings::load_from(second_config).unwrap();
+        assert_eq!(moved.workspace_root, Some(second.canonicalize().unwrap()));
+        assert_eq!(moved.indexing.indexed_paths, vec![PathBuf::from("src")]);
+        assert_eq!(
+            moved.get_indexed_paths(),
+            vec![second.join("src").canonicalize().unwrap()]
+        );
     }
 
     #[test]

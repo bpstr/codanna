@@ -66,8 +66,7 @@ pub fn add_paths_to_settings(
                 // index is idempotent - report and skip
                 let reason = path.canonicalize().ok().and_then(|canonical| {
                     settings
-                        .indexing
-                        .indexed_paths
+                        .indexed_paths_cache
                         .iter()
                         .find(|existing| canonical.starts_with(existing.as_path()))
                         .and_then(|existing| {

@@ -4,6 +4,34 @@ use super::Settings;
 use std::path::{Path, PathBuf};
 
 impl Settings {
+    fn canonical_indexed_path(&self, path: &Path) -> PathBuf {
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Some(root) = &self.workspace_root {
+            root.join(path)
+        } else {
+            path.to_path_buf()
+        };
+        resolved.canonicalize().unwrap_or(resolved)
+    }
+
+    fn portable_indexed_path(&self, canonical_path: &Path) -> PathBuf {
+        let Some(root) = &self.workspace_root else {
+            return canonical_path.to_path_buf();
+        };
+        let root = root.canonicalize().unwrap_or_else(|_| root.clone());
+        canonical_path
+            .strip_prefix(&root)
+            .map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    relative.to_path_buf()
+                }
+            })
+            .unwrap_or_else(|_| canonical_path.to_path_buf())
+    }
+
     /// The cache is the comparison surface (strip-base selection tests
     /// canonicalized file paths against it); hand-edited or legacy entries
     /// may carry symlink components, so canonicalize here. The serialized
@@ -13,7 +41,7 @@ impl Settings {
             .indexing
             .indexed_paths
             .iter()
-            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .map(|path| self.canonical_indexed_path(path))
             .collect();
     }
 
@@ -49,16 +77,22 @@ impl Settings {
         }
 
         if has_descendants {
-            // Remove any paths that are descendants of the new canonical path
-            self.indexing
-                .indexed_paths
-                .retain(|existing| !existing.starts_with(&canonical_path));
-            self.indexed_paths_cache
-                .retain(|existing| !existing.starts_with(&canonical_path));
+            // The serialized and canonical vectors are aligned. Remove child
+            // entries by their canonical identity even when the stored form is
+            // repository-relative.
+            for index in (0..self.indexed_paths_cache.len()).rev() {
+                if self.indexed_paths_cache[index].starts_with(&canonical_path) {
+                    self.indexed_paths_cache.remove(index);
+                    self.indexing.indexed_paths.remove(index);
+                }
+            }
         }
 
-        // Add the path
-        self.indexing.indexed_paths.push(canonical_path.clone());
+        // Keep repository-owned settings portable while the comparison cache
+        // retains the canonical absolute identity.
+        self.indexing
+            .indexed_paths
+            .push(self.portable_indexed_path(&canonical_path));
         self.indexed_paths_cache.push(canonical_path);
         Ok(())
     }
@@ -69,16 +103,18 @@ impl Settings {
             .canonicalize()
             .map_err(|e| format!("Invalid path: {e}"))?;
 
-        let original_len = self.indexing.indexed_paths.len();
-        self.indexing.indexed_paths.retain(|p| p != &canonical_path);
-        self.indexed_paths_cache.retain(|p| p != &canonical_path);
-
-        if self.indexing.indexed_paths.len() == original_len {
+        let Some(index) = self
+            .indexed_paths_cache
+            .iter()
+            .position(|existing| existing == &canonical_path)
+        else {
             return Err(format!(
                 "Path not found in indexed paths: {}",
                 path.display()
             ));
-        }
+        };
+        self.indexed_paths_cache.remove(index);
+        self.indexing.indexed_paths.remove(index);
 
         Ok(())
     }
@@ -86,6 +122,6 @@ impl Settings {
     /// Get all indexed paths
     /// Returns empty vector if none are configured (maintains backward compatibility)
     pub fn get_indexed_paths(&self) -> Vec<PathBuf> {
-        self.indexing.indexed_paths.clone()
+        self.indexed_paths_cache.clone()
     }
 }

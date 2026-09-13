@@ -9,9 +9,8 @@ use tempfile::TempDir;
 
 #[test]
 fn test_config_relative_path_resolution() {
-    // Create a temp directory to simulate being outside the project
+    // Create a temp directory containing a shareable project configuration.
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
 
     // Create a fake project structure
     let project_dir = temp_dir.path().join("my_project");
@@ -42,21 +41,15 @@ enabled = true
     let tantivy_meta_path = tantivy_dir.join("meta.json");
     std::fs::write(&tantivy_meta_path, "{}").unwrap();
 
-    // Change to a different directory (simulating --config from outside)
-    std::env::set_current_dir(&temp_dir).unwrap();
-
-    // Load settings as if using --config
+    // Load settings as if using --config from any working directory. The
+    // configuration location, rather than process-global cwd, identifies the
+    // workspace and keeps this test safe under parallel execution.
     let settings = Settings::load_from(&settings_path).expect("Should load settings");
 
-    // The problem: index_path is relative but workspace_root is None
     assert_eq!(settings.index_path, PathBuf::from(".codanna/index"));
-    assert!(settings.workspace_root.is_none());
-
-    // This is what currently happens - persistence looks in wrong place
-    let wrong_persistence = IndexPersistence::new(settings.index_path.clone());
-    assert!(
-        !wrong_persistence.exists(),
-        "Should not find index at relative path from temp dir"
+    assert_eq!(
+        settings.workspace_root,
+        Some(project_dir.canonicalize().unwrap())
     );
 
     // Now test that our resolve_index_path function fixes this
@@ -71,7 +64,4 @@ enabled = true
         correct_persistence.exists(),
         "Should find index at correct resolved path"
     );
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
 }

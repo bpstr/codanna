@@ -429,9 +429,8 @@ async fn main() {
                 if missing {
                     std::process::exit(1);
                 }
-            } else if index_preexisted && !config.indexing.indexed_paths.iter().any(|p| p.exists())
-            {
-                for path in &config.indexing.indexed_paths {
+            } else if index_preexisted && !config.indexed_paths_cache.iter().any(|p| p.exists()) {
+                for path in &config.indexed_paths_cache {
                     eprintln!(
                         "Error: Configured path does not exist: {}",
                         codanna::parsing::paths::render_absolute_path(path).display()
@@ -510,7 +509,7 @@ async fn main() {
     let seed_report = if let Some(ref mut idx) = indexer {
         Some(seed_indexer_with_config_paths(
             idx,
-            &config.indexing.indexed_paths,
+            &config.indexed_paths_cache,
         ))
     } else {
         None
@@ -570,8 +569,7 @@ async fn main() {
                     .filter_map(|p| p.canonicalize().ok())
                     .collect();
                 let not_rebuilt: Vec<String> = config
-                    .indexing
-                    .indexed_paths
+                    .indexed_paths_cache
                     .iter()
                     .filter(|p| {
                         let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -606,10 +604,9 @@ async fn main() {
                     "Rebuilding index for configured roots: {}",
                     roots.join(", ")
                 );
-            } else if !config.indexing.indexed_paths.is_empty() {
+            } else if !config.indexed_paths_cache.is_empty() {
                 let roots: Vec<String> = config
-                    .indexing
-                    .indexed_paths
+                    .indexed_paths_cache
                     .iter()
                     .map(|p| {
                         codanna::parsing::paths::render_absolute_path(p)
@@ -674,7 +671,7 @@ async fn main() {
                     // Sync with current config (settings.toml is source of truth)
                     match idx.sync_with_config(
                         stored_paths,
-                        &config.indexing.indexed_paths,
+                        &config.indexed_paths_cache,
                         show_progress,
                     ) {
                         Ok(stats) => {
