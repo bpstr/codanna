@@ -185,6 +185,8 @@ impl ParserFactory {
             Language::Svelte,
             Language::Swift,
             Language::TypeScript,
+            Language::Ruby,
+            Language::Bash,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))

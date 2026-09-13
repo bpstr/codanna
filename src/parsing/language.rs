@@ -25,6 +25,8 @@ pub enum Language {
     Nix,
     Swift,
     Svelte,
+    Ruby,
+    Bash,
 }
 
 impl Language {
@@ -52,6 +54,8 @@ impl Language {
             Language::Nix => super::LanguageId::new("nix"),
             Language::Swift => super::LanguageId::new("swift"),
             Language::Svelte => super::LanguageId::new("svelte"),
+            Language::Ruby => super::LanguageId::new("ruby"),
+            Language::Bash => super::LanguageId::new("bash"),
         }
     }
 
@@ -78,6 +82,8 @@ impl Language {
             "nix" => Some(Language::Nix),
             "swift" => Some(Language::Swift),
             "svelte" => Some(Language::Svelte),
+            "ruby" => Some(Language::Ruby),
+            "bash" => Some(Language::Bash),
             _ => None,
         }
     }
@@ -119,6 +125,8 @@ impl Language {
             "nix" => Some(Language::Nix),
             "swift" => Some(Language::Swift),
             "svelte" => Some(Language::Svelte),
+            "rb" | "rake" | "gemspec" => Some(Language::Ruby),
+            "sh" | "bash" | "zsh" | "bats" => Some(Language::Bash),
             _ => None,
         }
     }
@@ -152,6 +160,8 @@ impl Language {
             Language::Nix => &["nix"],
             Language::Swift => &["swift"],
             Language::Svelte => &["svelte"],
+            Language::Ruby => &["rb", "rake", "gemspec"],
+            Language::Bash => &["sh", "bash", "zsh", "bats"],
         }
     }
 
@@ -175,6 +185,8 @@ impl Language {
             Language::Nix => "nix",
             Language::Swift => "swift",
             Language::Svelte => "svelte",
+            Language::Ruby => "ruby",
+            Language::Bash => "bash",
         }
     }
 
@@ -198,6 +210,8 @@ impl Language {
             Language::Nix => "Nix",
             Language::Swift => "Swift",
             Language::Svelte => "Svelte",
+            Language::Ruby => "Ruby",
+            Language::Bash => "Bash / POSIX shell",
         }
     }
 }

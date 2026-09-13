@@ -5,6 +5,7 @@ mod agent;
 mod architecture;
 #[path = "../knowledge/context.rs"]
 mod context;
+#[allow(dead_code)]
 #[path = "../knowledge/contracts.rs"]
 mod contracts;
 #[path = "../knowledge/drift.rs"]
