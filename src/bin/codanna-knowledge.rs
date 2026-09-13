@@ -1,4 +1,6 @@
 //! Opt-in companion CLI; never changes Codanna's existing indexes.
+#[path = "../knowledge/architecture.rs"]
+mod architecture;
 #[path = "../knowledge/context.rs"]
 mod context;
 #[path = "../knowledge/contracts.rs"]
@@ -86,6 +88,13 @@ enum Action {
         roots: Vec<(String, String)>,
         #[arg(long)]
         fail_on_review: bool,
+    },
+    /// Deterministic structural architecture report over non-candidate relationships.
+    Architecture {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long, default_value_t = 20)]
+        hubs: usize,
     },
 }
 fn parse_root(value: &str) -> Result<(String, String), String> {
@@ -187,6 +196,10 @@ fn run() -> knowledge::Result<()> {
             let report = drift::check(&graph, &roots)?;
             exit_failure = report.errors > 0 || (fail_on_review && report.reviews > 0);
             serde_json::to_value(report)?
+        }
+        Action::Architecture { graph, hubs } => {
+            let graph = knowledge::io::load(&graph)?;
+            serde_json::to_value(architecture::analyze(&graph, hubs)?)?
         }
     };
     let mut out = std::io::stdout().lock();
