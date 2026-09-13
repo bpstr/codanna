@@ -136,14 +136,16 @@ impl IndexMetadata {
     pub fn load(base_path: &Path) -> IndexResult<Self> {
         let metadata_path = base_path.join("index.meta");
 
-        if !metadata_path.exists() {
-            return Ok(Self::new());
-        }
-
-        let json = fs::read_to_string(&metadata_path).map_err(|e| crate::IndexError::FileRead {
-            path: metadata_path.clone(),
-            source: e,
-        })?;
+        let json = match fs::read_to_string(&metadata_path) {
+            Ok(json) => json,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
+            Err(source) => {
+                return Err(crate::IndexError::FileRead {
+                    path: metadata_path.clone(),
+                    source,
+                });
+            }
+        };
 
         serde_json::from_str(&json)
             .map_err(|e| crate::IndexError::General(format!("Failed to parse metadata: {e}")))

@@ -118,6 +118,38 @@ impl Pipeline {
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
     ) -> PipelineResult<SingleFileStats> {
+        self.index_file_content(path, index, semantic, embedding_pool, None, None)
+    }
+
+    /// Consume a bounded, pre-read source without reopening it after authorization.
+    pub(crate) fn index_prepared_file(
+        &self,
+        content: super::FileContent,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
+        pending: &mut PendingResolution,
+    ) -> PipelineResult<SingleFileStats> {
+        let path = content.path.clone();
+        self.index_file_content(
+            &path,
+            index,
+            semantic,
+            embedding_pool,
+            Some(content),
+            Some(pending),
+        )
+    }
+
+    fn index_file_content(
+        &self,
+        path: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
+        prepared: Option<super::FileContent>,
+        mut pending: Option<&mut PendingResolution>,
+    ) -> PipelineResult<SingleFileStats> {
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
 
@@ -144,12 +176,17 @@ impl Pipeline {
 
         // Read file using ReadStage (with absolute path for fs access)
         let read_stage = ReadStage::new(1);
-        let mut file_content = read_stage.read_single(&path.to_path_buf())?;
+        let mut file_content = match prepared {
+            Some(content) => content,
+            None => read_stage.read_single(&path.to_path_buf())?,
+        };
         // Use normalized path for storage consistency with full index
         file_content.path = normalized_path.to_path_buf();
         let content_hash = file_content.hash.clone();
 
         // Check if file already exists by querying Tantivy
+        let before_generation = index.generation();
+        let mut changed_file_ids = Vec::with_capacity(2);
         let mut existing_changed = false;
         let mut captured_inbound: Vec<
             crate::indexing::pipeline::stages::cleanup::CapturedInboundEdge,
@@ -167,6 +204,7 @@ impl Pipeline {
                 });
             }
             existing_changed = true;
+            changed_file_ids.push(existing_file_id);
         }
 
         // Parse BEFORE cleanup: parse is pure (settings-only), so a parse
@@ -247,6 +285,9 @@ impl Pipeline {
         // Replacements are visible now, so the captured edges can find their
         // new targets. Runs after the commit because the rebind looks the
         // targets up through the searcher.
+        if let Some(pending) = pending.as_mut() {
+            pending.captured_inbound.append(&mut captured_inbound);
+        }
         if !captured_inbound.is_empty() {
             let rebind_stage = if let Some(ref sem) = semantic {
                 CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
@@ -290,17 +331,40 @@ impl Pipeline {
             }
         }
 
-        // Build symbol cache for resolution
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        // Refresh only this file in a warm cache; unrelated symbols retain
+        // their allocations. External/bulk changes cause a guarded rebuild.
+        changed_file_ids.push(file_id);
+        let symbol_cache = self.resolution_cache(
+            &index,
+            Some(before_generation),
+            &changed_file_ids,
+            !unresolved.is_empty(),
+        )?;
+
+        if let Some(pending) = pending {
+            pending.ran = true;
+            pending.unresolved.extend(unresolved);
+            pending.variable_bindings.extend(variable_bindings);
+            pending.this_barriers.extend(this_barrier_spans);
+            return Ok(SingleFileStats {
+                file_id,
+                indexed: true,
+                cached: false,
+                symbols_found,
+                relationships_resolved: 0,
+                elapsed: start.elapsed(),
+            });
+        }
 
         // Run Phase 2 resolution
         let phase2_stats = self.run_phase2(
             unresolved,
             variable_bindings,
             this_barrier_spans,
-            symbol_cache,
-            index,
+            Arc::clone(&symbol_cache),
+            Arc::clone(&index),
         )?;
+        self.finish_resolution_cache(&index, &symbol_cache)?;
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
@@ -701,12 +765,13 @@ impl Pipeline {
         }
         let semantic_path = self.settings.index_path.join("semantic");
 
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let symbol_cache =
+            self.resolution_cache(&index, None, &[], !pending.unresolved.is_empty())?;
         let phase2_stats = self.run_phase2_maybe_bar(
             pending.unresolved,
             pending.variable_bindings,
             pending.this_barriers,
-            symbol_cache,
+            Arc::clone(&symbol_cache),
             Arc::clone(&index),
             show_progress,
         )?;
@@ -723,6 +788,7 @@ impl Pipeline {
             rebind_stage.rebind_inbound_edges(&pending.captured_inbound)?;
         }
 
+        self.finish_resolution_cache(&index, &symbol_cache)?;
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
 
@@ -876,7 +942,10 @@ impl Pipeline {
         // Seed the cache from the persisted index: the run-scoped cache
         // holds only this run's files, hiding unchanged files' symbols
         // and re-export aliases from resolution.
-        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let symbol_cache = Arc::new(SymbolLookupCache::for_pending_relationships(
+            &index,
+            &unresolved,
+        )?);
         let phase2_stats = self.run_phase2_maybe_bar(
             unresolved,
             variable_bindings,

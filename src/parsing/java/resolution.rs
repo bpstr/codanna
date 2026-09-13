@@ -4,7 +4,8 @@
 //!
 //! Java resolution order: local � class � file � imported � package
 //!
-//! TODO: Implement methods after exploring actual Java AST with tree-sitter.
+//! Resolves scoped symbols and inheritance through Java-specific contexts.
+//! Unimplemented type-inference cases remain documented at their methods.
 
 use crate::parsing::{
     InheritanceResolver, ResolutionScope, ScopeLevel, ScopeType, resolution::ImportBinding,

@@ -65,6 +65,12 @@ pub enum ProfileError {
     #[error("IO error: {0}\nSuggestion: Check file permissions and disk space")]
     IoError(#[from] io::Error),
 
+    #[error("{operation} completed only partially:\n{}\nRetry the failed entries; their state was preserved.", .failures.join("\n"))]
+    PartialFailure {
+        operation: String,
+        failures: Vec<String>,
+    },
+
     #[error("{primary}\nRollback also failed:\n{}", .failures.join("\n"))]
     RollbackFailed {
         primary: Box<ProfileError>,
@@ -108,9 +114,9 @@ impl ProfileError {
             | ProfileError::ProviderNotFound { .. }
             | ProfileError::ProfileNotFoundInProvider { .. }
             | ProfileError::ProfileNotFoundInAnyProvider { .. } => ExitCode::NotFound,
-            ProfileError::GitOperationFailed { .. } | ProfileError::IoError(_) => {
-                ExitCode::GeneralError
-            }
+            ProfileError::GitOperationFailed { .. }
+            | ProfileError::IoError(_)
+            | ProfileError::PartialFailure { .. } => ExitCode::GeneralError,
             ProfileError::RollbackFailed { primary, .. } => primary.exit_code(),
         }
     }

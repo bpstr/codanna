@@ -54,112 +54,128 @@ impl NotificationBroadcaster {
         }
     }
 
+    #[cfg(all(test, feature = "https-server"))]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.sender.receiver_count()
+    }
+
     /// Subscribe to receive notifications
     pub fn subscribe(&self) -> broadcast::Receiver<FileChangeEvent> {
         self.sender.subscribe()
     }
 }
 
-/// Extension trait for MCP server to handle notifications
+/// Shared only by clones belonging to one MCP session. The listener holds the
+/// token, never this owner or the server/facade; final session drop cancels it.
+#[derive(Default)]
+pub(super) struct NotificationSession {
+    cancellation: tokio_util::sync::CancellationToken,
+}
+
+impl NotificationSession {
+    pub(super) fn token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancellation.clone()
+    }
+}
+
+impl Drop for NotificationSession {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
+}
+
+pub(super) async fn notify_change(
+    peer: &rmcp::service::Peer<rmcp::RoleServer>,
+    event: FileChangeEvent,
+) -> Result<(), rmcp::service::ServiceError> {
+    #[allow(deprecated)]
+    use rmcp::model::{
+        LoggingLevel, LoggingMessageNotificationParam, ResourceUpdatedNotificationParam,
+    };
+    match event {
+        FileChangeEvent::FileReindexed { path } => {
+            peer.notify_resource_updated(ResourceUpdatedNotificationParam::new(resource_uri(
+                &path,
+            )))
+            .await?;
+            #[allow(deprecated)]
+            peer.notify_logging_message(
+                LoggingMessageNotificationParam::new(
+                    LoggingLevel::Info,
+                    serde_json::json!({"action": "re-indexed", "file": resource_uri(&path)}),
+                )
+                .with_logger("codanna"),
+            )
+            .await?;
+        }
+        _ => peer.notify_resource_list_changed().await?,
+    }
+    Ok(())
+}
+
+// The same lifecycle loop is exercised with deterministic in-memory transports
+// in tests. No facade/store guard is retained while notification I/O is pending.
+async fn forward_changes<F, Fut, E>(
+    mut receiver: broadcast::Receiver<FileChangeEvent>,
+    cancellation: tokio_util::sync::CancellationToken,
+    mut send: F,
+) where
+    F: FnMut(FileChangeEvent) -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    loop {
+        let event = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => break,
+            event = receiver.recv() => match event {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(count)) => {
+                    tracing::warn!(target: "mcp", count, "notification listener lagged; requesting resync");
+                    FileChangeEvent::IndexReloaded
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+        };
+        let sent = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => break,
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), send(event)) => result,
+        };
+        match sent {
+            Ok(Ok(())) => crate::debug_event!("mcp-notify", "sent"),
+            _ => {
+                // Transport errors can contain payloads. Do not log them.
+                tracing::warn!(target: "mcp", "notification delivery failed or timed out; closing listener");
+                break;
+            }
+        }
+    }
+}
+
+pub(super) async fn forward_notifications(
+    peer: rmcp::service::Peer<rmcp::RoleServer>,
+    receiver: broadcast::Receiver<FileChangeEvent>,
+    cancellation: tokio_util::sync::CancellationToken,
+) {
+    forward_changes(receiver, cancellation, move |event| {
+        let peer = peer.clone();
+        async move { notify_change(&peer, event).await }
+    })
+    .await;
+}
+
 impl super::CodeIntelligenceServer {
-    /// Start listening for broadcast notifications and forward them via MCP
+    /// Forward changes for an initialized session. Normal transports install
+    /// this listener during initialize, without a sleep or shared global peer.
     pub async fn start_notification_listener(
         &self,
-        mut receiver: broadcast::Receiver<FileChangeEvent>,
+        receiver: broadcast::Receiver<FileChangeEvent>,
     ) {
-        // Logging types are deprecated by SEP-2577; keep emitting them for client
-        // compatibility until rmcp removes the API.
-        #[allow(deprecated)]
-        use rmcp::model::{
-            LoggingLevel, LoggingMessageNotificationParam, ResourceUpdatedNotificationParam,
-        };
-
-        crate::debug_event!("mcp-notify", "listening");
-
-        loop {
-            match receiver.recv().await {
-                Ok(event) => {
-                    crate::debug_event!("mcp-notify", "received", "{event:?}");
-
-                    let peer_guard = self.peer.lock().await;
-                    if let Some(peer) = peer_guard.as_ref() {
-                        match event {
-                            FileChangeEvent::FileReindexed { path } => {
-                                // Portable-form: the wire path and URI must
-                                // byte-match subscriptions on every platform
-                                let path_str = crate::parsing::paths::portable_join(&path)
-                                    .unwrap_or_else(|| {
-                                        crate::parsing::paths::render_absolute_path(&path)
-                                            .display()
-                                            .to_string()
-                                    });
-
-                                // Send standard MCP resource updated notification (backwards compatible)
-                                let _ = peer
-                                    .notify_resource_updated(ResourceUpdatedNotificationParam::new(
-                                        format!("file://{path_str}"),
-                                    ))
-                                    .await;
-
-                                // Send logging message (backwards compatible)
-                                #[allow(deprecated)]
-                                let _ = peer
-                                    .notify_logging_message(
-                                        LoggingMessageNotificationParam::new(
-                                            LoggingLevel::Info,
-                                            serde_json::json!({
-                                                "action": "re-indexed",
-                                                "file": path_str
-                                            }),
-                                        )
-                                        .with_logger("codanna"),
-                                    )
-                                    .await;
-
-                                crate::debug_event!(
-                                    "mcp-notify",
-                                    "sent",
-                                    "FileReindexed {path_str}"
-                                );
-                            }
-                            FileChangeEvent::FileCreated { path } => {
-                                let _ = peer.notify_resource_list_changed().await;
-
-                                crate::debug_event!(
-                                    "mcp-notify",
-                                    "sent",
-                                    "FileCreated {}",
-                                    crate::parsing::paths::render_absolute_path(&path).display()
-                                );
-                            }
-                            FileChangeEvent::FileDeleted { path } => {
-                                let _ = peer.notify_resource_list_changed().await;
-
-                                crate::debug_event!(
-                                    "mcp-notify",
-                                    "sent",
-                                    "FileDeleted {}",
-                                    crate::parsing::paths::render_absolute_path(&path).display()
-                                );
-                            }
-                            FileChangeEvent::IndexReloaded => {
-                                let _ = peer.notify_resource_list_changed().await;
-
-                                crate::debug_event!("mcp-notify", "sent", "IndexReloaded");
-                            }
-                        }
-                    } else {
-                        crate::debug_event!("mcp-notify", "dropped", "no peer");
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("[mcp-notify] lagged by {n} messages");
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    crate::debug_event!("mcp-notify", "channel closed");
-                    break;
-                }
-            }
+        let peer = self.peer.lock().await.clone();
+        if let Some(peer) = peer {
+            forward_notifications(peer, receiver, self.notification_session.token()).await;
+        } else {
+            tracing::warn!(target: "mcp", "notification listener requires an initialized session");
         }
     }
 }
@@ -176,5 +192,79 @@ mod tests {
     fn resource_uri_is_portable_form_on_every_platform() {
         let path = std::path::Path::new("src").join("alpha.rs");
         assert_eq!(resource_uri(&path), "file://src/alpha.rs");
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn hardening_review_notification_failure_drops_subscription() {
+        let broadcaster = NotificationBroadcaster::new(8);
+        let receiver = broadcaster.subscribe();
+        broadcaster.send(FileChangeEvent::IndexReloaded);
+        forward_changes(
+            receiver,
+            tokio_util::sync::CancellationToken::new(),
+            |_| async { Err::<(), _>("closed mock transport") },
+        )
+        .await;
+        assert_eq!(broadcaster.sender.receiver_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn hardening_review_notification_session_drop_cancels_idle_listener() {
+        let broadcaster = NotificationBroadcaster::new(8);
+        let session = Arc::new(NotificationSession::default());
+        let other_owner = session.clone();
+        let token = session.token();
+        drop(session);
+        assert!(!token.is_cancelled());
+        let receiver = broadcaster.subscribe();
+        let task = tokio::spawn(forward_changes(receiver, token.clone(), |_| async {
+            Ok::<(), ()>(())
+        }));
+        drop(other_owner);
+        assert!(token.is_cancelled());
+        task.await.unwrap();
+        assert_eq!(broadcaster.sender.receiver_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn hardening_review_notification_sessions_are_independent() {
+        let broadcaster = NotificationBroadcaster::new(8);
+        let first = NotificationSession::default();
+        let second = NotificationSession::default();
+        let first_receiver = broadcaster.subscribe();
+        let second_receiver = broadcaster.subscribe();
+        let deliveries = Arc::new(AtomicUsize::new(0));
+        let first_token = first.token();
+        drop(first);
+        broadcaster.send(FileChangeEvent::IndexReloaded);
+        let count = deliveries.clone();
+        let token = second.token();
+        forward_changes(first_receiver, first_token, |_| async {
+            panic!("closed session received an event");
+            #[allow(unreachable_code)]
+            Ok::<(), ()>(())
+        })
+        .await;
+        forward_changes(second_receiver, token.clone(), move |_| {
+            let count = count.clone();
+            let token = token.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                token.cancel();
+                Ok::<(), ()>(())
+            }
+        })
+        .await;
+        assert_eq!(deliveries.load(Ordering::SeqCst), 1);
+        assert_eq!(broadcaster.sender.receiver_count(), 0);
     }
 }

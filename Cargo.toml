@@ -45,6 +45,7 @@ dashmap = "6.2.1"
 dirs = "6.0.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 ignore = "0.4.33"
+fs4 = "0.13.1"
 memmap2 = "0.9.11"
 notify = "8.2.0"
 num_cpus = "1.17.0"
@@ -54,6 +55,7 @@ rmcp = { version = "3.1.4", features = ["server", "client", "transport-io", "tra
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+subtle = "2.6.1"
 hex = "0.4"
 tantivy = "0.26.1"
 thiserror = "2.0.20"
@@ -110,6 +112,8 @@ indexmap = { version = "2.14.0", features = ["serde"] }
 tree-sitter-svelte-next = "0.1.1"
 
 [dev-dependencies]
+# Observe actual server-side SSE body closure in local transport fixtures.
+http-body = "1.0.1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.28.0"

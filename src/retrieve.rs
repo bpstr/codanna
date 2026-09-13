@@ -12,6 +12,21 @@ use crate::symbol::context::SymbolContext;
 use serde::Serialize;
 use std::fmt::Display;
 
+// `retrieve` preserves its typed CLI exit vocabulary (not found = 3,
+// invalid query = 1). MCP keeps its distinct 1/2 envelope vocabulary.
+// Declared JSON outcomes must match the process code in both interfaces.
+fn not_found_envelope<T>(message: impl Into<String>) -> Envelope<T> {
+    let mut envelope = Envelope::not_found(message);
+    envelope.exit_code = ExitCode::NotFound as u8;
+    envelope
+}
+
+fn query_error_envelope<T>(code: ResultCode, message: impl Into<String>) -> Envelope<T> {
+    let mut envelope = Envelope::error(code, message);
+    envelope.exit_code = ExitCode::GeneralError as u8;
+    envelope
+}
+
 // =============================================================================
 // QueryContext - Shared abstraction for retrieve commands
 // =============================================================================
@@ -101,7 +116,7 @@ impl<'a> QueryContext<'a> {
     /// Output not-found result.
     pub fn output_not_found(&self, query: &str) -> ExitCode {
         if self.format == OutputFormat::Json {
-            let envelope: Envelope<()> = Envelope::not_found(format!(
+            let envelope: Envelope<()> = not_found_envelope(format!(
                 "No symbol found for '{query}'"
             ))
             .with_entity_type(self.entity_type)
@@ -129,7 +144,7 @@ impl<'a> QueryContext<'a> {
                 .map(|s| format!("symbol_id:{}", s.id.value()))
                 .collect();
 
-            let envelope: Envelope<()> = Envelope::error(
+            let envelope: Envelope<()> = query_error_envelope(
                 ResultCode::InvalidQuery,
                 format!(
                     "Ambiguous: found {} symbol(s) named '{query}'",
@@ -195,7 +210,7 @@ impl<'a> QueryContext<'a> {
     /// Output invalid symbol_id error.
     pub fn output_invalid_id(&self, id: &str) -> ExitCode {
         if self.format == OutputFormat::Json {
-            let envelope: Envelope<()> = Envelope::error(
+            let envelope: Envelope<()> = query_error_envelope(
                 ResultCode::InvalidQuery,
                 format!("Invalid symbol_id format: '{id}'"),
             )
@@ -312,7 +327,7 @@ pub fn retrieve_symbol(
             Err(_) => {
                 // Invalid symbol_id format
                 if format == OutputFormat::Json {
-                    let envelope: Envelope<()> = Envelope::error(
+                    let envelope: Envelope<()> = query_error_envelope(
                         ResultCode::InvalidQuery,
                         format!("Invalid symbol_id format: '{id_str}'"),
                     )
@@ -338,7 +353,7 @@ pub fn retrieve_symbol(
     if symbols.is_empty() {
         // Not found
         if format == OutputFormat::Json {
-            let envelope: Envelope<()> = Envelope::not_found(format!("No symbol found for '{name}'"))
+            let envelope: Envelope<()> = not_found_envelope(format!("No symbol found for '{name}'"))
                 .with_entity_type(EnvelopeEntityType::Symbol)
                 .with_query(name)
                 .with_hint("Use codanna retrieve search <query> for fuzzy matching, or try semantic_search_with_context");
@@ -635,7 +650,7 @@ pub fn retrieve_search(
     if format == OutputFormat::Json {
         // Build envelope
         let envelope = if results_with_context.is_empty() {
-            Envelope::not_found(format!("No results for '{query}'"))
+            not_found_envelope(format!("No results for '{query}'"))
                 .with_entity_type(EnvelopeEntityType::SearchResult)
                 .with_query(query)
                 .with_hint("Try broader search terms or use semantic_search_with_context")

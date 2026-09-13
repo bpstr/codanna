@@ -1,14 +1,15 @@
 //! Go grammar audit.
 
 use super::helpers::{
-    AuditData, LanguageAuditConfig, run_comprehensive_analysis, run_tree_structure_analysis,
+    AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis,
+    run_tree_structure_analysis,
 };
 use codanna::parsing::go::audit::GoParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Go",
     file_extension: "go",
-    grammar_json_path: "contributing/parsers/go/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/go/node-types.json"),
     example_file_path: "examples/go/comprehensive.go",
     output_dir: "contributing/parsers/go",
 };

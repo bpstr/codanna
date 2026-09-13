@@ -3,6 +3,42 @@
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
+/// Server-owned resource budgets. Internal full-index enumerations are not search APIs.
+pub const MAX_SEARCH_LIMIT: u32 = 1000;
+pub const MAX_IMPACT_DEPTH: u32 = 10;
+
+pub(crate) fn validate_search_limit(limit: u32) -> Result<(), rmcp::model::ErrorData> {
+    if (1..=MAX_SEARCH_LIMIT).contains(&limit) {
+        return Ok(());
+    }
+    Err(rmcp::model::ErrorData::invalid_params(
+        format!("limit must be between 1 and {MAX_SEARCH_LIMIT}"),
+        None,
+    ))
+}
+
+pub(crate) fn validate_impact_depth(depth: u32) -> Result<(), rmcp::model::ErrorData> {
+    if (1..=MAX_IMPACT_DEPTH).contains(&depth) {
+        return Ok(());
+    }
+    Err(rmcp::model::ErrorData::invalid_params(
+        format!("max_depth must be between 1 and {MAX_IMPACT_DEPTH}"),
+        None,
+    ))
+}
+
+fn deserialize_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(d)?;
+    validate_search_limit(value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+fn deserialize_depth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(d)?;
+    validate_impact_depth(value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindSymbolRequest {
@@ -45,7 +81,12 @@ pub struct AnalyzeImpactRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol_id: Option<u32>,
     /// Maximum depth to search (default: 3)
-    #[serde(default = "default_depth", alias = "depth")]
+    #[serde(
+        default = "default_depth",
+        alias = "depth",
+        deserialize_with = "deserialize_depth"
+    )]
+    #[schemars(range(min = 1, max = 10))]
     pub max_depth: u32,
 }
 
@@ -55,7 +96,8 @@ pub struct SearchSymbolsRequest {
     /// Search query (supports fuzzy matching)
     pub query: String,
     /// Maximum number of results (default: 10)
-    #[serde(default = "default_limit")]
+    #[serde(default = "default_limit", deserialize_with = "deserialize_limit")]
+    #[schemars(range(min = 1, max = 1000))]
     pub limit: u32,
     /// Filter by symbol kind (e.g., "Function", "Struct", "Trait")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,7 +116,8 @@ pub struct SemanticSearchRequest {
     /// Natural language search query
     pub query: String,
     /// Maximum number of results (default: 10)
-    #[serde(default = "default_limit")]
+    #[serde(default = "default_limit", deserialize_with = "deserialize_limit")]
+    #[schemars(range(min = 1, max = 1000))]
     pub limit: u32,
     /// Minimum similarity score (0-1)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +133,11 @@ pub struct SemanticSearchWithContextRequest {
     /// Natural language search query
     pub query: String,
     /// Maximum number of results (default: 5, as each includes full context)
-    #[serde(default = "default_context_limit")]
+    #[serde(
+        default = "default_context_limit",
+        deserialize_with = "deserialize_limit"
+    )]
+    #[schemars(range(min = 1, max = 1000))]
     pub limit: u32,
     /// Minimum similarity score (0-1)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,7 +187,11 @@ pub struct SearchDocumentsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
     /// Maximum number of results (default: 5)
-    #[serde(default = "default_context_limit")]
+    #[serde(
+        default = "default_context_limit",
+        deserialize_with = "deserialize_limit"
+    )]
+    #[schemars(range(min = 1, max = 1000))]
     pub limit: u32,
 }
 
@@ -216,6 +267,45 @@ mod tests {
         assert!(
             msg.contains("bogus") && msg.contains("function_name"),
             "rejection must name the offending field and the accepted set: {msg}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod review_limit_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_search_limits_reject_zero_and_excessive_values() {
+        for limit in [0, MAX_SEARCH_LIMIT + 1, u32::MAX] {
+            let value = serde_json::json!({"query": "q", "limit": limit});
+            assert!(serde_json::from_value::<SearchSymbolsRequest>(value.clone()).is_err());
+            assert!(serde_json::from_value::<SemanticSearchRequest>(value.clone()).is_err());
+            assert!(
+                serde_json::from_value::<SemanticSearchWithContextRequest>(value.clone()).is_err()
+            );
+            assert!(serde_json::from_value::<SearchDocumentsRequest>(value).is_err());
+            assert!(validate_search_limit(limit).is_err());
+        }
+        for limit in [1, MAX_SEARCH_LIMIT] {
+            let value = serde_json::json!({"query": "q", "limit": limit});
+            assert_eq!(
+                serde_json::from_value::<SearchSymbolsRequest>(value)
+                    .unwrap()
+                    .limit,
+                limit
+            );
+        }
+        for key in ["depth", "max_depth"] {
+            for depth in [0, MAX_IMPACT_DEPTH + 1, u32::MAX] {
+                let value = serde_json::json!({key: depth});
+                assert!(serde_json::from_value::<AnalyzeImpactRequest>(value).is_err());
+            }
+        }
+        assert_eq!(
+            serde_json::from_value::<SearchSymbolsRequest>(serde_json::json!({"query":"q"}))
+                .unwrap()
+                .limit,
+            10
         );
     }
 }

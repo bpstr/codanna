@@ -108,24 +108,9 @@ pub fn resolve_find_symbol_target(
 /// and `analyze_impact`'s `depth` are CLI/alias sugar: the serve schema
 /// carries them as the `name` string form and a serde alias respectively.
 pub fn tool_param_spec(tool: &str) -> (&'static [&'static str], &'static [&'static str]) {
-    match tool {
-        "find_symbol" => (&["name", "symbol_id", "lang"], &["name"]),
-        "get_calls" | "find_callers" => (
-            &["function_name", "symbol_id"],
-            &["function_name", "symbol_id"],
-        ),
-        "analyze_impact" => (
-            &["symbol_name", "symbol_id", "max_depth", "depth"],
-            &["symbol_name", "symbol_id"],
-        ),
-        "get_index_info" => (&[], &[]),
-        "search_symbols" => (&["query", "limit", "kind", "module", "lang"], &["query"]),
-        "semantic_search_docs" | "semantic_search_with_context" => {
-            (&["query", "limit", "threshold", "lang"], &["query"])
-        }
-        "search_documents" => (&["query", "collection", "limit"], &["query"]),
-        _ => (&[], &[]),
-    }
+    super::catalog::ToolKind::parse(tool)
+        .map(|kind| kind.params())
+        .unwrap_or((&[], &[]))
 }
 
 /// Message for a call missing its required parameter(s); one wording for

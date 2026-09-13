@@ -75,6 +75,7 @@ impl Language {
             "java" => Some(Language::Java),
             "kotlin" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
+            "nix" => Some(Language::Nix),
             "swift" => Some(Language::Swift),
             "svelte" => Some(Language::Svelte),
             _ => None,
@@ -96,8 +97,8 @@ impl Language {
             }
         }
 
-        // Fallback to hardcoded for languages not yet in registry
-        // (JavaScript and TypeScript don't have definitions yet)
+        // Compatibility fallback when registry access or extension lookup fails.
+        // JavaScript and TypeScript are registered; completeness tests guard parity.
         match ext_lower.as_str() {
             "rs" => Some(Language::Rust),
             "py" | "pyi" => Some(Language::Python),

@@ -1,0 +1,98 @@
+name: Review security regressions
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-regressions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  review-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Deterministic Rust and plugin regressions
+        run: bash contributing/scripts/review-regressions.sh 2>&1 | tee "$RUNNER_TEMP/review-regressions.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-regressions-log
+          path: ${{ runner.temp }}/review-regressions.log
+          retention-days: 7
+
+  browser:
+    name: Browser reflow and accessibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.12.1'
+      - name: Install locked example dependencies
+        working-directory: examples/typescript/react
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Type-check reviewed example pages
+        working-directory: examples/typescript/react
+        run: node node_modules/typescript/bin/tsc -p tsconfig.review.json --noEmit --pretty false
+      - name: Exercise real React pages in Chromium
+        run: |
+          command -v google-chrome
+          export CHROME_BIN="$(command -v google-chrome)"
+          export REVIEW_BROWSER_OUTPUT="$RUNNER_TEMP/browser"
+          cd examples/typescript/react
+          node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3040 > "$RUNNER_TEMP/next.log" 2>&1 &
+          next_pid=$!
+          trap 'kill "$next_pid" 2>/dev/null || true' EXIT
+          cd ../../..
+          ready=0
+          for attempt in {1..90}; do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3040/examples/mail > /dev/null; then
+              ready=1
+              break
+            fi
+            kill -0 "$next_pid"
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/next.log"
+            echo 'Example server did not become ready' >&2
+            exit 1
+          fi
+          node contributing/scripts/review-browser.mjs 2>&1 | tee "$RUNNER_TEMP/browser.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-browser-witness
+          path: |
+            ${{ runner.temp }}/browser
+            ${{ runner.temp }}/browser.log
+            ${{ runner.temp }}/next.log
+          retention-days: 7

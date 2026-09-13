@@ -11,7 +11,7 @@ use tantivy::{
 use super::{DocumentIndex, SearchResult};
 
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
-fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
+pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
     Some(match kind {
         "Calls" => RelationKind::Calls,
         "CalledBy" => RelationKind::CalledBy,
@@ -54,6 +54,12 @@ impl DocumentIndex {
         module_filter: Option<&str>,
         language_filter: Option<&str>,
     ) -> StorageResult<Vec<SearchResult>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(StorageError::InvalidFieldValue {
+                field: "limit".into(),
+                reason: "search limit must be between 1 and 1000".into(),
+            });
+        }
         let searcher = self.reader.searcher();
 
         let query_parser = QueryParser::for_index(
@@ -579,6 +585,13 @@ impl DocumentIndex {
     pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
 
+        // Enumeration is intentionally uncapped, but its collector must never reserve
+        // beyond the actual index or pass zero to Tantivy.
+        let limit = limit.min(usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX));
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         // Use pre-filtering query instead of AllQuery + post-filtering
         // This matches the pattern used in find_symbols_by_name and find_symbols_by_file
         let query = BooleanQuery::from(vec![(
@@ -735,13 +748,13 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
 
-        // Use TopDocs to get all file_info documents
-        // Note: Adjust limit if you have more than 100k files
-        let collector = TopDocs::with_limit(100_000).order_by_score();
-        let top_docs = searcher.search(&query, &collector)?;
-
-        let mut paths = Vec::new();
-        for (_score, doc_address) in top_docs {
+        let mut addresses: Vec<_> = searcher
+            .search(&query, &tantivy::collector::DocSetCollector)?
+            .into_iter()
+            .collect();
+        addresses.sort_unstable();
+        let mut paths = Vec::with_capacity(addresses.len());
+        for doc_address in addresses {
             let doc: Document = searcher.doc(doc_address)?;
 
             // Extract file_path field
@@ -2716,5 +2729,21 @@ mod tests {
             .get_imports_for_file(FileId::new(99).unwrap())
             .unwrap();
         assert!(none.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod review_budget_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_storage_limits_do_not_panic_or_allocate_from_caller_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = DocumentIndex::new(dir.path(), &crate::Settings::default()).unwrap();
+        for limit in [0, 1001, usize::MAX] {
+            assert!(index.search("q", limit, None, None, None).is_err());
+        }
+        assert!(index.get_all_symbols(0).unwrap().is_empty());
+        assert!(index.get_all_symbols(usize::MAX).unwrap().is_empty());
+        assert!(index.search("q", 10, None, None, None).unwrap().is_empty());
     }
 }

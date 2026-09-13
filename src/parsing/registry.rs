@@ -1,10 +1,10 @@
 //! Language registry for dynamic language discovery and management
 //!
 //! This module provides a registry system that:
-//! - Auto-discovers all available language parsers at startup
+//! - Registers compiled language definitions at startup
 //! - Integrates with settings.toml for enable/disable control
-//! - Provides zero-cost lookups (returning references)
-//! - Enables adding new languages without modifying core code
+//! - Returns borrowed definitions through keyed lookups
+//! - Centralizes parser/behavior construction; compatibility catalogs are checked by tests
 //!
 //! # Architecture
 //!
@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Type-safe language identifier
 ///
-/// Uses &'static str for zero-cost comparisons and storage.
+/// Stores a borrowed static string; equality and hashing compare its contents.
 /// The string must be a compile-time constant (language key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LanguageId(&'static str);
@@ -219,6 +219,12 @@ impl LanguageRegistry {
     #[must_use]
     pub fn get(&self, id: LanguageId) -> Option<&dyn LanguageDefinition> {
         self.definitions.get(&id).map(|def| def.as_ref())
+    }
+
+    /// Clone a definition handle so callers can construct a behavior after
+    /// releasing the registry mutex.
+    pub(crate) fn shared_definition(&self, id: LanguageId) -> Option<Arc<dyn LanguageDefinition>> {
+        self.definitions.get(&id).cloned()
     }
 
     /// Get a language by file extension

@@ -20,7 +20,7 @@ impl CodeIntelligenceServer {
         &self,
         Parameters(_params): Parameters<GetIndexInfoRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.facade.read().await;
+        crate::runtime::read(&self.facade, move |indexer| {
         let symbol_count = indexer.symbol_count();
         let file_count = indexer.file_count();
         let relationship_count = indexer.relationship_count();
@@ -59,6 +59,7 @@ impl CodeIntelligenceServer {
         );
 
         Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(description = "Search documentation using natural language semantic search")]
@@ -71,7 +72,8 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.facade.read().await;
+        crate::mcp::requests::validate_search_limit(limit)?;
+        crate::runtime::read(&self.facade, move |indexer| {
 
         tracing::debug!(
             target: "mcp",
@@ -84,7 +86,7 @@ impl CodeIntelligenceServer {
             // Check if semantic files exist
             let semantic_path = indexer.settings().index_path.join("semantic");
             let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("segment_0.vec").exists();
+            let vectors_exist = semantic_path.join("metadata.json").exists();
             let symbol_count = indexer.symbol_count();
 
             // Get current working directory for debugging
@@ -184,6 +186,7 @@ impl CodeIntelligenceServer {
                 "Semantic search failed: {e}"
             ))])),
         }
+        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(
@@ -198,7 +201,8 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchWithContextRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.facade.read().await;
+        crate::mcp::requests::validate_search_limit(limit)?;
+        crate::runtime::read(&self.facade, move |indexer| {
 
         if !indexer.has_semantic_search() {
             tracing::debug!(
@@ -210,7 +214,7 @@ impl CodeIntelligenceServer {
             // Check if semantic files exist
             let semantic_path = indexer.settings().index_path.join("semantic");
             let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("segment_0.vec").exists();
+            let vectors_exist = semantic_path.join("metadata.json").exists();
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
@@ -293,13 +297,13 @@ impl CodeIntelligenceServer {
                         crate::SymbolKind::Function | crate::SymbolKind::Method
                     ) {
                         // Dependencies (what this function calls) - using logic from get_calls
-                        let called_with_metadata =
-                            indexer.get_called_functions_with_metadata(symbol.id);
+                        let (called_with_metadata, called_with_metadata_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Calls, false, 10)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
                         if !called_with_metadata.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} calls {} function(s):\n",
                                 symbol.name,
-                                called_with_metadata.len()
+                                called_with_metadata_total
                             ));
                             for (i, (called, metadata)) in
                                 called_with_metadata.iter().take(10).enumerate()
@@ -362,22 +366,22 @@ impl CodeIntelligenceServer {
                                     called.id.value(),
                                     call_site
                                 ));
-                                if i == 9 && called_with_metadata.len() > 10 {
+                                if i == 9 && called_with_metadata_total > 10 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        called_with_metadata.len() - 10
+                                        called_with_metadata_total - 10
                                     ));
                                 }
                             }
                         }
 
                         // Callers (who uses this function) - using logic from find_callers
-                        let calling_functions_with_metadata =
-                            indexer.get_calling_functions_with_metadata(symbol.id);
+                        let (calling_functions_with_metadata, calling_functions_with_metadata_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Calls, true, 10)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
                         if !calling_functions_with_metadata.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} function(s) call {}:\n",
-                                calling_functions_with_metadata.len(),
+                                calling_functions_with_metadata_total,
                                 symbol.name
                             ));
                             for (i, (caller, metadata)) in
@@ -439,17 +443,18 @@ impl CodeIntelligenceServer {
                                     call_info,
                                     caller.id.value()
                                 ));
-                                if i == 9 && calling_functions_with_metadata.len() > 10 {
+                                if i == 9 && calling_functions_with_metadata_total > 10 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        calling_functions_with_metadata.len() - 10
+                                        calling_functions_with_metadata_total - 10
                                     ));
                                 }
                             }
                         }
 
                         // Impact analysis - using logic from analyze_impact
-                        let impacted = indexer.get_impact_radius(symbol.id, Some(2));
+                        let impacted = indexer.get_impact_radius_bounded(symbol.id, 2)
+                            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
                         if !impacted.is_empty() {
                             output.push_str(&format!(
                                 "\n   Changing {} would impact {} symbol(s) (max depth: 2):\n",
@@ -458,10 +463,8 @@ impl CodeIntelligenceServer {
                             ));
 
                             // Get details and group by kind
-                            let impacted_details: Vec<_> = impacted
-                                .iter()
-                                .filter_map(|id| indexer.get_symbol(*id))
-                                .collect();
+                            let impacted_details = indexer.get_symbols(&impacted)
+                                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
 
                             // Group by kind
                             let mut methods = Vec::new();
@@ -535,12 +538,14 @@ impl CodeIntelligenceServer {
                             | crate::SymbolKind::Enum
                     ) {
                         // What does this class extend?
-                        let extends = indexer.get_extends(symbol.id);
+                        let (extends, extends_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Extends, false, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let extends: Vec<_> = extends.into_iter().map(|(symbol,_)|symbol).collect();
                         if !extends.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} extends {} class(es):\n",
                                 symbol.name,
-                                extends.len()
+                                extends_total
                             ));
                             for (i, base_class) in extends.iter().take(5).enumerate() {
                                 output.push_str(&format!(
@@ -552,21 +557,23 @@ impl CodeIntelligenceServer {
                                     ),
                                     base_class.id.value()
                                 ));
-                                if i == 4 && extends.len() > 5 {
+                                if i == 4 && extends_total > 5 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        extends.len() - 5
+                                        extends_total - 5
                                     ));
                                 }
                             }
                         }
 
                         // What classes extend this class?
-                        let extended_by = indexer.get_extended_by(symbol.id);
+                        let (extended_by, extended_by_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Extends, true, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let extended_by: Vec<_> = extended_by.into_iter().map(|(symbol,_)|symbol).collect();
                         if !extended_by.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} class(es) extend {}:\n",
-                                extended_by.len(),
+                                extended_by_total,
                                 symbol.name
                             ));
                             for (i, derived_class) in extended_by.iter().take(5).enumerate() {
@@ -579,22 +586,24 @@ impl CodeIntelligenceServer {
                                     ),
                                     derived_class.id.value()
                                 ));
-                                if i == 4 && extended_by.len() > 5 {
+                                if i == 4 && extended_by_total > 5 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        extended_by.len() - 5
+                                        extended_by_total - 5
                                     ));
                                 }
                             }
                         }
 
                         // What traits does this type implement?
-                        let implements = indexer.get_implemented_traits(symbol.id);
+                        let (implements, implements_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Implements, false, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let implements: Vec<_> = implements.into_iter().map(|(symbol,_)|symbol).collect();
                         if !implements.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} implements {} trait(s):\n",
                                 symbol.name,
-                                implements.len()
+                                implements_total
                             ));
                             for (i, trait_sym) in implements.iter().take(5).enumerate() {
                                 output.push_str(&format!(
@@ -606,10 +615,10 @@ impl CodeIntelligenceServer {
                                     ),
                                     trait_sym.id.value()
                                 ));
-                                if i == 4 && implements.len() > 5 {
+                                if i == 4 && implements_total > 5 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        implements.len() - 5
+                                        implements_total - 5
                                     ));
                                 }
                             }
@@ -621,11 +630,13 @@ impl CodeIntelligenceServer {
                         symbol.kind,
                         crate::SymbolKind::Trait | crate::SymbolKind::Interface
                     ) {
-                        let implementations = indexer.get_implementations(symbol.id);
+                        let (implementations, implementations_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Implements, true, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let implementations: Vec<_> = implementations.into_iter().map(|(symbol,_)|symbol).collect();
                         if !implementations.is_empty() {
                             output.push_str(&format!(
                                 "\n   {} type(s) implement {}:\n",
-                                implementations.len(),
+                                implementations_total,
                                 symbol.name
                             ));
                             for (i, impl_sym) in implementations.iter().take(5).enumerate() {
@@ -638,10 +649,10 @@ impl CodeIntelligenceServer {
                                     ),
                                     impl_sym.id.value()
                                 ));
-                                if i == 4 && implementations.len() > 5 {
+                                if i == 4 && implementations_total > 5 {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
-                                        implementations.len() - 5
+                                        implementations_total - 5
                                     ));
                                 }
                             }
@@ -649,12 +660,14 @@ impl CodeIntelligenceServer {
                     }
 
                     // Show uses relationships (for all symbols)
-                    let uses = indexer.get_uses(symbol.id);
+                    let (uses, uses_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Uses, false, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let uses: Vec<_> = uses.into_iter().map(|(symbol,_)|symbol).collect();
                     if !uses.is_empty() {
                         output.push_str(&format!(
                             "\n   {} uses {} type(s):\n",
                             symbol.name,
-                            uses.len()
+                            uses_total
                         ));
                         for (i, used_type) in uses.iter().take(5).enumerate() {
                             output.push_str(&format!(
@@ -664,18 +677,20 @@ impl CodeIntelligenceServer {
                                 crate::symbol::context::SymbolContext::symbol_location(used_type),
                                 used_type.id.value()
                             ));
-                            if i == 4 && uses.len() > 5 {
-                                output.push_str(&format!("     ... and {} more\n", uses.len() - 5));
+                            if i == 4 && uses_total > 5 {
+                                output.push_str(&format!("     ... and {} more\n", uses_total - 5));
                             }
                         }
                     }
 
                     // What symbols use this type?
-                    let used_by = indexer.get_used_by(symbol.id);
+                    let (used_by, used_by_total) = indexer.graph_neighbor_preview(symbol.id, crate::RelationKind::Uses, true, 5)
+                            .map_err(|error|McpError::internal_error(error.to_string(),None))?;
+                        let used_by: Vec<_> = used_by.into_iter().map(|(symbol,_)|symbol).collect();
                     if !used_by.is_empty() {
                         output.push_str(&format!(
                             "\n   {} type(s) use {}:\n",
-                            used_by.len(),
+                            used_by_total,
                             symbol.name
                         ));
                         for (i, using_symbol) in used_by.iter().take(5).enumerate() {
@@ -688,10 +703,10 @@ impl CodeIntelligenceServer {
                                 ),
                                 using_symbol.id.value()
                             ));
-                            if i == 4 && used_by.len() > 5 {
+                            if i == 4 && used_by_total > 5 {
                                 output.push_str(&format!(
                                     "     ... and {} more\n",
-                                    used_by.len() - 5
+                                    used_by_total - 5
                                 ));
                             }
                         }
@@ -717,6 +732,7 @@ impl CodeIntelligenceServer {
                 "Semantic search failed: {e}"
             ))])),
         }
+        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(description = "Search for symbols using full-text search with fuzzy matching")]
@@ -730,92 +746,95 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.facade.read().await;
+        crate::mcp::requests::validate_search_limit(limit)?;
+        crate::runtime::read(&self.facade, move |indexer| {
+            // One kind vocabulary (SymbolKind::from_str); unknown kinds error
+            // instead of silently returning unfiltered results.
+            let kind_filter = match kind.as_deref().map(str::parse::<crate::SymbolKind>) {
+                None => None,
+                Some(Ok(k)) => Some(k),
+                Some(Err(e)) => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "Error: {e}"
+                    ))]));
+                }
+            };
 
-        // One kind vocabulary (SymbolKind::from_str); unknown kinds error
-        // instead of silently returning unfiltered results.
-        let kind_filter = match kind.as_deref().map(str::parse::<crate::SymbolKind>) {
-            None => None,
-            Some(Ok(k)) => Some(k),
-            Some(Err(e)) => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "Error: {e}"
-                ))]));
-            }
-        };
+            match indexer.search(
+                &query,
+                limit as usize,
+                kind_filter,
+                module.as_deref(),
+                lang.as_deref(),
+            ) {
+                Ok(results) => {
+                    if results.is_empty() {
+                        let mut output = format!("No results found for query: {query}");
+                        // Add guidance for no results
+                        if let Some(guidance) =
+                            generate_mcp_guidance(indexer.settings(), "search_symbols", 0)
+                        {
+                            output.push_str("\n\n---\nGuidance: ");
+                            output.push_str(&guidance);
+                            output.push('\n');
+                        }
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    }
 
-        match indexer.search(
-            &query,
-            limit as usize,
-            kind_filter,
-            module.as_deref(),
-            lang.as_deref(),
-        ) {
-            Ok(results) => {
-                if results.is_empty() {
-                    let mut output = format!("No results found for query: {query}");
-                    // Add guidance for no results
+                    let mut result = format!(
+                        "Found {} result(s) for query '{}':\n\n",
+                        results.len(),
+                        query
+                    );
+
+                    for (i, search_result) in results.iter().enumerate() {
+                        result.push_str(&format!(
+                            "{}. {} ({:?})\n",
+                            i + 1,
+                            search_result.name,
+                            search_result.kind
+                        ));
+                        result.push_str(&format!(
+                            "   File: {}:{}\n",
+                            search_result.file_path, search_result.line
+                        ));
+
+                        if !search_result.module_path.is_empty() {
+                            result.push_str(&format!("   Module: {}\n", search_result.module_path));
+                        }
+
+                        if let Some(ref doc) = search_result.doc_comment {
+                            // Show first line of doc comment
+                            let first_line = doc.lines().next().unwrap_or("");
+                            result.push_str(&format!("   Doc: {first_line}\n"));
+                        }
+
+                        if let Some(ref sig) = search_result.signature {
+                            result.push_str(&format!("   Signature: {sig}\n"));
+                        }
+
+                        result.push_str(&format!("   Score: {:.2}\n", search_result.score));
+                        result.push('\n');
+                    }
+
+                    // Add system guidance
                     if let Some(guidance) =
-                        generate_mcp_guidance(indexer.settings(), "search_symbols", 0)
+                        generate_mcp_guidance(indexer.settings(), "search_symbols", results.len())
                     {
-                        output.push_str("\n\n---\nGuidance: ");
-                        output.push_str(&guidance);
-                        output.push('\n');
+                        result.push_str("\n---\nGuidance: ");
+                        result.push_str(&guidance);
+                        result.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+
+                    Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
                 }
-
-                let mut result = format!(
-                    "Found {} result(s) for query '{}':\n\n",
-                    results.len(),
-                    query
-                );
-
-                for (i, search_result) in results.iter().enumerate() {
-                    result.push_str(&format!(
-                        "{}. {} ({:?})\n",
-                        i + 1,
-                        search_result.name,
-                        search_result.kind
-                    ));
-                    result.push_str(&format!(
-                        "   File: {}:{}\n",
-                        search_result.file_path, search_result.line
-                    ));
-
-                    if !search_result.module_path.is_empty() {
-                        result.push_str(&format!("   Module: {}\n", search_result.module_path));
-                    }
-
-                    if let Some(ref doc) = search_result.doc_comment {
-                        // Show first line of doc comment
-                        let first_line = doc.lines().next().unwrap_or("");
-                        result.push_str(&format!("   Doc: {first_line}\n"));
-                    }
-
-                    if let Some(ref sig) = search_result.signature {
-                        result.push_str(&format!("   Signature: {sig}\n"));
-                    }
-
-                    result.push_str(&format!("   Score: {:.2}\n", search_result.score));
-                    result.push('\n');
-                }
-
-                // Add system guidance
-                if let Some(guidance) =
-                    generate_mcp_guidance(indexer.settings(), "search_symbols", results.len())
-                {
-                    result.push_str("\n---\nGuidance: ");
-                    result.push_str(&guidance);
-                    result.push('\n');
-                }
-
-                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Search failed: {e}"
+                ))])),
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Search failed: {e}"
-            ))])),
-        }
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(
@@ -829,6 +848,7 @@ impl CodeIntelligenceServer {
             limit,
         }): Parameters<SearchDocumentsRequest>,
     ) -> Result<CallToolResult, McpError> {
+        crate::mcp::requests::validate_search_limit(limit)?;
         let store = match &self.document_store {
             Some(s) => s,
             None => {
@@ -842,63 +862,64 @@ impl CodeIntelligenceServer {
             }
         };
 
-        let mut store = store.write().await;
-        let indexer = self.facade.read().await;
+        let preview_config = self.facade.read().await.settings().documents.search.clone();
+        // Queries never perform auto-index mutations. A document writer owns its
+        // mmap state exclusively; fail fast rather than waiting behind a full sync.
+        let mut store = store
+            .try_read()
+            .map_err(|_| McpError::internal_error("Document index is busy; retry the query", None))?
+            .query_snapshot();
+        crate::runtime::blocking(move || {
+            let search_query = DocSearchQuery {
+                text: query.clone(),
+                collection,
+                document: None,
+                limit: limit as usize,
+                preview_config: Some(preview_config),
+            };
 
-        // Auto-sync: check for file changes in all collections before searching
-        let settings = indexer.settings();
-        for (name, config) in &settings.documents.collections {
-            if let Err(e) = store.index_collection(name, config, &settings.documents.defaults) {
-                tracing::warn!(target: "rag", "auto-sync failed for collection '{}': {}", name, e);
-            }
-        }
-
-        let search_query = DocSearchQuery {
-            text: query.clone(),
-            collection,
-            document: None,
-            limit: limit as usize,
-            preview_config: Some(indexer.settings().documents.search.clone()),
-        };
-
-        match store.search(search_query) {
-            Ok(results) => {
-                if results.is_empty() {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                        "No documents found for: {query}"
-                    ))]));
-                }
-
-                let mut output = format!(
-                    "Found {} document(s) matching '{}':\n\n",
-                    results.len(),
-                    query
-                );
-
-                for (i, result) in results.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. {} (score: {:.3})\n",
-                        i + 1,
-                        crate::parsing::paths::render_absolute_path(&result.source_path).display(),
-                        result.similarity
-                    ));
-
-                    if !result.heading_context.is_empty() {
-                        output.push_str(&format!(
-                            "   Context: {}\n",
-                            result.heading_context.join(" > ")
-                        ));
+            match store.search(search_query) {
+                Ok(results) => {
+                    if results.is_empty() {
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                            "No documents found for: {query}"
+                        ))]));
                     }
 
-                    // Preview is already KWIC-processed with highlighting
-                    output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
-                }
+                    let mut output = format!(
+                        "Found {} document(s) matching '{}':\n\n",
+                        results.len(),
+                        query
+                    );
 
-                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                    for (i, result) in results.iter().enumerate() {
+                        output.push_str(&format!(
+                            "{}. {} (score: {:.3})\n",
+                            i + 1,
+                            crate::parsing::paths::render_absolute_path(&result.source_path)
+                                .display(),
+                            result.similarity
+                        ));
+
+                        if !result.heading_context.is_empty() {
+                            output.push_str(&format!(
+                                "   Context: {}\n",
+                                result.heading_context.join(" > ")
+                            ));
+                        }
+
+                        // Preview is already KWIC-processed with highlighting
+                        output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
+                    }
+
+                    Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                }
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Document search failed: {e}"
+                ))])),
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Document search failed: {e}"
-            ))])),
-        }
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 }

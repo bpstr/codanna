@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/Dialog";
+} from "@/components/ui/dialog";
 import { ThemeWrapper } from "@/components/theming/ThemeWrapper";
 import { copyToClipboardWithMeta } from "@/components/CopyButton";
 import { getThemeCode } from "./utils";

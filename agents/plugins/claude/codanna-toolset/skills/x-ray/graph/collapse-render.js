@@ -1,3 +1,4 @@
+const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // Collapsible horizontal tidy tree (after https://observablehq.com/@d3/collapsible-tree,
 // ISC): the code hierarchy as a left-to-right tree, click an internal node to
 // expand or collapse it, click a leaf to open its file. Same flare-shaped input
@@ -16,12 +17,12 @@ const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = '', legendKinds = [], openDepth = 2, theme = 'dark', details = {} } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
   const sigLangs = [...new Set(Object.values(details).map(x => x.lang).filter(Boolean))];
-  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
+  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${escapeHtml(k)}</span>`).join('');
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   ${themeStyle()}
   <style>
     html, body { margin: 0; height: 100%; }
@@ -34,8 +35,8 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
   ${themeScript(theme)}
   ${detailScript(sigLangs)}
   <div id="info">
-    <h3>${title}</h3>
-    ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
+    <h3>${escapeHtml(title)}</h3>
+    ${subtitle ? `<div class="stat">${escapeHtml(subtitle)}</div>` : ''}
     <div class="stat" id="stats"></div>
     <div class="legend">${legend}</div>
     <button id="expand-btn">Expand all</button>
@@ -47,11 +48,11 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
   <script>${d3src}</script>
   ${busyOracleScript()}
   <script>
-    const data = ${JSON.stringify(hierarchy)};
-    const workingDir = ${JSON.stringify(workingDir)};
-    const KVAR = ${JSON.stringify(kindVars)};
-    const OPEN_DEPTH = ${JSON.stringify(openDepth)};
-    const DETAILS = ${JSON.stringify(details)};
+    const data = ${jsonForScript(hierarchy)};
+    const workingDir = ${jsonForScript(workingDir)};
+    const KVAR = ${jsonForScript(kindVars)};
+    const OPEN_DEPTH = ${jsonForScript(openDepth)};
+    const DETAILS = ${jsonForScript(details)};
 
     const width = Math.max(928, window.innerWidth - 40);
     const marginTop = 10, marginRight = 220, marginBottom = 10, marginLeft = 60;

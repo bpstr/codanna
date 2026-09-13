@@ -4,8 +4,7 @@
 //! window. SSE responses carry no event ids (resumability removed).
 
 use serde_json::{Value, json};
-use std::env;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -14,33 +13,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn codanna_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_codanna") {
-        let bin = PathBuf::from(path);
-        if bin.exists() {
-            return bin;
-        }
-    }
-
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| env::current_dir().expect("current dir"));
-
-    let debug_bin = if cfg!(windows) {
-        manifest_dir.join("target/debug/codanna.exe")
-    } else {
-        manifest_dir.join("target/debug/codanna")
-    };
-    if debug_bin.exists() {
-        return debug_bin;
-    }
-
-    let status = Command::new("cargo")
-        .args(["build", "--bin", "codanna"])
-        .current_dir(&manifest_dir)
-        .status()
-        .expect("build codanna binary");
-    assert!(status.success(), "cargo build failed");
-    debug_bin
+    PathBuf::from(env!("CARGO_BIN_EXE_codanna"))
 }
 
 fn write_fixture(workspace: &Path) {
@@ -100,40 +73,58 @@ fn seed_workspace() -> TempDir {
     workspace
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
 struct HttpServe {
     child: Child,
     port: u16,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for HttpServe {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 
 fn spawn_http_serve(workspace: &Path) -> HttpServe {
-    let port = free_port();
     let test_home = workspace.join(".home");
     let child = Command::new(codanna_binary())
-        .args(["serve", "--http", "--bind", &format!("127.0.0.1:{port}")])
+        .args(["serve", "--http", "--bind", "127.0.0.1:0"])
         .current_dir(workspace)
         .env("HOME", &test_home)
+        .env(
+            "CODANNA_MCP_TOKEN",
+            "http-session-fixture-credential-1234567890",
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn serve --http");
 
-    let serve = HttpServe { child, port };
+    let mut serve = HttpServe {
+        child,
+        port: 0,
+        stderr_reader: None,
+    };
+    let stderr = serve.child.stderr.take().expect("server stderr");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    serve.stderr_reader = Some(std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if let Some(address) = line.strip_prefix("HTTP MCP server listening on http://") {
+                let address: std::net::SocketAddr = address.parse().expect("actual server socket");
+                let _ = sender.send(address.port());
+            }
+        }
+    }));
+    serve.port = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("server must announce its bound socket");
+    assert_ne!(serve.port, 0);
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let (status, _, _) = http_request(serve.port, "GET", "/health", &[], None);
@@ -217,7 +208,10 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 fn mcp_headers<'a>(method: &'a str, extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     let mut h = vec![
-        ("Authorization", "Bearer mcp-access-token-dummy"),
+        (
+            "Authorization",
+            "Bearer http-session-fixture-credential-1234567890",
+        ),
         ("Content-Type", "application/json"),
         ("Accept", "application/json, text/event-stream"),
         ("Mcp-Method", method),

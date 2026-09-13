@@ -161,6 +161,19 @@ pub(super) fn default_guidance_templates() -> IndexMap<String, GuidanceTemplate>
         },
     );
 
+    // Every catalog tool gets a default. Existing specialized guidance is retained.
+    for kind in crate::mcp::catalog::ToolKind::ALL {
+        templates
+            .entry(kind.name().to_string())
+            .or_insert_with(|| GuidanceTemplate {
+                no_results: Some("No matches found in the configured index.".into()),
+                single_result: Some("One result found. Refine the query for more context.".into()),
+                multiple_results: Some(
+                    "Found {result_count} results. Narrow the query as needed.".into(),
+                ),
+                custom: vec![],
+            });
+    }
     templates
 }
 

@@ -27,7 +27,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { generateHTML, inlineVendor } = require('./graph/render');
 const { generateDAGHTML } = require('./graph/dag-render');
 const { readDump } = require('./graph/dump');

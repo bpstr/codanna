@@ -339,8 +339,14 @@ impl CleanupStage {
             semantic_guard.remove_embeddings(&pending_embedding_removals);
             stats.embeddings_removed = pending_embedding_removals.len();
 
-            semantic_guard
-                .save(&self.semantic_path)
+            let save = semantic_guard
+                .save_snapshot()
+                .map_err(|e| PipelineError::Parse {
+                    path: self.semantic_path.clone(),
+                    reason: e.to_string(),
+                })?;
+            drop(semantic_guard);
+            save.save(&self.semantic_path)
                 .map_err(|e| PipelineError::Parse {
                     path: self.semantic_path.clone(),
                     reason: format!("Failed to save embeddings: {e}"),

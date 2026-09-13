@@ -1,12 +1,12 @@
 //! C# grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::csharp::audit::CSharpParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "C#",
     file_extension: "cs",
-    grammar_json_path: "contributing/parsers/csharp/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/csharp/node-types.json"),
     example_file_path: "examples/csharp/comprehensive.cs",
     output_dir: "contributing/parsers/csharp",
 };

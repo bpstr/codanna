@@ -11,9 +11,15 @@ use tree_sitter::{Language, Node, Parser};
 pub struct LanguageAuditConfig {
     pub language_name: &'static str,
     pub file_extension: &'static str,
-    pub grammar_json_path: &'static str,
+    pub grammar: GrammarSource,
     pub example_file_path: &'static str,
     pub output_dir: &'static str,
+}
+
+/// Input source is explicit; missing files are errors, not replacement examples.
+pub enum GrammarSource {
+    File(&'static str),
+    Embedded(&'static str),
 }
 
 /// Common audit data extracted from language-specific ParserAudit types.
@@ -36,61 +42,35 @@ impl AuditData {
         }
     }
 
-    pub fn empty() -> Self {
-        Self {
-            grammar_nodes: HashMap::new(),
-            implemented_nodes: HashSet::new(),
-            extracted_symbol_kinds: HashSet::new(),
-        }
-    }
-
     pub fn example_nodes(&self) -> HashSet<String> {
         self.grammar_nodes.keys().cloned().collect()
     }
 }
 
-/// Result from loading grammar nodes from node-types.json.
-pub struct GrammarLoadResult {
-    pub nodes: HashSet<String>,
-    pub warning: Option<String>,
-}
-
-/// Load named nodes from a node-types.json grammar file.
-pub fn load_grammar_nodes(grammar_json_path: &str) -> GrammarLoadResult {
-    match fs::read_to_string(grammar_json_path) {
-        Ok(json) => match serde_json::from_str::<Value>(&json) {
-            Ok(Value::Array(nodes)) => {
-                let mut grammar_nodes = HashSet::new();
-                for node in &nodes {
-                    if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
-                        (node.get("named"), node.get("type"))
-                    {
-                        grammar_nodes.insert(node_type.clone());
-                    }
-                }
-                GrammarLoadResult {
-                    nodes: grammar_nodes,
-                    warning: None,
-                }
-            }
-            Ok(_) => GrammarLoadResult {
-                nodes: HashSet::new(),
-                warning: Some(format!(
-                    "Unexpected grammar JSON structure in {grammar_json_path}."
-                )),
-            },
-            Err(err) => GrammarLoadResult {
-                nodes: HashSet::new(),
-                warning: Some(format!(
-                    "Failed to parse grammar JSON at {grammar_json_path}: {err}."
-                )),
-            },
-        },
-        Err(err) => GrammarLoadResult {
-            nodes: HashSet::new(),
-            warning: Some(format!("Missing {grammar_json_path} ({err}).")),
-        },
+/// Require readable, structurally valid grammar metadata with named nodes.
+pub fn load_grammar_nodes(source: &GrammarSource) -> Result<HashSet<String>, String> {
+    let json = match source {
+        GrammarSource::File(path) => {
+            fs::read_to_string(path).map_err(|e| format!("Grammar input {path}: {e}"))?
+        }
+        GrammarSource::Embedded(json) => (*json).to_owned(),
+    };
+    let nodes: Vec<Value> =
+        serde_json::from_str(&json).map_err(|e| format!("Invalid grammar metadata: {e}"))?;
+    let named: HashSet<String> = nodes
+        .iter()
+        .filter(|node| node.get("named") == Some(&Value::Bool(true)))
+        .map(|node| {
+            node.get("type")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| "Named grammar node has no type".to_owned())
+        })
+        .collect::<Result<_, _>>()?;
+    if named.is_empty() {
+        return Err("Grammar metadata has no named nodes".to_owned());
     }
+    Ok(named)
 }
 
 /// Run a full grammar analysis for a language.
@@ -107,7 +87,7 @@ pub fn artifacts_enabled() -> bool {
 pub fn run_comprehensive_analysis<F>(
     config: &LanguageAuditConfig,
     ts_language: Language,
-    fallback_code: &str,
+    _fallback_code: &str,
     node_categories: &[(&str, Vec<&str>)],
     run_audit: F,
 ) where
@@ -129,42 +109,31 @@ pub fn run_comprehensive_analysis<F>(
         println!("(analysis only; CODANNA_ABI_AUDIT=1 regenerates the tracked artifacts)");
     }
 
-    let grammar_result = load_grammar_nodes(config.grammar_json_path);
-
-    let (audit_data, report) = match run_audit(config.example_file_path) {
-        Ok((data, report)) => (data, Some(report)),
-        Err(e) => {
-            println!(
-                "Warning: Failed to audit {name} file: {e}",
-                name = config.language_name
-            );
-            (AuditData::empty(), None)
-        }
-    };
-
-    if let Some(report) = report
-        && artifacts_enabled()
-    {
-        fs::write(
-            format!("{dir}/AUDIT_REPORT.md", dir = config.output_dir),
-            &report,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to write {name} audit report: {e}",
-                name = config.language_name
-            )
-        });
+    let grammar_nodes = load_grammar_nodes(&config.grammar).expect("complete grammar input");
+    let code =
+        fs::read_to_string(config.example_file_path).expect("comprehensive example must exist");
+    assert!(
+        !code.trim().is_empty(),
+        "comprehensive example cannot be empty"
+    );
+    let (audit_data, report) = run_audit(config.example_file_path)
+        .unwrap_or_else(|error| panic!("{} audit failed: {error}", config.language_name));
+    assert!(
+        !audit_data.grammar_nodes.is_empty(),
+        "audit must discover grammar nodes"
+    );
+    assert!(
+        !audit_data.extracted_symbol_kinds.is_empty(),
+        "audit must extract real symbols"
+    );
+    if artifacts_enabled() {
+        fs::write(format!("{}/AUDIT_REPORT.md", config.output_dir), report)
+            .expect("write audit report");
     }
 
     let example_nodes = audit_data.example_nodes();
 
-    let analysis = generate_grammar_analysis(
-        config,
-        &grammar_result.nodes,
-        &audit_data,
-        grammar_result.warning.as_deref(),
-    );
+    let analysis = generate_grammar_analysis(config, &grammar_nodes, &audit_data, None);
     if artifacts_enabled() {
         fs::write(
             format!("{dir}/GRAMMAR_ANALYSIS.md", dir = config.output_dir),
@@ -180,8 +149,6 @@ pub fn run_comprehensive_analysis<F>(
 
     let mut parser = Parser::new();
     parser.set_language(&ts_language).unwrap();
-    let code =
-        fs::read_to_string(config.example_file_path).unwrap_or_else(|_| fallback_code.to_string());
     let tree = parser.parse(&code, None).unwrap();
     let root = tree.root_node();
 
@@ -219,7 +186,7 @@ pub fn run_comprehensive_analysis<F>(
 
     print_analysis_summary(
         config,
-        grammar_result.nodes.len(),
+        grammar_nodes.len(),
         example_nodes.len(),
         audit_data.implemented_nodes.len(),
         &audit_data.extracted_symbol_kinds,
@@ -421,7 +388,7 @@ pub fn discover_nodes_with_ids(
 pub fn run_tree_structure_analysis(
     config: &LanguageAuditConfig,
     ts_language: Language,
-    fallback_code: &str,
+    _fallback_code: &str,
 ) {
     println!(
         "=== Generating {name} Tree Structure ===\n",
@@ -430,60 +397,62 @@ pub fn run_tree_structure_analysis(
 
     let mut parser = Parser::new();
     parser.set_language(&ts_language).unwrap();
-    let code =
-        fs::read_to_string(config.example_file_path).unwrap_or_else(|_| fallback_code.to_string());
 
-    if let Some(tree) = parser.parse(&code, None) {
-        let mut output = String::new();
-        output.push_str(&format!(
-            "# {name} AST Tree Structure\n\n",
-            name = config.language_name
-        ));
-        output.push_str(&format!(
-            "Complete nested structure from comprehensive.{ext}\n\n",
-            ext = config.file_extension
-        ));
-        output.push_str("```\n");
-        generate_tree_structure(&mut output, tree.root_node(), &code, 0, None);
-        output.push_str("```\n\n");
+    let code = fs::read_to_string(config.example_file_path)
+        .expect("tree analysis requires the complete example");
+    assert!(!code.trim().is_empty(), "tree example cannot be empty");
+    let tree = parser
+        .parse(&code, None)
+        .expect("tree analysis must produce a syntax tree");
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# {name} AST Tree Structure\n\n",
+        name = config.language_name
+    ));
+    output.push_str(&format!(
+        "Complete nested structure from comprehensive.{ext}\n\n",
+        ext = config.file_extension
+    ));
+    output.push_str("```\n");
+    generate_tree_structure(&mut output, tree.root_node(), &code, 0, None);
+    output.push_str("```\n\n");
 
-        let mut node_stats = HashMap::new();
-        collect_node_statistics(tree.root_node(), &mut node_stats);
+    let mut node_stats = HashMap::new();
+    collect_node_statistics(tree.root_node(), &mut node_stats);
 
-        output.push_str("## Node Type Statistics\n\n");
-        output.push_str("| Node Type | Count | Max Depth |\n");
-        output.push_str("|-----------|-------|----------|\n");
+    output.push_str("## Node Type Statistics\n\n");
+    output.push_str("| Node Type | Count | Max Depth |\n");
+    output.push_str("|-----------|-------|----------|\n");
 
-        let mut sorted_stats: Vec<_> = node_stats.iter().collect();
-        sorted_stats.sort_by_key(|(name, _)| *name);
+    let mut sorted_stats: Vec<_> = node_stats.iter().collect();
+    sorted_stats.sort_by_key(|(name, _)| *name);
 
-        for (node_type, (count, max_depth)) in sorted_stats {
-            output.push_str(&format!("| {node_type} | {count} | {max_depth} |\n"));
-        }
+    for (node_type, (count, max_depth)) in sorted_stats {
+        output.push_str(&format!("| {node_type} | {count} | {max_depth} |\n"));
+    }
 
-        output.push_str(&format!(
-            "\n**Total unique node types**: {count}\n",
-            count = node_stats.len()
-        ));
+    output.push_str(&format!(
+        "\n**Total unique node types**: {count}\n",
+        count = node_stats.len()
+    ));
 
-        if artifacts_enabled() {
-            fs::write(
-                format!("{dir}/TREE_STRUCT.md", dir = config.output_dir),
-                output,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to write {name} tree structure: {e}",
-                    name = config.language_name
-                )
-            });
-            println!(
-                "{name} TREE_STRUCT.md generated",
+    if artifacts_enabled() {
+        fs::write(
+            format!("{dir}/TREE_STRUCT.md", dir = config.output_dir),
+            output,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to write {name} tree structure: {e}",
                 name = config.language_name
-            );
-        } else {
-            println!("(analysis only; CODANNA_ABI_AUDIT=1 writes TREE_STRUCT.md)");
-        }
+            )
+        });
+        println!(
+            "{name} TREE_STRUCT.md generated",
+            name = config.language_name
+        );
+    } else {
+        println!("(analysis only; CODANNA_ABI_AUDIT=1 writes TREE_STRUCT.md)");
     }
 }
 
@@ -580,4 +549,20 @@ fn print_analysis_summary(
         );
     }
     println!("{name} files saved", name = config.language_name);
+}
+
+#[test]
+fn hardening_review_grammar_metadata_rejects_missing_and_empty_inputs() {
+    assert!(load_grammar_nodes(&GrammarSource::File("nonexistent-review-grammar.json")).is_err());
+    for input in ["{}", "[]", "not-json", r#"[{"named":true}]"#] {
+        assert!(load_grammar_nodes(&GrammarSource::Embedded(input)).is_err());
+    }
+    assert_eq!(
+        load_grammar_nodes(&GrammarSource::Embedded(
+            r#"[{"named":true,"type":"root"}]"#
+        ))
+        .unwrap()
+        .len(),
+        1
+    );
 }

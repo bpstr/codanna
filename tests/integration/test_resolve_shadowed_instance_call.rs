@@ -37,7 +37,7 @@ fn build_behaviors() -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
     let factory = ParserFactory::new(Arc::new(settings));
     let mut map = HashMap::new();
     let behavior: Arc<dyn LanguageBehavior> =
-        Arc::from(factory.create_behavior_from_registry(rust_lang()));
+        Arc::from(factory.create_behavior_from_registry(rust_lang()).unwrap());
     map.insert(rust_lang(), behavior);
     map
 }

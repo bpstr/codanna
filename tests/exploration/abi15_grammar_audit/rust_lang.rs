@@ -1,12 +1,12 @@
 //! Rust grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::rust::audit::RustParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Rust",
     file_extension: "rs",
-    grammar_json_path: "contributing/parsers/rust/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/rust/node-types.json"),
     example_file_path: "examples/rust/comprehensive.rs",
     output_dir: "contributing/parsers/rust",
 };

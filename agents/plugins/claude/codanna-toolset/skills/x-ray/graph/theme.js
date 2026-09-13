@@ -1,3 +1,5 @@
+require('../../shared/runtime.cjs').assertNode();
+const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // Shared theming for the x-ray pages: token CSS (dark default, light under
 // [data-theme="light"]), the runtime theme state + toggle button, and the
 // kind -> categorical-slot mapping. Reads the vendored ESM tokens module via
@@ -182,10 +184,10 @@ function themeScript(initial = 'dark') {
 <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 1.6 A5.4 5.4 0 0 1 7 12.4 Z" fill="currentColor"/></svg>
 </button></div>
 <script>
-window.TOKENS = ${JSON.stringify(TOKENS)};
+window.TOKENS = ${jsonForScript(TOKENS)};
 (function () {
   var KEY = 'codanna-viz-theme';
-  var cur = ${JSON.stringify(initial)};
+  var cur = ${jsonForScript(initial)};
   try { cur = localStorage.getItem(KEY) || cur; } catch (e) { /* storage blocked: per-load theme only */ }
   window.THEME = function () { return TOKENS[cur] || TOKENS.dark; };
   function apply() {
@@ -324,8 +326,8 @@ window.__detail = (function () {
       + crumbs
       + '<h2>' + esc(spec.name) + '</h2>'
       + '<div class="meta">'
-      + (spec.edges != null ? '<span>' + spec.edges + ' edge' + (spec.edges === 1 ? '' : 's') + '</span>' : '')
-      + (spec.lines ? '<span>' + spec.lines + ' line' + (spec.lines === 1 ? '' : 's') + '</span>' : '')
+      + (spec.edges != null ? '<span>' + esc(spec.edges) + ' edge' + (spec.edges === 1 ? '' : 's') + '</span>' : '')
+      + (spec.lines ? '<span>' + esc(spec.lines) + ' line' + (spec.lines === 1 ? '' : 's') + '</span>' : '')
       + '</div>'
       + [spec.kind, spec.visibility, spec.language].filter(Boolean).map(function (t) { return '<span class="chip">#' + esc(String(t).toLowerCase()) + '</span>'; }).join('')
       + (spec.dotted ? '<div class="chip" style="border-style:dashed">' + esc(spec.dotted) + '</div>' : '')
@@ -338,9 +340,9 @@ window.__detail = (function () {
       any = true;
       h += '<div class="nb">' + esc(hd) + ' (' + list.length + ')</div><ul>'
         + list.slice(0, 60).map(function (it) {
-            var label = esc(it.name) + (it.k > 1 ? ' <span class="rk">&times;' + it.k + '</span>' : '');
+            var label = esc(it.name) + (it.k > 1 ? ' <span class="rk">&times;' + esc(it.k) + '</span>' : '');
             return it.ref != null && onGo
-              ? '<li><button data-go="' + it.ref + '">' + label + '</button></li>'
+              ? '<li><button data-go="' + esc(it.ref) + '">' + label + '</button></li>'
               : '<li><span class="ext">' + label + '</span></li>';
           }).join('') + '</ul>';
     });

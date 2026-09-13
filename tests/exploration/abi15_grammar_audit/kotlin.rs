@@ -1,13 +1,13 @@
 //! Kotlin grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use super::tree_sitter_kotlin;
 use codanna::parsing::kotlin::audit::KotlinParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Kotlin",
     file_extension: "kt",
-    grammar_json_path: "contributing/parsers/kotlin/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/kotlin/node-types.json"),
     example_file_path: "examples/kotlin/comprehensive.kt",
     output_dir: "contributing/parsers/kotlin",
 };

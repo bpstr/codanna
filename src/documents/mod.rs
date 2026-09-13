@@ -15,6 +15,7 @@ pub mod types;
 pub use chunker::{Chunker, HybridChunker, RawChunk};
 pub use config::{
     ChunkingConfig, ChunkingStrategy, CollectionConfig, DocumentsConfig, PreviewMode, SearchConfig,
+    ValidatedChunkingConfig,
 };
 pub use schema::DocumentSchema;
 pub use store::{CollectionStats, DocumentStore, IndexProgress, SearchQuery, SearchResult};

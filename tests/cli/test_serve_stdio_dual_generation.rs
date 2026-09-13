@@ -890,15 +890,30 @@ fn serve_stdio_legacy_lane_sends_no_custom_notifications() {
         })
     )
     .expect("write initialize");
+    session.stdin.flush().expect("flush initialize");
+    let init = recv_json(&session.rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+    // Complete the real legacy handshake, then wait for an application-level
+    // round trip. No sleep or notification retry masks lost startup events.
     writeln!(
         session.stdin,
         "{}",
-        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        json!({"jsonrpc":"2.0", "method":"notifications/initialized"})
     )
     .expect("write initialized");
-    session.stdin.flush().expect("flush handshake");
-    let init = recv_json(&session.rx);
-    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({"jsonrpc":"2.0", "id":2, "method":"ping"})
+    )
+    .expect("write readiness ping");
+    session.stdin.flush().expect("flush readiness ping");
+    let ready = recv_json(&session.rx);
+    assert_eq!(ready["id"], 2, "readiness ping response\n{ready}");
+    assert!(
+        ready.get("result").is_some(),
+        "readiness ping must succeed: {ready}"
+    );
 
     let fixture = workspace.path().join("src/alpha.rs");
     let mut content = std::fs::read_to_string(&fixture).expect("read fixture");

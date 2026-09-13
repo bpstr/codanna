@@ -29,7 +29,7 @@ fn build_behaviors() -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
     let factory = ParserFactory::new(Arc::new(settings));
     let mut map = HashMap::new();
     let behavior: Arc<dyn LanguageBehavior> =
-        Arc::from(factory.create_behavior_from_registry(php_lang()));
+        Arc::from(factory.create_behavior_from_registry(php_lang()).unwrap());
     map.insert(php_lang(), behavior);
     map
 }

@@ -1,14 +1,15 @@
 //! C grammar audit.
 
 use super::helpers::{
-    AuditData, LanguageAuditConfig, run_comprehensive_analysis, run_tree_structure_analysis,
+    AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis,
+    run_tree_structure_analysis,
 };
 use codanna::parsing::c::audit::CParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "C",
     file_extension: "c",
-    grammar_json_path: "contributing/parsers/c/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/c/node-types.json"),
     example_file_path: "examples/c/comprehensive.c",
     output_dir: "contributing/parsers/c",
 };

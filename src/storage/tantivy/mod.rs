@@ -16,11 +16,13 @@ use tantivy::{
 };
 
 mod codec;
+mod graph;
 mod query;
 mod schema;
 mod writer;
 
 pub use codec::VectorMetadata;
+pub use graph::{GraphEdge, GraphView, RelationshipPage};
 pub use schema::IndexSchema;
 
 /// Search result with rich metadata
@@ -87,6 +89,12 @@ impl std::fmt::Debug for DocumentIndex {
 }
 
 impl DocumentIndex {
+    /// Reader-local generation. Pair it with this index instance's identity;
+    /// it changes on a successful reload, including externally committed edits.
+    pub fn generation(&self) -> u64 {
+        self.reader.searcher().generation().generation_id()
+    }
+
     /// Create a new document index
     pub fn new(
         index_path: impl AsRef<Path>,

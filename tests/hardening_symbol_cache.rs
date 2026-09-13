@@ -19,6 +19,11 @@ fn populate_and_check(count: u32) {
     }
     index.commit_batch().unwrap();
 
+    let empty = SymbolLookupCache::for_pending_relationships(&index, &[]).unwrap();
+    assert!(
+        empty.is_empty(),
+        "an empty resolution pass must not hydrate even an existing corpus"
+    );
     let cache = SymbolLookupCache::from_index(&index).unwrap();
     assert_eq!(cache.len(), count as usize);
     if let Some(last_id) = SymbolId::new(count) {

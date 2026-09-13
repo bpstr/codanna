@@ -82,14 +82,14 @@ pub struct Symbol {
 #[derive(Debug, Clone, Copy)]
 pub struct CompactSymbol {
     pub name_offset: u32,
+    pub file_id: u32,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub symbol_id: u32,
+    pub start_col: u16,
+    pub end_col: u16,
     pub kind: u8,
     pub flags: u8,
-    pub file_id: u16,
-    pub start_line: u32,
-    pub start_col: u16,
-    pub end_line: u32,
-    pub end_col: u16,
-    pub symbol_id: u32,
     _padding: [u8; 2],
 }
 
@@ -198,7 +198,7 @@ impl Symbol {
             name_offset,
             kind: self.kind as u8,
             flags: 0,
-            file_id: self.file_id.value() as u16,
+            file_id: self.file_id.value(),
             start_line: self.range.start_line,
             start_col: self.range.start_column,
             end_line: self.range.end_line,
@@ -300,7 +300,7 @@ impl CompactSymbol {
             name_offset: *name_offset,
             kind: symbol.kind as u8,
             flags: 0,
-            file_id: symbol.file_id.value() as u16,
+            file_id: symbol.file_id.value(),
             start_line: symbol.range.start_line,
             start_col: symbol.range.start_column,
             end_line: symbol.range.end_line,
@@ -334,7 +334,7 @@ impl CompactSymbol {
             id: SymbolId::new(self.symbol_id)?,
             name: compact_string(name),
             kind,
-            file_id: FileId::new(self.file_id as u32)?,
+            file_id: FileId::new(self.file_id)?,
             range: Range::new(self.start_line, self.start_col, self.end_line, self.end_col),
             file_path: "<unknown>".into(),
             signature: None,
@@ -484,6 +484,29 @@ mod tests {
             let restored = compact.to_symbol(&string_table).unwrap();
 
             assert_eq!(symbol.kind, restored.kind);
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_identity_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_compact_symbol_preserves_full_width_file_ids() {
+        assert_eq!(std::mem::size_of::<CompactSymbol>(), 32);
+        for id in [1, 65535, 65536, u32::MAX] {
+            let symbol = Symbol::new(
+                SymbolId::new(1).unwrap(),
+                "example",
+                SymbolKind::Function,
+                FileId::new(id).unwrap(),
+                Range::new(0, 0, 1, 0),
+            );
+            let mut strings = StringTable::new();
+            let compact = symbol.to_compact(&mut strings);
+            assert_eq!(compact.to_symbol(&strings).unwrap().file_id, symbol.file_id);
+            let compact = CompactSymbol::from_symbol(&symbol, &strings).unwrap();
+            assert_eq!(compact.to_symbol(&strings).unwrap().file_id, symbol.file_id);
         }
     }
 }

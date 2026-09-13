@@ -8,9 +8,6 @@ use codanna::indexing::pipeline::types::{CallerContext, SymbolLookupCache};
 use codanna::parsing::resolution::ProjectResolutionEnhancer;
 use codanna::parsing::typescript::resolution::TypeScriptProjectEnhancer;
 use codanna::parsing::{Import, LanguageId, ParserFactory, PipelineSymbolCache};
-use codanna::project_resolver::persist::ResolutionPersistence;
-use codanna::project_resolver::provider::ProjectResolutionProvider;
-use codanna::project_resolver::providers::typescript::TypeScriptProvider;
 use codanna::types::{FileId, Range, SymbolId};
 use codanna::{Symbol, SymbolKind, Visibility};
 use std::path::Path;
@@ -116,9 +113,11 @@ fn test_pipeline_cache_language_filter() {
 /// Test build_resolution_context_with_pipeline_cache with local symbols.
 #[test]
 fn test_behavior_pipeline_cache_local_symbols() {
-    let settings = Settings::load().expect("Failed to load settings");
+    let settings = Settings::default();
     let factory = ParserFactory::new(Arc::new(settings));
-    let behavior = factory.create_behavior_from_registry(LanguageId::new("typescript"));
+    let behavior = factory
+        .create_behavior_from_registry(LanguageId::new("typescript"))
+        .unwrap();
 
     let cache = SymbolLookupCache::new();
     let file_id = FileId::new(1).unwrap();
@@ -190,41 +189,6 @@ fn test_path_alias_enhancement() {
     assert_eq!(enhanced, None, "Relative paths should not be enhanced");
 }
 
-/// Integration test: Pipeline resolution with TypeScript settings.
-#[test]
-#[ignore = "Requires .codanna/settings.toml with TypeScript config_files"]
-fn test_pipeline_resolution_with_settings() {
-    // Load settings and rebuild cache
-    let settings = Settings::load().expect("Failed to load settings");
-
-    let provider = TypeScriptProvider::new();
-    provider
-        .rebuild_cache(&settings)
-        .expect("Failed to rebuild cache");
-
-    // Load persisted rules
-    let persistence = ResolutionPersistence::new(Path::new(".codanna"));
-    let index = persistence
-        .load("typescript")
-        .expect("Should load TypeScript rules");
-
-    assert!(!index.rules.is_empty(), "Should have resolution rules");
-
-    // Get rules and create enhancer
-    let rules = index.rules.values().next().expect("Should have rules");
-    let enhancer = TypeScriptProjectEnhancer::new(rules.clone());
-    let file_id = FileId::new(1).unwrap();
-
-    // Test real alias resolution
-    if let Some(enhanced) = enhancer.enhance_import_path("@/components/Button", file_id) {
-        println!("Enhanced: @/components/Button -> {enhanced}");
-        assert!(
-            enhanced.contains("components/Button"),
-            "Should contain components/Button"
-        );
-    }
-}
-
 /// Test that the pipeline cache handles import resolution.
 #[test]
 fn test_pipeline_cache_import_resolution() {
@@ -259,35 +223,19 @@ fn test_pipeline_cache_import_resolution() {
     let caller = CallerContext::from_file(test_file, LanguageId::new("typescript"));
     let result = cache.resolve("Button", &caller, None, &imports);
 
-    // Should find the Button symbol (via import path matching)
-    match result {
-        codanna::parsing::ResolveResult::Found(id) => {
-            assert_eq!(id, SymbolId::new(1).unwrap());
-        }
-        codanna::parsing::ResolveResult::Ambiguous(ids) => {
-            assert!(ids.contains(&SymbolId::new(1).unwrap()));
-        }
-        codanna::parsing::ResolveResult::NotFound => {
-            panic!("Button should be found via import");
-        }
-    }
+    assert_eq!(
+        result,
+        codanna::parsing::ResolveResult::Found(SymbolId::new(1).unwrap()),
+        "a single matching import must not be ambiguous"
+    );
 }
-
-/// Integration test: Full pipeline isolation with temp directory.
-///
-/// Both cwd-mutating tests take this lock: process cwd is global state and
-/// parallel test threads would read each other's temp `.codanna`.
-static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Creates isolated test environment with its own .codanna, tsconfig, and source files.
 /// Tests that build_resolution_context_with_pipeline_cache resolves path aliases correctly.
 #[test]
 fn test_behavior_pipeline_cache_isolated() {
-    use std::env;
     use std::fs;
     use tempfile::TempDir;
-
-    let _cwd_guard = CWD_LOCK.lock().unwrap();
 
     // Create isolated test environment
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -322,16 +270,12 @@ fn test_behavior_pipeline_cache_isolated() {
     )
     .expect("Failed to write resolution rules");
 
-    // Change to temp directory so .codanna is found
-    let original_dir = env::current_dir().expect("Failed to get cwd");
-    env::set_current_dir(temp_path).expect("Failed to change to temp dir");
-
     // Now run the actual test
     use codanna::parsing::typescript::behavior::TypeScriptBehavior;
     use codanna::parsing::{LanguageBehavior, TypeScriptParser};
     use codanna::types::SymbolCounter;
 
-    let behavior = TypeScriptBehavior::new();
+    let behavior = TypeScriptBehavior::with_resolution_dir(temp_path.join(".codanna"));
     let button_path = src_dir.join("Button.ts");
 
     // Parse the file
@@ -357,12 +301,16 @@ fn test_behavior_pipeline_cache_isolated() {
         cache.insert(symbol);
     }
 
-    // Verify Button symbol exists
+    // Require the exact parsed target rather than permitting ambiguity.
     let button_candidates = cache.lookup_candidates("Button");
-    assert!(!button_candidates.is_empty(), "Should have Button symbol");
+    assert_eq!(button_candidates.len(), 1, "exactly one parsed Button");
+    let expected_button = button_candidates[0];
 
     // Test resolution with path alias import
     let app_file = FileId::new(1).unwrap();
+    let app_path = temp_path.join("src/app.ts");
+    fs::write(&app_path, "import { Button } from '@components/Button';").unwrap();
+    behavior.register_file(app_path, app_file, "src.app".to_owned());
     let imports = vec![Import {
         file_id: app_file,
         path: "@components/Button".to_string(),
@@ -377,16 +325,15 @@ fn test_behavior_pipeline_cache_isolated() {
         .build_resolution_context_with_pipeline_cache(app_file, &imports, &cache, extensions);
 
     // Verify the enhanced imports have the path alias resolved
-    assert!(!enhanced_imports.is_empty(), "Should have enhanced imports");
+    assert_eq!(enhanced_imports.len(), 1);
+    assert_eq!(enhanced_imports[0].path, "src.components.Button");
 
     let resolved = scope.resolve("Button");
 
-    // Restore original directory before asserting
-    env::set_current_dir(original_dir).expect("Failed to restore cwd");
-
-    assert!(
-        resolved.is_some(),
-        "Button should resolve via @components/Button path alias"
+    assert_eq!(
+        resolved,
+        Some(expected_button),
+        "alias resolves to the parsed Button"
     );
 }
 
@@ -398,11 +345,8 @@ fn test_behavior_pipeline_cache_isolated() {
 /// (wiki: story-bug-core-provider-config-lookup-out-of-tree).
 #[test]
 fn test_module_path_from_file_out_of_tree_absolute_mappings() {
-    use std::env;
     use std::fs;
     use tempfile::TempDir;
-
-    let _cwd_guard = CWD_LOCK.lock().unwrap();
 
     let workspace = TempDir::new().expect("workspace dir");
     let repo = TempDir::new().expect("repo dir");
@@ -429,20 +373,15 @@ fn test_module_path_from_file_out_of_tree_absolute_mappings() {
     let rules = resolution_rules_json(&tsconfig_path, repo.path());
     fs::write(resolvers_dir.join("typescript_resolution.json"), rules).expect("write rules");
 
-    let original_dir = env::current_dir().expect("cwd");
-    env::set_current_dir(workspace.path()).expect("enter workspace");
-
     use codanna::parsing::LanguageBehavior;
     use codanna::parsing::typescript::behavior::TypeScriptBehavior;
 
-    let behavior = TypeScriptBehavior::new();
+    let behavior = TypeScriptBehavior::with_resolution_dir(workspace.path().join(".codanna"));
     let module_path = behavior.module_path_from_file(
         &src_dir.join("Button.ts"),
         repo.path(),
         &["ts", "tsx", "js", "jsx"],
     );
-
-    env::set_current_dir(original_dir).expect("restore cwd");
 
     assert_eq!(
         module_path.as_deref(),

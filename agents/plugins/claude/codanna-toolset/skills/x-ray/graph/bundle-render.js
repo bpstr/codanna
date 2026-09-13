@@ -1,3 +1,4 @@
+const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // Hierarchical edge bundling page (after https://observablehq.com/@d3/hierarchical-edge-bundling,
 // ISC): radial cluster of the code hierarchy, dependency edges as bundled
 // arcs between leaves. Pure d3/SVG, self-contained, pan/zoom, dark theme.
@@ -16,7 +17,7 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
   const sigLangs = [...new Set(Object.values(details).map(x => x.lang).filter(Boolean))];
   const radius = Math.max(520, Math.round(leaves * 11 / (2 * Math.PI)));
   const width = 2 * radius;
-  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
+  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${escapeHtml(k)}</span>`).join('');
   const inLabel = relation === 'Calls' ? 'callers (incoming)' : 'incoming';
   const outLabel = relation === 'Calls' ? 'callees (outgoing)' : 'outgoing';
   const rel = relation.toLowerCase();
@@ -24,7 +25,7 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   ${themeStyle()}
   <style>
     html, body { margin: 0; height: 100%; }
@@ -39,29 +40,29 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
   ${detailScript(sigLangs)}
   <div id="detail"></div>
   <div id="info">
-    <h3>${title}</h3>
-    ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
+    <h3>${escapeHtml(title)}</h3>
+    ${subtitle ? `<div class="stat">${escapeHtml(subtitle)}</div>` : ''}
     <div class="stat" id="stats"></div>
-    <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>${inLabel}</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>${outLabel}</span></div>
+    <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>${escapeHtml(inLabel)}</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>${escapeHtml(outLabel)}</span></div>
     <div class="legend">${legend}</div>
     <button id="reset-btn">Reset zoom</button>
   </div>
-  <div id="hint">Scroll: zoom, Drag: pan. Hover a name: its ${rel} in and out. Click: details</div>
+  <div id="hint">Scroll: zoom, Drag: pan. Hover a name: its ${escapeHtml(rel)} in and out. Click: details</div>
   <script>${d3src}</script>
   ${busyOracleScript()}
   <script>
-    const data = ${JSON.stringify(hierarchy)};
-    const edgeList = ${JSON.stringify(edges)};
-    const KVAR = ${JSON.stringify(kindVars)};
-    const DETAILS = ${JSON.stringify(details)};
-    const workingDir = ${JSON.stringify(workingDir)};
+    const data = ${jsonForScript(hierarchy)};
+    const edgeList = ${jsonForScript(edges)};
+    const KVAR = ${jsonForScript(kindVars)};
+    const DETAILS = ${jsonForScript(details)};
+    const workingDir = ${jsonForScript(workingDir)};
     // Incoming rides the accent, outgoing the red slot; the resting arc colour
     // mixes a neutral into transparency so both themes derive it from tokens.
     const colorin = 'var(--accent)', colorout = 'var(--g9)';
     const colornone = 'color-mix(in srgb, var(--n1) 30%, transparent)';
     const blend = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'multiply' : 'screen';
-    const relLabel = ${JSON.stringify(rel)};
-    const width = ${width};
+    const relLabel = ${jsonForScript(rel)};
+    const width = ${jsonForScript(width)};
     const radius = width / 2;
 
     // Layout: radial cluster, leaves on the rim (after the Observable example).

@@ -23,6 +23,13 @@ pub enum IndexError {
         source: std::io::Error,
     },
 
+    /// Source discovery must not silently turn an I/O failure into an empty tree.
+    #[error("Filesystem discovery failed under '{}': {reason}", .path.display())]
+    Discovery { path: PathBuf, reason: String },
+
+    #[error("No language behavior is registered for '{language}'")]
+    UnknownLanguage { language: String },
+
     /// Parsing errors
     #[error("Failed to parse {language} file '{}': {reason}", crate::parsing::paths::render_absolute_path(.path).display())]
     ParseError {
@@ -139,6 +146,8 @@ impl IndexError {
     pub fn status_code(&self) -> String {
         match self {
             Self::FileRead { .. } => "FILE_READ_ERROR",
+            Self::Discovery { .. } => "DISCOVERY_ERROR",
+            Self::UnknownLanguage { .. } => "UNKNOWN_LANGUAGE",
             Self::FileWrite { .. } => "FILE_WRITE_ERROR",
             Self::ParseError { .. } => "PARSE_ERROR",
             Self::UnsupportedFileType { .. } => "UNSUPPORTED_FILE_TYPE",
@@ -191,8 +200,8 @@ impl IndexError {
                 "Ensure the file is not locked by another process",
             ],
             Self::UnsupportedFileType { .. } => vec![
-                "Currently only Rust files (.rs) are supported",
-                "Support for other languages is coming soon",
+                "Check configured extensions in .codanna/settings.toml",
+                "Enable the relevant compiled language in settings.toml",
             ],
             _ => vec![],
         }

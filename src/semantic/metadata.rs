@@ -49,7 +49,7 @@ pub struct SemanticMetadata {
 
 impl SemanticMetadata {
     /// Current metadata version
-    const CURRENT_VERSION: u32 = 1;
+    const CURRENT_VERSION: u32 = 2;
 
     /// Create new metadata for a local fastembed index.
     pub fn new(model_name: String, dimension: usize, embedding_count: usize) -> Self {
@@ -105,6 +105,19 @@ impl SemanticMetadata {
         live_dir: &Path,
     ) -> Result<(), SemanticSearchError> {
         let metadata_path = live_dir.join("metadata.json");
+        match std::fs::read(&metadata_path) {
+            Ok(bytes) => {
+                let existing: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(super::journal::error)?;
+                if existing.get("journal").is_some() {
+                    return Err(super::journal::error(
+                        "journal metadata must be committed with SimpleSemanticSearch::save",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(super::journal::error(error)),
+        }
 
         let json =
             serde_json::to_string_pretty(self).map_err(|e| SemanticSearchError::StorageError {

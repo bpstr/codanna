@@ -99,15 +99,18 @@ impl Pipeline {
             defines.len()
         );
         if !defines.is_empty() {
-            let contexts = context_stage.build_contexts(defines, &HashMap::new(), &HashMap::new());
-            let behaviors = context_stage.behaviors();
+            let contexts =
+                context_stage.build_contexts(defines, &HashMap::new(), &HashMap::new())?;
+            let behaviors = context_stage.behaviors()?;
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
 
             for ctx in contexts {
                 let rel_count = ctx.unresolved_rels.len() as u64;
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.defines_resolved += resolve_stats.defines_resolved;
-                write_stage.write(batch);
+                write_stage
+                    .write(batch)
+                    .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
 
                 // Update progress bar
                 if let Some(ref prog) = progress {
@@ -134,10 +137,10 @@ impl Pipeline {
             // Sequencing invariant: populate per-language InheritanceResolvers from
             // Extends relationships BEFORE build_contexts(others) consumes the vec
             // and BEFORE any Calls resolution in this pass fires resolve_static_call.
-            let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others);
+            let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others)?;
             let contexts =
-                context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans);
-            let behaviors = context_stage.behaviors();
+                context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans)?;
+            let behaviors = context_stage.behaviors()?;
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors)
                 .with_inheritance_resolvers(inheritance_resolvers);
 
@@ -146,7 +149,9 @@ impl Pipeline {
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.calls_resolved += resolve_stats.calls_resolved;
                 stats.other_resolved += resolve_stats.resolved - resolve_stats.calls_resolved;
-                write_stage.write(batch);
+                write_stage
+                    .write(batch)
+                    .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
 
                 // Update progress bar
                 if let Some(ref prog) = progress {

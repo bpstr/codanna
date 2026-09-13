@@ -62,6 +62,8 @@ pub struct UnifiedWatcher {
     /// lane. Removal waves batch-sync these so the shared discovery can
     /// pair renames (remove + create of identical content).
     batch_sync_roots: Vec<PathBuf>,
+    /// Native watches and handler snapshots are installed before transport admission.
+    prepared: bool,
 }
 
 impl UnifiedWatcher {
@@ -70,23 +72,20 @@ impl UnifiedWatcher {
         UnifiedWatcherBuilder::new()
     }
 
-    /// Start watching for file changes.
-    ///
-    /// This is the main event loop that:
-    /// 1. Receives file events from notify
-    /// 2. Debounces modification events
-    /// 3. Routes events to matching handlers
-    /// 4. Executes returned actions
-    /// 5. Broadcasts notifications
-    pub async fn watch(mut self) -> Result<(), WatchError> {
+    /// Install native watches and handler snapshots before accepting client work.
+    /// Idempotent after success. A caller must discard this instance on failure.
+    pub async fn prepare(&mut self) -> Result<(), WatchError> {
+        if self.prepared {
+            return Ok(());
+        }
         // Initialize all handlers
         for handler in &self.handlers {
-            if let Err(e) = handler.refresh_paths().await {
-                tracing::warn!(
-                    "[watcher] failed to initialize {} handler: {e}",
-                    handler.name()
-                );
-            }
+            handler
+                .refresh_paths()
+                .await
+                .map_err(|error| WatchError::InitFailed {
+                    reason: format!("{} handler: {error}", handler.name()),
+                })?;
         }
 
         // Collect all paths from handlers and register them
@@ -111,8 +110,17 @@ impl UnifiedWatcher {
 
         // FSEvents watches roots recursively; register those first so the
         // per-directory batch can skip paths they already cover.
-        self.register_handler_roots().await;
+        self.register_handler_roots().await?;
         self.watch_directories(&new_dirs, false)?;
+
+        self.prepared = true;
+        Ok(())
+    }
+
+    /// Run the event loop, preparing first for callers that do not admit a
+    /// transport separately. Servers explicitly await `prepare` before handshake.
+    pub async fn watch(mut self) -> Result<(), WatchError> {
+        self.prepare().await?;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -242,6 +250,10 @@ impl UnifiedWatcher {
                         "[watcher] failed to watch {}: {e}",
                         crate::parsing::paths::render_absolute_path(&watch_path).display()
                     );
+                    return Err(WatchError::PathWatchFailed {
+                        path: watch_path,
+                        reason: e.to_string(),
+                    });
                 }
             }
         }
@@ -275,7 +287,9 @@ impl UnifiedWatcher {
             // truth decides, not event kind -- a dir rename's to-side
             // arrives as Modify(Name), never Create.
             if path.is_dir() {
-                self.handle_created_directory(&path).await;
+                if let Err(error) = self.handle_created_directory(&path).await {
+                    tracing::error!("[watcher] created-directory discovery incomplete: {error}");
+                }
                 continue;
             }
 
@@ -332,7 +346,7 @@ impl UnifiedWatcher {
     /// Register handler watch roots: watched directly so directory
     /// creation at the top of a root is visible even when the root
     /// holds no indexed file directly.
-    async fn register_handler_roots(&mut self) {
+    async fn register_handler_roots(&mut self) -> Result<(), WatchError> {
         let mut roots = Vec::new();
         let mut sync_roots = Vec::new();
         for handler in &self.handlers {
@@ -346,33 +360,39 @@ impl UnifiedWatcher {
             .iter()
             .filter(|root| {
                 let new_dir = self.registry.add_watch_dir((*root).clone());
-                new_dir || (cfg!(target_os = "macos") && !self.handler_roots.contains(root))
+                new_dir || !self.handler_roots.contains(root)
             })
             .cloned()
             .collect();
-        if let Err(e) = self.watch_directories(&new_roots, true) {
-            tracing::warn!("[watcher] failed to watch roots: {e}");
-        }
+        self.watch_directories(&new_roots, true)?;
         self.handler_roots = roots;
         self.batch_sync_roots = sync_roots;
+        Ok(())
     }
 
     /// A directory appeared under a registered root: watch every
     /// traversable directory of the new subtree (ignore chains anchored
     /// at the root prune ignored trees), then route the files already
     /// inside through the normal debounce -> eligibility -> reindex path.
-    async fn handle_created_directory(&mut self, path: &Path) {
+    async fn handle_created_directory(&mut self, path: &Path) -> Result<(), WatchError> {
         if !self.handler_roots.iter().any(|r| path.starts_with(r)) {
-            return;
+            return Ok(());
         }
 
-        let (dirs, files) = {
-            let facade = self.facade.read().await;
-            (
-                facade.discoverable_dirs(path),
-                facade.discoverable_files(path),
-            )
-        };
+        let path_owned = path.to_path_buf();
+        let (dirs, files) = crate::runtime::read(&self.facade, move |facade| {
+            Ok::<_, crate::IndexError>((
+                facade.discoverable_dirs(&path_owned)?,
+                facade.discoverable_files(&path_owned)?,
+            ))
+        })
+        .await
+        .map_err(|e| WatchError::EventError {
+            details: e.to_string(),
+        })?
+        .map_err(|e| WatchError::EventError {
+            details: e.to_string(),
+        })?;
 
         let new_dirs: Vec<_> = dirs
             .into_iter()
@@ -393,6 +413,7 @@ impl UnifiedWatcher {
         for file in files {
             self.debouncer.record(file);
         }
+        Ok(())
     }
 
     /// Recover from a full native-event queue by deriving state from the
@@ -406,39 +427,8 @@ impl UnifiedWatcher {
         // every covered root once; this observes creates, modifications,
         // deletions and renames regardless of which individual events were lost.
         let roots = self.batch_sync_roots.clone();
-        let mut pending = crate::indexing::pipeline::PendingResolution::default();
-        for root in &roots {
-            let mut indexer = self.facade.write().await;
-            match indexer.index_directory_deferred(root, false, &mut pending) {
-                Ok(stats) => {
-                    crate::log_event!(
-                        "watcher",
-                        "overflow sync",
-                        "{}: {} indexed, {} removed",
-                        crate::parsing::paths::render_absolute_path(root).display(),
-                        stats.files_indexed,
-                        stats.files_removed
-                    );
-                }
-                Err(e) if is_writer_lock_contention(&e) => {
-                    tracing::info!(
-                        "[watcher] overflow sync skipped: another serve process holds the index writer; hot-reload converges"
-                    );
-                }
-                Err(e) => tracing::error!("[watcher] overflow sync failed: {e}"),
-            }
-        }
-        if !roots.is_empty() {
-            let mut indexer = self.facade.write().await;
-            if let Err(e) = indexer.resolve_deferred(pending) {
-                if is_writer_lock_contention(&e) {
-                    tracing::info!(
-                        "[watcher] overflow resolution skipped: another serve process holds the index writer; hot-reload converges"
-                    );
-                } else {
-                    tracing::error!("[watcher] overflow resolution failed: {e}");
-                }
-            }
+        if let Err(error) = self.synchronize_roots(roots).await {
+            tracing::error!("[watcher] overflow sync failed: {error}");
         }
 
         // Handlers outside the shared code batch lane (documents/config) need
@@ -556,48 +546,8 @@ impl UnifiedWatcher {
         // Resolution defers across the covered roots so a burst whose
         // importing and imported files land in different roots binds
         // its cross-root edges regardless of loop order.
-        let mut pending = crate::indexing::pipeline::PendingResolution::default();
-        for root in &roots {
-            crate::log_event!(
-                "watcher",
-                "batch sync",
-                "{}",
-                crate::parsing::paths::render_absolute_path(root).display()
-            );
-            let mut indexer = self.facade.write().await;
-            match indexer.index_directory_deferred(root, false, &mut pending) {
-                Ok(stats) => {
-                    crate::log_event!(
-                        "watcher",
-                        "batch synced",
-                        "{} indexed, {} removed",
-                        stats.files_indexed,
-                        stats.files_removed
-                    );
-                }
-                Err(e) if is_writer_lock_contention(&e) => {
-                    tracing::info!(
-                        "[watcher] batch sync skipped: another serve process holds the index writer; hot-reload converges"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("[watcher] batch sync failed: {e}");
-                }
-            }
-        }
-        {
-            let mut indexer = self.facade.write().await;
-            match indexer.resolve_deferred(pending) {
-                Ok(()) => {}
-                Err(e) if is_writer_lock_contention(&e) => {
-                    tracing::info!(
-                        "[watcher] batch sync resolution skipped: another serve process holds the index writer; hot-reload converges"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("[watcher] batch sync resolution failed: {e}");
-                }
-            }
+        if let Err(error) = self.synchronize_roots(roots.clone()).await {
+            tracing::error!("[watcher] batch sync failed: {error}");
         }
 
         if !roots.is_empty() {
@@ -659,122 +609,137 @@ impl UnifiedWatcher {
         }
     }
 
-    /// Execute an action returned by a handler.
+    /// Complete a multi-root code mutation in one serialized worker transaction.
+    /// Already committed files can survive an error, but the error is not hidden.
+    async fn synchronize_roots(&self, roots: Vec<PathBuf>) -> Result<(), WatchError> {
+        if roots.is_empty() {
+            return Ok(());
+        }
+        crate::runtime::mutate(&self.facade, move |indexer| {
+            let mut pending = crate::indexing::pipeline::PendingResolution::default();
+            let mut failures = Vec::new();
+            for root in roots {
+                if let Err(error) = indexer.index_directory_deferred(&root, false, &mut pending) {
+                    failures.push(format!("{}: {error}", root.display()));
+                }
+            }
+            if let Err(error) = indexer.resolve_deferred(pending) {
+                failures.push(error.to_string());
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(WatchError::EventError {
+                    details: failures.join("; "),
+                })
+            }
+        })
+        .await
+        .map_err(|e| WatchError::EventError {
+            details: e.to_string(),
+        })?
+    }
+
+    /// Serialized code mutations and exclusive document mutations run off Tokio.
+    /// Notifications follow publication, never precede it.
     async fn execute_action(
         &self,
         action: WatchAction,
         handler_name: &str,
     ) -> Result<(), WatchError> {
-        match action {
+        let result: Result<Option<FileChangeEvent>, WatchError> = match action {
             WatchAction::ReindexCode { path, created } => {
-                let mut indexer = self.facade.write().await;
-                match indexer.index_file(&path) {
-                    Ok(result) => {
-                        use crate::IndexingResult;
-                        match result {
-                            IndexingResult::Indexed(_) => {
-                                crate::log_event!(handler_name, "reindexed");
-
-                                // Save semantic search
-                                if indexer.has_semantic_search() {
-                                    let semantic_path = self.index_path.join("semantic");
-                                    if let Err(e) = indexer.save_semantic_search(&semantic_path) {
-                                        tracing::warn!(
-                                            "[{handler_name}] failed to save semantic search: {e}"
-                                        );
-                                    }
-                                }
-
-                                // A first-time file grew the resource list;
-                                // the lanes map FileCreated to list_changed
-                                // and FileReindexed to a URI-filtered update.
-                                let event = if created {
-                                    FileChangeEvent::FileCreated { path: path.clone() }
-                                } else {
-                                    FileChangeEvent::FileReindexed { path: path.clone() }
-                                };
-                                self.broadcaster.send(event);
-                            }
-                            IndexingResult::Cached(_) => {
-                                crate::debug_event!(handler_name, "unchanged (hash match)");
-                            }
-                        }
-                    }
-                    Err(e) if is_writer_lock_contention(&e) => {
-                        tracing::info!(
-                            "[{handler_name}] reindex skipped: another serve process holds the index writer; hot-reload converges"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("[{handler_name}] reindex failed: {e}");
-                    }
-                }
+                let semantic_path = self.index_path.join("semantic");
+                crate::runtime::mutate(&self.facade, move |indexer| {
+                    let result = indexer.index_file(&path)?;
+                    indexer.save_semantic_search(&semantic_path)?;
+                    Ok::<_, crate::IndexError>(match result {
+                        crate::IndexingResult::Indexed(_) => Some(if created {
+                            FileChangeEvent::FileCreated { path }
+                        } else {
+                            FileChangeEvent::FileReindexed { path }
+                        }),
+                        crate::IndexingResult::Cached(_) => None,
+                    })
+                })
+                .await
+                .map_err(|e| WatchError::EventError {
+                    details: e.to_string(),
+                })?
+                .map_err(|e| WatchError::EventError {
+                    details: e.to_string(),
+                })
             }
-
             WatchAction::RemoveCode { path } => {
-                let mut indexer = self.facade.write().await;
-                if let Err(e) = indexer.remove_file(&path) {
-                    if is_writer_lock_contention(&e) {
-                        tracing::info!(
-                            "[{handler_name}] remove skipped: another serve process holds the index writer; hot-reload converges"
-                        );
-                    } else {
-                        tracing::error!("[{handler_name}] failed to remove: {e}");
-                    }
-                } else {
-                    crate::log_event!(handler_name, "removed");
-                    self.broadcaster
-                        .send(FileChangeEvent::FileDeleted { path: path.clone() });
-                }
+                let semantic_path = self.index_path.join("semantic");
+                crate::runtime::mutate(&self.facade, move |indexer| {
+                    indexer.remove_file(&path)?;
+                    indexer.save_semantic_search(&semantic_path)?;
+                    Ok::<_, crate::IndexError>(Some(FileChangeEvent::FileDeleted { path }))
+                })
+                .await
+                .map_err(|e| WatchError::EventError {
+                    details: e.to_string(),
+                })?
+                .map_err(|e| WatchError::EventError {
+                    details: e.to_string(),
+                })
             }
-
             WatchAction::ReindexDocument { path } => {
-                if let Some(ref store) = self.document_store {
-                    let mut store = store.write().await;
-                    match store.reindex_file(&path, &self.chunking_config) {
-                        Ok(Some(chunks)) => {
-                            crate::log_event!(handler_name, "reindexed", "{chunks} chunks");
-                            self.broadcaster
-                                .send(FileChangeEvent::FileReindexed { path: path.clone() });
-                        }
-                        Ok(None) => {
-                            crate::debug_event!(handler_name, "not in index, skipped");
-                        }
-                        Err(e) => {
-                            tracing::error!("[{handler_name}] reindex failed: {e}");
-                        }
-                    }
+                if let Some(store) = self.document_store.clone() {
+                    let config = self.chunking_config.clone();
+                    crate::runtime::blocking(move || {
+                        store
+                            .blocking_write()
+                            .reindex_file(&path, &config)
+                            .map(|result| result.map(|_| FileChangeEvent::FileReindexed { path }))
+                            .map_err(|e| WatchError::EventError {
+                                details: e.to_string(),
+                            })
+                    })
+                    .await
+                    .map_err(|e| WatchError::EventError {
+                        details: e.to_string(),
+                    })?
+                } else {
+                    Ok(None)
                 }
             }
-
             WatchAction::RemoveDocument { path } => {
-                if let Some(ref store) = self.document_store {
-                    let mut store = store.write().await;
-                    match store.remove_file(&path) {
-                        Ok(true) => {
-                            crate::log_event!(handler_name, "removed");
-                            self.broadcaster
-                                .send(FileChangeEvent::FileDeleted { path: path.clone() });
-                        }
-                        Ok(false) => {
-                            crate::debug_event!(handler_name, "was not in index");
-                        }
-                        Err(e) => {
-                            tracing::error!("[{handler_name}] failed to remove: {e}");
-                        }
-                    }
+                if let Some(store) = self.document_store.clone() {
+                    crate::runtime::blocking(move || {
+                        store
+                            .blocking_write()
+                            .remove_file(&path)
+                            .map(|removed| removed.then_some(FileChangeEvent::FileDeleted { path }))
+                            .map_err(|e| WatchError::EventError {
+                                details: e.to_string(),
+                            })
+                    })
+                    .await
+                    .map_err(|e| WatchError::EventError {
+                        details: e.to_string(),
+                    })?
+                } else {
+                    Ok(None)
                 }
             }
-
             WatchAction::ReloadConfig {
                 added,
                 removed,
                 current,
             } => {
+                let changed = !added.is_empty() || !removed.is_empty();
                 // The running facade and pipeline own an Arc snapshot of the
                 // startup settings. Refresh it before indexing so subsequent
                 // discovery and CodeFileHandler eligibility see new roots.
-                self.facade.write().await.reload_indexed_paths(current);
+                crate::runtime::mutate(&self.facade, move |indexer| {
+                    indexer.reload_indexed_paths(current);
+                })
+                .await
+                .map_err(|e| WatchError::EventError {
+                    details: e.to_string(),
+                })?;
 
                 if !added.is_empty() {
                     crate::log_event!("config", "adding directories", "{}", added.len());
@@ -784,58 +749,28 @@ impl UnifiedWatcher {
                             crate::parsing::paths::render_absolute_path(path).display()
                         );
                     }
-
-                    let mut indexer = self.facade.write().await;
-                    // Resolution defers across the added dirs so one new
-                    // root's imports into another bind regardless of order.
-                    let mut pending = crate::indexing::pipeline::PendingResolution::default();
-                    for path in &added {
-                        crate::log_event!(
-                            "config",
-                            "indexing",
-                            "{}",
-                            crate::parsing::paths::render_absolute_path(path).display()
-                        );
-                        match indexer.index_directory_deferred(path, false, &mut pending) {
-                            Ok(stats) => {
-                                tracing::info!(
-                                    "  indexed {} files, {} symbols",
-                                    stats.files_indexed,
-                                    stats.symbols_found
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!("  failed: {e}");
-                            }
-                        }
-                    }
-                    if let Err(e) = indexer.resolve_deferred(pending) {
-                        tracing::error!("  resolution failed: {e}");
-                    }
+                    self.synchronize_roots(added).await?;
                 }
-
                 if !removed.is_empty() {
-                    crate::log_event!("config", "removed directories", "{}", removed.len());
-                    for path in &removed {
-                        tracing::info!(
-                            "  - {}",
-                            crate::parsing::paths::render_absolute_path(path).display()
-                        );
-                    }
-                    tracing::info!("Run 'codanna clean' to remove symbols from these directories");
+                    tracing::info!(
+                        "Run 'codanna clean' to remove symbols from removed directories"
+                    );
                 }
-
-                if !added.is_empty() || !removed.is_empty() {
-                    self.broadcaster.send(FileChangeEvent::IndexReloaded);
-                }
+                Ok(changed.then_some(FileChangeEvent::IndexReloaded))
             }
-
-            WatchAction::None => {
-                crate::debug_event!(handler_name, "no action needed");
+            WatchAction::None => Ok(None),
+        };
+        match result {
+            Ok(Some(event)) => {
+                self.broadcaster.send(event);
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => {
+                tracing::error!("[{handler_name}] mutation failed: {error}");
+                Err(error)
             }
         }
-
-        Ok(())
     }
 
     /// Handle IndexReloaded notification - refresh all handlers.
@@ -871,7 +806,9 @@ impl UnifiedWatcher {
         // Config reload can add or drop roots. Register roots first so macOS
         // can cover a large new tree with one recursive FSEvents path.
         let previous_roots = self.handler_roots.clone();
-        self.register_handler_roots().await;
+        if let Err(error) = self.register_handler_roots().await {
+            tracing::error!("[watcher] root registration incomplete: {error}");
+        }
         let added_roots: Vec<_> = self
             .handler_roots
             .iter()
@@ -889,17 +826,9 @@ impl UnifiedWatcher {
         // With the watch active, one incremental truth scan catches that gap;
         // later writes are queued by the native watcher.
         if !added_roots.is_empty() {
-            let mut pending = crate::indexing::pipeline::PendingResolution::default();
-            let mut indexer = self.facade.write().await;
-            for root in &added_roots {
-                if let Err(e) = indexer.index_directory_deferred(root, false, &mut pending) {
-                    tracing::error!("[watcher] new-root catch-up failed: {e}");
-                }
+            if let Err(e) = self.synchronize_roots(added_roots).await {
+                tracing::error!("[watcher] new-root catch-up failed: {e}");
             }
-            if let Err(e) = indexer.resolve_deferred(pending) {
-                tracing::error!("[watcher] new-root catch-up resolution failed: {e}");
-            }
-            drop(indexer);
             for handler in &self.handlers {
                 if let Err(e) = handler.refresh_paths().await {
                     tracing::warn!(
@@ -909,7 +838,6 @@ impl UnifiedWatcher {
                 }
             }
         }
-
         crate::log_event!(
             "watcher",
             "watching",
@@ -1040,6 +968,7 @@ impl UnifiedWatcherBuilder {
             workspace_root,
             handler_roots: Vec::new(),
             batch_sync_roots: Vec::new(),
+            prepared: false,
         })
     }
 }
@@ -1073,6 +1002,7 @@ fn enqueue_watch_event(
 /// converges via hot-reload. Tantivy surfaces the contention as a
 /// lockfile-acquire failure in the storage error chain; that text is
 /// the only marker crossing the boxed layers.
+#[cfg(test)]
 fn is_writer_lock_contention(e: &crate::IndexError) -> bool {
     e.to_string().contains("Failed to acquire Lockfile")
 }
@@ -1236,5 +1166,144 @@ mod tests {
 
         let unrelated = crate::IndexError::General("Pipeline error: parse failed".to_string());
         assert!(!is_writer_lock_contention(&unrelated));
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::sync::Notify;
+
+    struct StartupHandler {
+        root: PathBuf,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        calls: Arc<AtomicUsize>,
+        fail: bool,
+    }
+    #[async_trait::async_trait]
+    impl WatchHandler for StartupHandler {
+        fn name(&self) -> &str {
+            "startup-fixture"
+        }
+        fn matches(&self, _path: &Path) -> bool {
+            false
+        }
+        async fn tracked_paths(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        async fn watch_roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+        async fn on_modify(&self, _path: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+        async fn on_delete(&self, _path: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+        async fn refresh_paths(&self) -> Result<(), WatchError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            if self.fail {
+                return Err(WatchError::InitFailed {
+                    reason: "fixture refused initialization".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn fixture(dir: &Path, handler: StartupHandler) -> UnifiedWatcher {
+        let settings = Arc::new(crate::Settings {
+            workspace_root: Some(dir.to_path_buf()),
+            index_path: dir.join("index"),
+            ..crate::Settings::default()
+        });
+        let facade = Arc::new(RwLock::new(IndexFacade::new(settings).unwrap()));
+        UnifiedWatcher::builder()
+            .indexer(facade)
+            .workspace_root(dir.to_path_buf())
+            .broadcaster(Arc::new(NotificationBroadcaster::new(8)))
+            .handler(handler)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_preparation_waits_for_handlers_and_registers_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("src");
+        std::fs::create_dir(&root).unwrap();
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: root.clone(),
+                entered: entered.clone(),
+                release: release.clone(),
+                calls: calls.clone(),
+                fail: false,
+            },
+        );
+        let task = tokio::spawn(async move {
+            watcher.prepare().await.unwrap();
+            watcher
+        });
+        entered.notified().await;
+        assert!(
+            !task.is_finished(),
+            "readiness cannot precede handler completion"
+        );
+        release.notify_one();
+        let mut watcher = task.await.unwrap();
+        assert!(watcher.prepared);
+        assert!(watcher.registry.watch_dirs().contains(&root));
+        assert_eq!(watcher.handler_roots, vec![root]);
+        // A second prepare must not await or refresh again.
+        watcher.prepare().await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_failed_handler_never_reports_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = Arc::new(Notify::new());
+        release.notify_one();
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: dir.path().to_path_buf(),
+                entered: Arc::new(Notify::new()),
+                release,
+                calls: Arc::new(AtomicUsize::new(0)),
+                fail: true,
+            },
+        );
+        let error = watcher.prepare().await.unwrap_err();
+        assert!(error.to_string().contains("fixture refused initialization"));
+        assert!(!watcher.prepared);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hardening_final_watcher_failed_native_registration_never_reports_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = Arc::new(Notify::new());
+        release.notify_one();
+        let mut watcher = fixture(
+            dir.path(),
+            StartupHandler {
+                root: dir.path().join("missing-root"),
+                entered: Arc::new(Notify::new()),
+                release,
+                calls: Arc::new(AtomicUsize::new(0)),
+                fail: false,
+            },
+        );
+        assert!(watcher.prepare().await.is_err());
+        assert!(!watcher.prepared);
     }
 }

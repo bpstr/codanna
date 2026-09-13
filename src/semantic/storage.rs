@@ -170,29 +170,38 @@ impl SemanticVectorStorage {
         &mut self,
         embeddings: &[(SymbolId, Vec<f32>)],
     ) -> Result<(), SemanticSearchError> {
-        // Validate all dimensions first
-        for (_, embedding) in embeddings {
-            if embedding.len() != self.dimension.get() {
-                return Err(SemanticSearchError::DimensionMismatch {
-                    expected: self.dimension.get(),
-                    actual: embedding.len(),
-                    suggestion: "All embeddings must have the same dimension".to_string(),
-                });
-            }
-        }
+        self.save_batch_borrowed(
+            embeddings
+                .iter()
+                .map(|(id, vector)| (*id, vector.as_slice())),
+        )
+    }
 
-        // Convert to vector storage format
-        let mut vector_batch = Vec::with_capacity(embeddings.len());
-        for (symbol_id, embedding) in embeddings {
-            let vector_id = VectorId::new(symbol_id.to_u32()).ok_or_else(|| {
-                SemanticSearchError::InvalidId {
-                    id: symbol_id.to_u32(),
-                    suggestion: "Symbol ID must be non-zero".to_string(),
+    /// Save borrowed vectors without cloning the corpus. Validate the complete
+    /// batch before mutation; the storage layer consumes only references.
+    pub fn save_batch_borrowed<'a>(
+        &mut self,
+        embeddings: impl IntoIterator<Item = (SymbolId, &'a [f32])>,
+    ) -> Result<(), SemanticSearchError> {
+        let vector_batch = embeddings
+            .into_iter()
+            .map(|(symbol_id, embedding)| {
+                if embedding.len() != self.dimension.get() {
+                    return Err(SemanticSearchError::DimensionMismatch {
+                        expected: self.dimension.get(),
+                        actual: embedding.len(),
+                        suggestion: "All embeddings must have the same dimension".to_string(),
+                    });
                 }
-            })?;
-            vector_batch.push((vector_id, embedding.as_slice()));
-        }
-
+                let vector_id = VectorId::new(symbol_id.to_u32()).ok_or_else(|| {
+                    SemanticSearchError::InvalidId {
+                        id: symbol_id.to_u32(),
+                        suggestion: "Symbol ID must be non-zero".to_owned(),
+                    }
+                })?;
+                Ok((vector_id, embedding))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         self.storage
             .write_batch(&vector_batch)
             .map_err(|e| SemanticSearchError::StorageError {

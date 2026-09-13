@@ -1,3 +1,4 @@
+const { jsonForScript, escapeHtml } = require('../../shared/safety.cjs');
 // 2D layered DAG of a symbol's neighbourhood: call direction as the y-axis
 // (callers above, callees below), longest-path layering with DFS cycle
 // breaking, barycenter ordering, label-width-aware placement. Labels at rest,
@@ -15,7 +16,7 @@ const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', theme = 'dark' } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
   const kinds = [...new Set(graphData.nodes.map(n => n.kind).filter(Boolean))];
-  const legend = kinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
+  const legend = kinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${escapeHtml(k)}</span>`).join('');
   const sigLangs = [...new Set(graphData.nodes.map(n => n.language).filter(Boolean))];
   const hasNonCall = graphData.links.some(l => l.type !== 'calls' && l.type !== 'calledBy');
   const nonCallLegend = hasNonCall
@@ -25,7 +26,7 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   ${themeStyle()}
   <style>
     html, body { margin: 0; height: 100%; }
@@ -39,8 +40,8 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
   ${themeScript(theme)}
   ${detailScript(sigLangs)}
   <div id="info">
-    <h3>${title}</h3>
-    ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
+    <h3>${escapeHtml(title)}</h3>
+    ${subtitle ? `<div class="stat">${escapeHtml(subtitle)}</div>` : ''}
     <div class="stat" id="stats"></div>
     <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>incoming (callers)</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>outgoing (callees)</span>${nonCallLegend}</div>
     <div class="legend">${legend}</div>
@@ -51,9 +52,9 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
   <script>${d3src}</script>
   ${busyOracleScript()}
   <script>
-    const data = ${JSON.stringify(graphData)};
-    const workingDir = ${JSON.stringify(workingDir)};
-    const KVAR = ${JSON.stringify(kindVars)};
+    const data = ${jsonForScript(graphData)};
+    const workingDir = ${jsonForScript(workingDir)};
+    const KVAR = ${jsonForScript(kindVars)};
 
     const idx = new Map(data.nodes.map((n, i) => [n.id, i]));
     const N = data.nodes.length;

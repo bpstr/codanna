@@ -22,6 +22,7 @@ pub mod profiles;
 pub mod project_resolver;
 pub mod relationship;
 pub mod retrieve;
+pub(crate) mod runtime;
 pub mod semantic;
 pub mod storage;
 pub mod symbol;
@@ -33,14 +34,23 @@ pub mod watcher;
 // Explicit exports for better API clarity
 pub use config::{LoggingConfig, Settings};
 pub use error::{
-    IndexError, IndexResult, McpError, McpResult, ParseError, ParseResult, StorageError,
-    StorageResult,
+    IndexError, IndexResult, McpError, McpResult, ParseError, ParseResult,
+    StorageError as LegacyStorageError, StorageResult as LegacyStorageResult,
 };
 pub use indexing::calculate_hash;
 pub use parsing::RustParser;
 pub use relationship::{RelationKind, Relationship, RelationshipEdge};
-pub use storage::IndexPersistence;
+pub use storage::{IndexPersistence, StorageError, StorageResult};
 pub use symbol::{CompactSymbol, ScopeContext, StringTable, Symbol, Visibility};
 pub use types::{
     CompactString, FileId, IndexingResult, Range, SymbolId, SymbolKind, compact_string,
 };
+
+#[cfg(test)]
+mod review_public_error_tests {
+    #[test]
+    fn hardening_review_root_storage_error_is_the_active_storage_type() {
+        let result: crate::StorageResult<()> = Err(crate::storage::StorageError::LockPoisoned);
+        assert!(matches!(result, Err(crate::StorageError::LockPoisoned)));
+    }
+}

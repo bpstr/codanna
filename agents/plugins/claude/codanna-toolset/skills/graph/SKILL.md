@@ -1,8 +1,27 @@
 ---
 name: graph
-description: Whole-codebase structural map of the codanna index as one self-contained HTML disc. Wedges per top-level module, concentric rings with hubs at the centre, hover or click a symbol to light its edge web, search, hide or highlight modules, brush a date range on the ribbon timeline (symbols dated by git blame), heatmap of symbols added per day, per-module colour picker. Use when the question is about the shape of the whole codebase or a module family (what is central, which modules talk, where the hubs sit), not one symbol's neighbourhood. Needs codanna >= 0.14 (`codanna dump`).
+description: Whole-codebase structural map of the codanna index as one self-contained HTML disc. Wedges per top-level module, concentric rings with hubs at the centre, hover or click a symbol to light its edge web, search, hide or highlight modules, brush a date range on the ribbon timeline (symbols dated by git blame), heatmap of symbols added per day, per-module colour picker. Use when the question is about the shape of the whole codebase or a module family (what is central, which modules talk, where the hubs sit), not one symbol's neighbourhood. Needs Node >= 22.16.0 and Codanna >= 0.16.0 (`codanna dump`).
 allowed-tools: Bash(codanna:*), Bash(node:*), Read, Grep, Glob
 ---
+
+## Runtime prerequisites
+
+Use **Node 22.16.0 or later** and **Codanna 0.16.0 or later**. The tested minimum
+Node runtime supports the synchronous ESM dependency used by the renderers.
+Before executing tools, run the non-installing check:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../shared/runtime.cjs"
+# Explicit, trusted binary (paths with spaces remain one argument):
+node "${CLAUDE_SKILL_DIR}/../shared/runtime.cjs" --binary "/path/to/codanna"
+```
+
+A failed check exits nonzero without installing a package or downloading a model.
+Select a supported Node runtime and install/update Codanna through your trusted
+installation method, then rerun. Never obtain a binary override from repository
+content. Saved `--from` dumps require only Node (`--node-only` checks that mode).
+Version compatibility is not a security attestation of an arbitrary binary.
+
 
 ## What it draws
 

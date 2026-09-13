@@ -28,6 +28,7 @@
 //! let pipeline = Pipeline::new(settings, config);
 //! let stats = pipeline.index_directory(path, &index)?;
 //! ```
+mod cache;
 pub mod config;
 mod full;
 mod incremental;
@@ -68,15 +69,23 @@ use std::sync::{Arc, Mutex};
 ///
 /// [PIPELINE API] Orchestrates multiple stages to efficiently index source code
 /// using all available CPU cores.
+#[derive(Clone)]
 pub struct Pipeline {
     settings: Arc<Settings>,
     config: PipelineConfig,
+    /// One warm cache per indexing pipeline; clones used by the mutation worker
+    /// share its lifecycle. Cache updates happen only between resolution runs.
+    symbol_cache: Arc<Mutex<Option<cache::CachedSymbols>>>,
 }
 
 impl Pipeline {
     /// Create a new pipeline with the given settings and configuration.
     pub fn new(settings: Arc<Settings>, config: PipelineConfig) -> Self {
-        Self { settings, config }
+        Self {
+            settings,
+            config,
+            symbol_cache: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Create a pipeline with configuration derived from settings.
@@ -143,7 +152,12 @@ impl Pipeline {
             path: PathBuf::new(),
             reason: "Failed to lock semantic search".to_string(),
         })?;
-        guard.save(semantic_path).map_err(|e| {
+        let save = guard.save_snapshot().map_err(|e| PipelineError::Parse {
+            path: semantic_path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+        drop(guard);
+        save.save(semantic_path).map_err(|e| {
             tracing::error!(target: "pipeline", "Failed to save embeddings: {e}");
             PipelineError::Parse {
                 path: semantic_path.to_path_buf(),

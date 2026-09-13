@@ -61,8 +61,10 @@ impl<G: EmbeddingGenerator> EmbedStage<G> {
         }
 
         let mut stats = EmbedStats::default();
+        let mut vector_pairs = Vec::with_capacity(symbols.len());
 
-        // Process in batches to manage memory
+        // Bound provider requests, but publish exactly one complete generation.
+        // A later provider failure must not replace any part of the old index.
         for chunk in symbols.chunks(EMBED_BATCH_SIZE) {
             // Extract texts for embedding
             let texts: Vec<&str> = chunk.iter().map(|(_, text)| text.as_str()).collect();
@@ -70,8 +72,15 @@ impl<G: EmbeddingGenerator> EmbedStage<G> {
             // Generate embeddings
             let embeddings = self.generator.generate_embeddings(&texts)?;
 
-            // Create (VectorId, Vec<f32>) pairs
-            let mut vector_pairs = Vec::with_capacity(chunk.len());
+            if embeddings.len() != chunk.len() {
+                return Err(VectorError::EmbeddingFailed(format!(
+                    "Expected {} embeddings, received {}",
+                    chunk.len(),
+                    embeddings.len()
+                )));
+            }
+
+            // Accumulate every chunk before replacement-semantic publication.
             for ((symbol_id, _), embedding) in chunk.iter().zip(embeddings) {
                 // Map SymbolId to VectorId (same u32 value)
                 if let Some(vector_id) = VectorId::new(symbol_id.value()) {
@@ -81,13 +90,10 @@ impl<G: EmbeddingGenerator> EmbedStage<G> {
                 }
             }
 
-            // Index vectors
-            engine.index_vectors(&vector_pairs)?;
-
-            stats.symbols_embedded += vector_pairs.len();
             stats.batches_processed += 1;
         }
-
+        engine.index_vectors(&vector_pairs)?;
+        stats.symbols_embedded = vector_pairs.len();
         Ok(stats)
     }
 
@@ -351,5 +357,80 @@ mod tests {
         assert_eq!(stats.symbols_embedded, 6);
         assert_eq!(stats.batches_processed, 1);
         assert_eq!(stats.failed, 0);
+    }
+    struct ReviewGenerator {
+        short_second_batch: bool,
+    }
+
+    impl EmbeddingGenerator for ReviewGenerator {
+        fn generate_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
+            if self.short_second_batch && texts.len() == 1 {
+                return Ok(vec![]);
+            }
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    let value: f32 = text.parse().unwrap();
+                    let mut vector = vec![0.0; 384];
+                    vector[0] = value;
+                    vector[1] = 1.0;
+                    vector
+                })
+                .collect())
+        }
+        fn dimension(&self) -> crate::vector::VectorDimension {
+            crate::vector::VectorDimension::dimension_384()
+        }
+    }
+
+    #[test]
+    fn hardening_review_embedding_257_symbols_survive_publication() {
+        use crate::vector::{MmapVectorStorage, SegmentOrdinal, VectorDimension};
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut engine =
+            VectorSearchEngine::new(dir.path(), VectorDimension::dimension_384()).unwrap();
+        let stage = EmbedStage::new(ReviewGenerator {
+            short_second_batch: false,
+        });
+        let symbols = (1..=257)
+            .map(|id| (SymbolId::new(id).unwrap(), id.to_string()))
+            .collect::<Vec<_>>();
+        let stats = stage.embed_and_store(&symbols, &mut engine).unwrap();
+        assert_eq!(stats.symbols_embedded, 257);
+        assert_eq!(stats.batches_processed, 2);
+        assert_eq!(engine.vector_count(), 257);
+        let mut persisted = MmapVectorStorage::open(dir.path(), SegmentOrdinal::new(0)).unwrap();
+        let vectors = persisted.read_all_vectors().unwrap();
+        assert_eq!(vectors.len(), 257);
+        let ids = vectors
+            .iter()
+            .map(|(id, _)| id.get())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids, (1..=257).collect());
+    }
+
+    #[test]
+    fn hardening_review_embedding_short_second_batch_preserves_old_generation() {
+        use crate::vector::{MmapVectorStorage, SegmentOrdinal, VectorDimension};
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut engine =
+            VectorSearchEngine::new(dir.path(), VectorDimension::dimension_384()).unwrap();
+        let old = vec![1.0; 384];
+        engine
+            .index_vectors(&[(VectorId::new(900).unwrap(), old.clone())])
+            .unwrap();
+        let stage = EmbedStage::new(ReviewGenerator {
+            short_second_batch: true,
+        });
+        let symbols = (1..=257)
+            .map(|id| (SymbolId::new(id).unwrap(), id.to_string()))
+            .collect::<Vec<_>>();
+        assert!(stage.embed_and_store(&symbols, &mut engine).is_err());
+        assert_eq!(engine.vector_count(), 1);
+        let mut persisted = MmapVectorStorage::open(dir.path(), SegmentOrdinal::new(0)).unwrap();
+        assert_eq!(
+            persisted.read_all_vectors().unwrap(),
+            vec![(VectorId::new(900).unwrap(), old)]
+        );
     }
 }

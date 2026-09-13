@@ -3,14 +3,7 @@
 //! Creates LanguageParser instances based on Language enum and Settings.
 //! Validates language enablement and provides discovery of supported languages.
 
-use super::{
-    CBehavior, CParser, CSharpBehavior, CSharpParser, ClojureBehavior, ClojureParser, CppBehavior,
-    CppParser, GdscriptBehavior, GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser,
-    JavaScriptBehavior, JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior,
-    LanguageId, LanguageParser, LuaBehavior, LuaParser, NixBehavior, NixParser, PhpBehavior,
-    PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser, SvelteBehavior,
-    SvelteParser, SwiftBehavior, SwiftParser, TypeScriptBehavior, TypeScriptParser, get_registry,
-};
+use super::{Language, LanguageBehavior, LanguageId, LanguageParser, get_registry};
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
 
@@ -23,7 +16,7 @@ pub struct ParserWithBehavior {
 /// Parser factory that creates LanguageParser instances based on configuration.
 ///
 /// Validates language support and configuration before instantiation.
-/// Currently supports: Rust (full), Python/JS/TS (placeholder).
+/// Parser construction delegates to the registered language implementations.
 #[derive(Debug)]
 pub struct ParserFactory {
     settings: Arc<Settings>,
@@ -42,7 +35,7 @@ impl ParserFactory {
     /// Creates parser using the registry system
     ///
     /// This method uses the global language registry instead of hardcoded match statements.
-    /// It will eventually replace create_parser() once migration is complete.
+    /// The legacy `create_parser` method delegates to this path.
     #[must_use = "Parser creation may fail and should be handled"]
     pub fn create_parser_from_registry(
         &self,
@@ -61,7 +54,7 @@ impl ParserFactory {
     /// Creates parser with behavior using the registry system
     ///
     /// This method uses the global language registry instead of hardcoded match statements.
-    /// It will eventually replace create_parser_with_behavior() once migration is complete.
+    /// The legacy paired constructor delegates to this path.
     pub fn create_parser_with_behavior_from_registry(
         &self,
         language_id: LanguageId,
@@ -122,83 +115,7 @@ impl ParserFactory {
             }
         }
 
-        match language {
-            Language::Rust => {
-                let parser = RustParser::new().map_err(IndexError::General)?;
-                Ok(Box::new(parser))
-            }
-            Language::Python => {
-                let parser = PythonParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::JavaScript => {
-                // TODO: Implement JavaScriptParser
-                Err(IndexError::General(format!(
-                    "{} parser not yet implemented. Currently only Rust is supported.",
-                    language.name()
-                )))
-            }
-            Language::TypeScript => {
-                // TODO: Implement TypeScriptParser
-                Err(IndexError::General(format!(
-                    "{} parser not yet implemented. Currently only Rust is supported.",
-                    language.name()
-                )))
-            }
-            Language::Php => {
-                let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Go => {
-                let parser = GoParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::C => {
-                let parser = CParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Cpp => {
-                let parser = CppParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::CSharp => {
-                let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Gdscript => {
-                let parser = GdscriptParser::new().map_err(IndexError::General)?;
-                Ok(Box::new(parser))
-            }
-            Language::Java => {
-                let parser = JavaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Kotlin => {
-                let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Clojure => {
-                let parser =
-                    ClojureParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Lua => {
-                let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Nix => {
-                let parser = NixParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Swift => {
-                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-            Language::Svelte => {
-                let parser = SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                Ok(Box::new(parser))
-            }
-        }
+        self.create_parser_from_registry(language.to_language_id())
     }
 
     /// Checks if language is enabled in configuration.
@@ -234,150 +151,16 @@ impl ParserFactory {
             }
         }
 
-        // Create parser and behavior pair
-        let result = match language {
-            Language::Rust => {
-                let parser = RustParser::new().map_err(IndexError::General)?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(RustBehavior::new()),
-                }
-            }
-            Language::Python => {
-                let parser = PythonParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(PythonBehavior::new()),
-                }
-            }
-            Language::Php => {
-                let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(PhpBehavior::new()),
-                }
-            }
-            Language::TypeScript => {
-                let parser =
-                    TypeScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(TypeScriptBehavior::new()),
-                }
-            }
-            Language::JavaScript => {
-                let parser =
-                    JavaScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(JavaScriptBehavior::new()),
-                }
-            }
-            Language::Go => {
-                let parser = GoParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(GoBehavior::new()),
-                }
-            }
-            Language::C => {
-                let parser = CParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(CBehavior::new()),
-                }
-            }
-            Language::Cpp => {
-                let parser = CppParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(CppBehavior::new()),
-                }
-            }
-            Language::CSharp => {
-                let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(CSharpBehavior::new()),
-                }
-            }
-            Language::Gdscript => {
-                let parser = GdscriptParser::new().map_err(IndexError::General)?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(GdscriptBehavior::new()),
-                }
-            }
-            Language::Java => {
-                let parser = JavaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(JavaBehavior::new()),
-                }
-            }
-            Language::Kotlin => {
-                let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(KotlinBehavior::new()),
-                }
-            }
-            Language::Clojure => {
-                let parser =
-                    ClojureParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(ClojureBehavior::new()),
-                }
-            }
-            Language::Lua => {
-                let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(LuaBehavior::new()),
-                }
-            }
-            Language::Nix => {
-                let parser = NixParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(NixBehavior::new()),
-                }
-            }
-            Language::Swift => {
-                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(SwiftBehavior::new()),
-                }
-            }
-            Language::Svelte => {
-                let parser = SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
-                ParserWithBehavior {
-                    parser: Box::new(parser),
-                    behavior: Box::new(SvelteBehavior::new()),
-                }
-            }
-        };
-
-        Ok(result)
+        self.create_parser_with_behavior_from_registry(language.to_language_id())
     }
 
-    /// Create just the behavior for a language from registry
+    /// Construct only the requested language behavior. Unknown IDs and a
+    /// poisoned registry are errors, never an implicit Rust fallback.
     pub fn create_behavior_from_registry(
         &self,
         language_id: LanguageId,
-    ) -> Box<dyn LanguageBehavior> {
-        let registry = get_registry();
-        let registry = registry.lock().unwrap();
-
-        if let Some(definition) = registry.get(language_id) {
-            definition.create_behavior()
-        } else {
-            // Fallback to a default behavior if language not found
-            // This shouldn't happen in practice
-            Box::new(RustBehavior::new())
-        }
+    ) -> IndexResult<Box<dyn LanguageBehavior>> {
+        behavior_from_registry(get_registry(), language_id)
     }
 
     /// Returns list of all enabled languages from configuration.
@@ -692,5 +475,111 @@ mod tests {
         assert!(parser.is_ok());
         let parser = parser.unwrap();
         assert_eq!(parser.language(), Language::Python);
+    }
+}
+
+#[cfg(test)]
+mod review_factory_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_legacy_parser_constructs_every_enabled_language() {
+        let factory = ParserFactory::new(Arc::new(Settings::default()));
+        let languages = factory.enabled_languages();
+        assert!(languages.contains(&Language::JavaScript));
+        assert!(languages.contains(&Language::TypeScript));
+        for language in languages {
+            let parser = factory
+                .create_parser(language)
+                .unwrap_or_else(|err| panic!("failed legacy parser {}: {err}", language.name()));
+            assert_eq!(parser.language(), language);
+        }
+    }
+}
+
+// Share this boundary with an isolated-registry test; poisoning the global
+// singleton in a test would contaminate unrelated parallel parser tests.
+fn behavior_from_registry(
+    registry: &std::sync::Mutex<super::registry::LanguageRegistry>,
+    language_id: LanguageId,
+) -> IndexResult<Box<dyn LanguageBehavior>> {
+    let definition = {
+        let registry = registry.lock().map_err(|_| IndexError::MutexPoisoned)?;
+        registry
+            .shared_definition(language_id)
+            .ok_or_else(|| IndexError::UnknownLanguage {
+                language: language_id.to_string(),
+            })?
+    };
+    // Constructors may do I/O. Do not hold the process-wide registry lock.
+    Ok(definition.create_behavior())
+}
+
+#[cfg(test)]
+mod review_behavior_errors {
+    use super::*;
+
+    #[test]
+    fn hardening_review_unknown_behavior_is_an_error_not_rust() {
+        let factory = ParserFactory::new(Arc::new(Settings::default()));
+        assert!(
+            matches!(factory.create_behavior_from_registry(LanguageId::new("not-registered")),
+            Err(IndexError::UnknownLanguage { language }) if language == "not-registered")
+        );
+    }
+
+    #[test]
+    fn hardening_review_poisoned_behavior_registry_returns_typed_error() {
+        let registry = std::sync::Mutex::new(super::super::registry::LanguageRegistry::new());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = registry.lock().unwrap();
+            panic!("isolated registry failure fixture");
+        }));
+        assert!(matches!(
+            behavior_from_registry(&registry, LanguageId::new("rust")),
+            Err(IndexError::MutexPoisoned)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod review_catalog_tests {
+    use super::*;
+    #[test]
+    fn hardening_review_language_catalogs_and_behavior_constructors_agree() {
+        let settings = Arc::new(Settings::default());
+        let factory = ParserFactory::new(settings.clone());
+        let registered: Vec<_> = get_registry()
+            .lock()
+            .unwrap()
+            .iter_all()
+            .map(|definition| definition.id())
+            .collect();
+        assert!(!registered.is_empty());
+        let configured: std::collections::HashSet<_> =
+            settings.languages.keys().map(String::as_str).collect();
+        let registered_names: std::collections::HashSet<_> =
+            registered.iter().map(|id| id.as_str()).collect();
+        assert_eq!(
+            configured, registered_names,
+            "default settings and registry must be complete in both directions"
+        );
+        for id in registered {
+            let language = Language::from_language_id(id)
+                .expect("registered language requires legacy enum mapping");
+            assert_eq!(language.to_language_id(), id);
+            if factory.is_language_enabled(language) {
+                assert!(factory.enabled_languages().contains(&language));
+                let pair = factory.create_parser_with_behavior(language).unwrap();
+                assert_eq!(pair.parser.language(), language);
+                assert_eq!(pair.behavior.language_id(), id);
+                assert_eq!(
+                    factory
+                        .create_behavior_from_registry(id)
+                        .unwrap()
+                        .language_id(),
+                    id
+                );
+            }
+        }
     }
 }

@@ -1,12 +1,12 @@
 //! Clojure grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::clojure::audit::ClojureParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Clojure",
     file_extension: "clj",
-    grammar_json_path: "contributing/parsers/clojure/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/clojure/node-types.json"),
     example_file_path: "examples/clojure/comprehensive.clj",
     output_dir: "contributing/parsers/clojure",
 };

@@ -6,8 +6,8 @@
 //! - Language filtering
 //! - Hidden file handling
 
-use crate::Settings;
 use crate::parsing::get_registry;
+use crate::{IndexError, IndexResult, Settings};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,86 +41,210 @@ impl FileWalker {
         builder
     }
 
-    /// Walk a directory and return an iterator of files to index
-    pub fn walk(&self, root: &Path) -> impl Iterator<Item = PathBuf> {
-        // The ignore crate's override feature is for INCLUDING files, not excluding them.
-        // To add custom ignore patterns, we need to use a different approach.
-        // For now, we'll rely on .gitignore and .codannaignore files.
-
-        // TODO: Add support for custom ignore patterns from settings
-        // One approach would be to create a temporary .codanna-ignore file
-        // or use the glob filtering in the iterator below
-
-        // Get enabled extensions from the registry
-        let enabled_extensions = self.get_enabled_extensions();
-
-        // Build and filter the walker
-        Self::configured_builder(root)
-            .build()
-            .filter_map(Result::ok) // Skip files we can't access
-            .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
-            .filter_map(move |entry| {
-                let path = entry.path();
-
-                // Skip hidden files (files starting with .)
-                if let Some(file_name) = path.file_name() {
-                    if let Some(name_str) = file_name.to_str() {
-                        if name_str.starts_with('.') {
-                            return None;
-                        }
+    /// Walk a directory, preserving discovery failures instead of treating them
+    /// as an empty subtree. Callers must consume the complete iterator to claim
+    /// a complete inventory (including when applying an output limit).
+    pub fn walk(&self, root: &Path) -> Box<dyn Iterator<Item = IndexResult<PathBuf>>> {
+        let enabled_extensions = match self.get_enabled_extensions() {
+            Ok(extensions) => extensions,
+            Err(error) => return Box::new(std::iter::once(Err(error))),
+        };
+        let root = root.to_path_buf();
+        Box::new(
+            Self::configured_builder(&root)
+                .build()
+                .filter_map(move |entry| {
+                    let entry = match checked_entry(entry, &root) {
+                        Ok(entry) => entry,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        return None;
                     }
-                }
-
-                // Check if this file extension is enabled
-                if let Some(extension) = path.extension() {
-                    if let Some(ext_str) = extension.to_str() {
-                        if enabled_extensions.iter().any(|ext| ext == ext_str) {
-                            return Some(path.to_path_buf());
-                        }
+                    let path = entry.path();
+                    if path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with('.'))
+                    {
+                        return None;
                     }
-                }
-
-                None
-            })
+                    path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .filter(|ext| enabled_extensions.iter().any(|enabled| enabled == ext))
+                        .map(|_| Ok(path.to_path_buf()))
+                }),
+        )
     }
 
-    /// Directories the index walk would traverse under `root`, ignore
-    /// chains applied. Feeds watch registration for created directories;
-    /// dot-directories below the root are skipped, mirroring the file
-    /// walk's dot-file skip (keeps .git trees out of watch sets).
-    pub fn walk_dirs(&self, root: &Path) -> impl Iterator<Item = PathBuf> {
-        Self::configured_builder(root)
+    /// Directories visited under `root`, with the same ignore chains as `walk`.
+    /// Errors (including invalid ignore rules) are yielded before filtering.
+    pub fn walk_dirs(&self, root: &Path) -> impl Iterator<Item = IndexResult<PathBuf>> {
+        let root = root.to_path_buf();
+        Self::configured_builder(&root)
             .build()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_dir()))
-            .filter(|entry| {
-                entry.depth() == 0
+            .filter_map(move |entry| {
+                let entry = match checked_entry(entry, &root) {
+                    Ok(entry) => entry,
+                    Err(error) => return Some(Err(error)),
+                };
+                if !entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                    return None;
+                }
+                (entry.depth() == 0
                     || entry
                         .file_name()
                         .to_str()
-                        .is_some_and(|n| !n.starts_with('.'))
+                        .is_some_and(|name| !name.starts_with('.')))
+                .then(|| Ok(entry.path().to_path_buf()))
             })
-            .map(|entry| entry.path().to_path_buf())
     }
 
-    /// Get list of enabled file extensions from the registry
-    fn get_enabled_extensions(&self) -> Vec<String> {
-        let registry = get_registry();
-        if let Ok(registry) = registry.lock() {
-            registry
-                .enabled_extensions(&self.settings)
-                .map(|ext| ext.to_string())
-                .collect()
-        } else {
-            // Fallback to empty if registry lock fails
-            Vec::new()
+    /// Read an authorized, bounded inventory before a network mutation starts.
+    /// Every visited entry counts, even when its extension is not indexable.
+    /// Prepared bytes are consumed directly by the pipeline; it cannot rewalk a
+    /// changed directory or reopen a swapped symlink after this preflight.
+    pub(crate) fn snapshot(
+        &self,
+        roots: &[PathBuf],
+        max_entries: usize,
+        max_files: usize,
+        max_bytes: usize,
+    ) -> IndexResult<Vec<crate::indexing::pipeline::FileContent>> {
+        use crate::indexing::{file_info::calculate_hash, pipeline::FileContent};
+        use std::{collections::HashSet, io::Read};
+        let fail = |path: &Path, message: String| IndexError::Discovery {
+            path: path.to_path_buf(),
+            reason: message,
+        };
+        let extensions = self.get_enabled_extensions()?;
+        let mut files = Vec::new();
+        let mut seen = HashSet::new();
+        let mut entries = 0usize;
+        let mut bytes = 0usize;
+        for root in roots {
+            for entry in Self::configured_builder(root).build() {
+                entries += 1;
+                if entries > max_entries {
+                    return Err(fail(root, "reindex entry budget exceeded".into()));
+                }
+                let entry = checked_entry(entry, root)?;
+                let Some(kind) = entry.file_type() else {
+                    return Err(fail(entry.path(), "missing file type".into()));
+                };
+                if kind.is_symlink() {
+                    return Err(fail(
+                        entry.path(),
+                        "reindex does not follow symlinks".into(),
+                    ));
+                }
+                if !kind.is_file()
+                    || entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with('.'))
+                {
+                    continue;
+                }
+                if !entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| extensions.iter().any(|x| x == e))
+                {
+                    continue;
+                }
+                let path = entry
+                    .path()
+                    .canonicalize()
+                    .map_err(|e| fail(entry.path(), e.to_string()))?;
+                if !roots.iter().any(|root| path.starts_with(root)) {
+                    return Err(fail(&path, "source escaped authorized roots".into()));
+                }
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                if files.len() == max_files {
+                    return Err(fail(&path, "reindex file budget exceeded".into()));
+                }
+                let file = std::fs::File::open(&path).map_err(|e| fail(&path, e.to_string()))?;
+                let opened = file.metadata().map_err(|e| fail(&path, e.to_string()))?;
+                let named =
+                    std::fs::symlink_metadata(&path).map_err(|e| fail(&path, e.to_string()))?;
+                if !opened.is_file() || !named.is_file() {
+                    return Err(fail(&path, "source changed type during preflight".into()));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+                        return Err(fail(
+                            &path,
+                            "source changed identity during preflight".into(),
+                        ));
+                    }
+                }
+                let remaining = max_bytes.saturating_sub(bytes).min(32 * 1024 * 1024);
+                let mut content = String::new();
+                file.take(remaining as u64 + 1)
+                    .read_to_string(&mut content)
+                    .map_err(|e| fail(&path, e.to_string()))?;
+                if content.len() > remaining {
+                    return Err(fail(&path, "reindex source byte budget exceeded".into()));
+                }
+                if path
+                    .canonicalize()
+                    .map_err(|e| fail(&path, e.to_string()))?
+                    != path
+                {
+                    return Err(fail(
+                        &path,
+                        "source changed containment during preflight".into(),
+                    ));
+                }
+                bytes += content.len();
+                let hash = calculate_hash(&content);
+                files.push(FileContent::new(path, content, hash));
+            }
         }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
     }
 
-    /// Count files that would be indexed (useful for dry runs)
-    pub fn count_files(&self, root: &Path) -> usize {
-        self.walk(root).count()
+    fn get_enabled_extensions(&self) -> IndexResult<Vec<String>> {
+        let registry = get_registry()
+            .lock()
+            .map_err(|_| IndexError::MutexPoisoned)?;
+        Ok(registry
+            .enabled_extensions(&self.settings)
+            .map(str::to_owned)
+            .collect())
     }
+
+    /// Count a complete inventory or return its discovery error.
+    pub fn count_files(&self, root: &Path) -> IndexResult<usize> {
+        self.walk(root)
+            .try_fold(0, |count, entry| entry.map(|_| count + 1))
+    }
+}
+
+/// `ignore` can attach a partial ignore-file error to an otherwise valid entry.
+/// Dropping that error would silently change the inventory's exclusion rules.
+fn checked_entry(
+    entry: Result<ignore::DirEntry, ignore::Error>,
+    root: &Path,
+) -> IndexResult<ignore::DirEntry> {
+    let entry = entry.map_err(|error| IndexError::Discovery {
+        path: root.to_path_buf(),
+        reason: error.to_string(),
+    })?;
+    if let Some(error) = entry.error() {
+        return Err(IndexError::Discovery {
+            path: entry.path().to_path_buf(),
+            reason: error.to_string(),
+        });
+    }
+    Ok(entry)
 }
 
 #[cfg(test)]
@@ -152,7 +276,7 @@ mod tests {
         let settings = create_test_settings();
         let walker = FileWalker::new(settings);
 
-        let files: Vec<_> = walker.walk(root).collect();
+        let files: Vec<_> = walker.walk(root).collect::<IndexResult<Vec<_>>>().unwrap();
 
         // Should find only Rust files (Python and PHP disabled in test settings)
         assert_eq!(files.len(), 2);
@@ -172,7 +296,7 @@ mod tests {
         let settings = create_test_settings();
         let walker = FileWalker::new(settings);
 
-        let files: Vec<_> = walker.walk(root).collect();
+        let files: Vec<_> = walker.walk(root).collect::<IndexResult<Vec<_>>>().unwrap();
 
         // Should only find the visible file (hidden files are filtered out)
         assert_eq!(files.len(), 1);
@@ -196,7 +320,7 @@ mod tests {
 
         let mut dirs: Vec<_> = walker
             .walk_dirs(root)
-            .map(|p| p.strip_prefix(root).unwrap().to_path_buf())
+            .map(|p| p.unwrap().strip_prefix(root).unwrap().to_path_buf())
             .filter(|p| !p.as_os_str().is_empty())
             .collect();
         dirs.sort();
@@ -226,10 +350,141 @@ mod tests {
         let settings = create_test_settings();
         let walker = FileWalker::new(settings);
 
-        let files: Vec<_> = walker.walk(root).collect();
+        let files: Vec<_> = walker.walk(root).collect::<IndexResult<Vec<_>>>().unwrap();
 
         // Should only find the included file
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("included.rs"));
+    }
+    #[test]
+    fn hardening_review_walker_missing_root_is_not_empty_success() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing");
+        let walker = FileWalker::new(create_test_settings());
+        assert!(matches!(
+            walker.walk(&missing).collect::<IndexResult<Vec<_>>>(),
+            Err(IndexError::Discovery { .. })
+        ));
+        assert!(matches!(
+            walker.walk_dirs(&missing).collect::<IndexResult<Vec<_>>>(),
+            Err(IndexError::Discovery { .. })
+        ));
+        assert!(walker.count_files(&missing).is_err());
+    }
+
+    #[test]
+    fn hardening_review_walker_invalid_ignore_rules_are_reported() {
+        let dir = TempDir::new().unwrap();
+        let invalid_rule = "[z-a]";
+        let mut rules = ignore::gitignore::GitignoreBuilder::new(dir.path());
+        assert!(
+            rules.add_line(None, invalid_rule).is_err(),
+            "fixture must be invalid gitignore syntax"
+        );
+        fs::write(
+            dir.path().join(".codannaignore"),
+            format!("{invalid_rule}\n"),
+        )
+        .unwrap();
+        fs::write(dir.path().join("file.rs"), "fn fixture() {}\n").unwrap();
+        let walker = FileWalker::new(create_test_settings());
+        assert!(
+            walker
+                .walk(dir.path())
+                .collect::<IndexResult<Vec<_>>>()
+                .is_err()
+        );
+        assert!(
+            walker
+                .walk_dirs(dir.path())
+                .collect::<IndexResult<Vec<_>>>()
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn hardening_final_reindex_snapshot_budgets_count_unindexable_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("one.rs"), "pub fn one() {}\n").unwrap();
+        std::fs::write(root.join("two.rs"), "pub fn two() {}\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "not indexed").unwrap();
+        let walker = FileWalker::new(Arc::new(Settings::default()));
+        for (entries, files, bytes, expected) in [
+            (2, 10, 1024, "entry"),
+            (10, 1, 1024, "file"),
+            (10, 10, 1, "byte"),
+        ] {
+            let error = walker
+                .snapshot(std::slice::from_ref(&root), entries, files, bytes)
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let sources = walker.snapshot(&[root.clone(), root], 20, 2, 1024).unwrap();
+        assert_eq!(
+            sources.len(),
+            2,
+            "overlapping roots cannot duplicate source work"
+        );
+    }
+    #[test]
+    fn hardening_final_reindex_consumes_captured_bytes_and_resolves_cross_file_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let source = root.join("src");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("a.rs"), "pub fn caller() { target(); }\n").unwrap();
+        std::fs::write(source.join("b.rs"), "pub fn target() {}\n").unwrap();
+        let settings = Arc::new(Settings {
+            workspace_root: Some(root.clone()),
+            index_path: root.join("index"),
+            ..Settings::default()
+        });
+        let sources = FileWalker::new(Arc::clone(&settings))
+            .snapshot(std::slice::from_ref(&source), 10, 2, 1024)
+            .unwrap();
+        std::fs::write(
+            source.join("b.rs"),
+            "pub fn replaced_after_preflight() {}\n",
+        )
+        .unwrap();
+        let mut facade = crate::indexing::facade::IndexFacade::new(settings).unwrap();
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        for file in sources {
+            facade.index_prepared_file(file, &mut pending).unwrap();
+        }
+        facade.resolve_deferred(pending).unwrap();
+        assert!(
+            facade
+                .find_symbols_by_name("replaced_after_preflight", None)
+                .is_empty()
+        );
+        let caller = facade.find_symbols_by_name("caller", None).remove(0);
+        let target = facade.find_symbols_by_name("target", None).remove(0);
+        assert!(
+            facade
+                .get_called_functions(caller.id)
+                .iter()
+                .any(|symbol| symbol.id == target.id)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn hardening_final_snapshot_rejects_symlink_before_any_index_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.rs"), "fn secret() {}").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.rs"), root.join("escape.rs"))
+            .unwrap();
+        assert!(
+            FileWalker::new(Arc::new(Settings::default()))
+                .snapshot(&[root], 10, 10, 1024)
+                .is_err()
+        );
     }
 }

@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# Isolated conformance fixture, not a server default.
+MCP_TEST_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 # MCP conformance matrix for the stateless migration:
 #   {stdio, http} x {legacy, stateless} x {fresh, stale index}
 # plus witness-debt cells (pipelined first write, cancelled-on-listen,
@@ -247,7 +250,7 @@ http_start() {
     shift 3
     # exec replaces the subshell so $! is the server itself; without it
     # http_stop kills the wrapper and the server outlives the run.
-    (cd "$ws" && exec "$BIN" serve "$@" --bind "127.0.0.1:$port" > /dev/null 2>&1) &
+    (cd "$ws" && exec env CODANNA_MCP_TOKEN="$MCP_TEST_TOKEN" "$BIN" serve "$@" --bind "127.0.0.1:$port" > /dev/null 2>&1) &
     HTTP_PID=$!
     local i=0
     while [ $i -lt 50 ]; do
@@ -270,7 +273,7 @@ curl_mcp() {
     local scheme=$1 port=$2 method=$3 body=$4 payload_out=$5 headers_out=$6
     shift 6
     curl -ks -X POST "$scheme://127.0.0.1:$port/mcp" \
-        -H "Authorization: Bearer mcp-access-token-dummy" \
+        -H "Authorization: Bearer $MCP_TEST_TOKEN" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
         -H "Mcp-Method: $method" \

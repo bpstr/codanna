@@ -1,12 +1,12 @@
 //! Svelte grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{AuditData, GrammarSource, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::svelte::audit::SvelteParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
     language_name: "Svelte",
     file_extension: "svelte",
-    grammar_json_path: "contributing/parsers/svelte/node-types.json",
+    grammar: GrammarSource::File("contributing/parsers/svelte/node-types.json"),
     example_file_path: "examples/svelte/comprehensive.svelte",
     output_dir: "contributing/parsers/svelte",
 };

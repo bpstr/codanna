@@ -7,8 +7,8 @@ use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
 use crate::project_resolver::persist::{ResolutionPersistence, ResolutionRules};
 use crate::types::FileId;
 use crate::{SymbolId, Visibility};
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tree_sitter::{Language, Node};
 
@@ -76,67 +76,58 @@ fn reduce_type_annotation(node: Node, code: &str) -> Option<String> {
 
 use super::resolution::{TypeScriptInheritanceResolver, TypeScriptResolutionContext};
 
+type RulesCache = Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>;
+
 /// TypeScript language behavior implementation
 #[derive(Clone)]
 pub struct TypeScriptBehavior {
     state: BehaviorState,
+    resolution_dir: PathBuf,
+    rules_cache: Arc<Mutex<RulesCache>>,
 }
 
 impl TypeScriptBehavior {
-    /// Create a new TypeScript behavior instance
+    /// Create a behavior using this process's current workspace. Capture the
+    /// directory once: subsequent CWD changes must not retarget an existing instance.
     pub fn new() -> Self {
+        Self::with_resolution_dir(
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(crate::init::local_dir_name()),
+        )
+    }
+
+    /// Use an explicit `.codanna` directory, without modifying process CWD.
+    /// Clones share this instance's cache; different workspaces never share rules.
+    pub fn with_resolution_dir(resolution_dir: impl Into<PathBuf>) -> Self {
         Self {
             state: BehaviorState::new(),
+            resolution_dir: resolution_dir.into(),
+            rules_cache: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Load project resolution rules for a file from the persisted index
-    ///
-    /// Uses a thread-local cache to avoid repeated disk reads.
-    /// Cache is invalidated after 1 second to pick up changes.
+    /// Load only rules governing the registered file, never an arbitrary config.
     fn load_project_rules_for_file(&self, file_id: FileId) -> Option<ResolutionRules> {
-        thread_local! {
-            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        self.load_project_rules_for_path(&self.state.get_file_path(file_id)?)
+    }
+
+    fn load_project_rules_for_path(&self, path: &Path) -> Option<ResolutionRules> {
+        let mut cache = self.rules_cache.lock().ok()?;
+        if cache
+            .as_ref()
+            .is_none_or(|(timestamp, _)| timestamp.elapsed() >= Duration::from_secs(1))
+        {
+            // Invalidate first so an absent/broken replacement cannot resurrect
+            // the previous workspace/config's rules after a failed refresh.
+            *cache = None;
+            let index = ResolutionPersistence::new(&self.resolution_dir)
+                .load("typescript")
+                .ok()?;
+            *cache = Some((Instant::now(), index));
         }
-
-        RULES_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-
-            // Check if cache is fresh (< 1 second old)
-            let needs_reload = if let Some((timestamp, _)) = *cache {
-                timestamp.elapsed() >= Duration::from_secs(1)
-            } else {
-                true
-            };
-
-            // Load fresh from disk if needed
-            if needs_reload {
-                let persistence =
-                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
-                if let Ok(index) = persistence.load("typescript") {
-                    *cache = Some((Instant::now(), index));
-                } else {
-                    // No index file exists yet - that's OK
-                    return None;
-                }
-            }
-
-            // Get rules for the file
-            if let Some((_, ref index)) = *cache {
-                // Get the file path for this FileId from our behavior state
-                if let Some(file_path) = self.state.get_file_path(file_id) {
-                    // Find the config that applies to this file
-                    if let Some(config_path) = index.get_config_for_file(&file_path) {
-                        return index.rules.get(config_path).cloned();
-                    }
-                }
-
-                // Fallback: return any rules we have (for tests without proper file registration)
-                index.rules.values().next().cloned()
-            } else {
-                None
-            }
-        })
+        let (_, index) = cache.as_ref()?;
+        index.rules.get(index.get_config_for_file(path)?).cloned()
     }
 }
 
@@ -204,7 +195,7 @@ impl LanguageBehavior for TypeScriptBehavior {
         // This ensures symbols use the SAME path format as enhanced imports
 
         // Load the resolution index to find which tsconfig governs this file
-        let persistence = ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+        let persistence = ResolutionPersistence::new(&self.resolution_dir);
         let index = persistence.load("typescript").ok()?;
 
         // get_config_for_file() canonicalizes its input; pass the absolute
@@ -379,6 +370,11 @@ impl LanguageBehavior for TypeScriptBehavior {
         // Load project rules for path alias enhancement
         let maybe_enhancer = self
             .load_project_rules_for_file(file_id)
+            .or_else(|| {
+                importing_file
+                    .as_deref()
+                    .and_then(|path| self.load_project_rules_for_path(Path::new(path)))
+            })
             .map(super::resolution::TypeScriptProjectEnhancer::new);
 
         // Build enhanced imports with path aliases resolved

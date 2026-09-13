@@ -18,7 +18,7 @@ use std::sync::Arc;
 fn behavior_for(lang: LanguageId) -> Box<dyn LanguageBehavior> {
     let settings = Settings::load().expect("Failed to load settings");
     let factory = ParserFactory::new(Arc::new(settings));
-    factory.create_behavior_from_registry(lang)
+    factory.create_behavior_from_registry(lang).unwrap()
 }
 
 fn symbol(

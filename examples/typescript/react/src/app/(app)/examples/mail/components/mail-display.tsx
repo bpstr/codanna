@@ -1,7 +1,8 @@
-import addDays from "date-fns/addDays";
-import addHours from "date-fns/addHours";
-import format from "date-fns/format";
-import nextSaturday from "date-fns/nextSaturday";
+import { useId } from "react";
+import { addDays } from "date-fns/addDays";
+import { addHours } from "date-fns/addHours";
+import { format } from "date-fns/format";
+import { nextSaturday } from "date-fns/nextSaturday";
 import {
   Archive,
   ArchiveX,
@@ -46,10 +47,11 @@ interface MailDisplayProps {
 
 export function MailDisplay({ mail }: MailDisplayProps) {
   const today = new Date();
+  const muteId = useId();
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center p-2">
+    <div className="flex h-full min-w-0 flex-col break-words">
+      <div className="flex flex-wrap items-center gap-y-2 p-2">
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -89,7 +91,7 @@ export function MailDisplay({ mail }: MailDisplayProps) {
                   </Button>
                 </TooltipTrigger>
               </PopoverTrigger>
-              <PopoverContent className="flex w-[535px] p-0">
+              <PopoverContent className="flex w-[min(535px,calc(100vw-2rem))] flex-col p-0 md:flex-row">
                 <div className="flex flex-col gap-2 border-r px-2 py-4">
                   <div className="px-4 text-sm font-medium">Snooze until</div>
                   <div className="grid min-w-[250px] gap-1">
@@ -187,8 +189,8 @@ export function MailDisplay({ mail }: MailDisplayProps) {
       <Separator />
       {mail ? (
         <div className="flex flex-1 flex-col">
-          <div className="flex items-start p-4">
-            <div className="flex items-start gap-4 text-sm">
+          <div className="flex flex-wrap items-start gap-2 p-4">
+            <div className="flex min-w-0 items-start gap-4 text-sm">
               <Avatar>
                 <AvatarImage alt={mail.name} />
                 <AvatarFallback>
@@ -198,7 +200,7 @@ export function MailDisplay({ mail }: MailDisplayProps) {
                     .join("")}
                 </AvatarFallback>
               </Avatar>
-              <div className="grid gap-1">
+              <div className="grid min-w-0 gap-1">
                 <div className="font-semibold">{mail.name}</div>
                 <div className="line-clamp-1 text-xs">{mail.subject}</div>
                 <div className="line-clamp-1 text-xs">
@@ -221,15 +223,16 @@ export function MailDisplay({ mail }: MailDisplayProps) {
             <form>
               <div className="grid gap-4">
                 <Textarea
+                  aria-label={`Reply to ${mail.name}`}
                   className="p-4"
                   placeholder={`Reply ${mail.name}...`}
                 />
                 <div className="flex items-center">
                   <Label
-                    htmlFor="mute"
+                    htmlFor={muteId}
                     className="flex items-center gap-2 text-xs font-normal"
                   >
-                    <Switch id="mute" aria-label="Mute thread" /> Mute this
+                    <Switch id={muteId} aria-label="Mute thread" /> Mute this
                     thread
                   </Label>
                   <Button

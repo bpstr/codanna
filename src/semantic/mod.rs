@@ -3,6 +3,7 @@
 //! This module provides a simple API for semantic search on documentation,
 //! designed to integrate with the existing indexing system.
 
+mod journal;
 mod metadata;
 mod pool;
 pub(crate) mod remote;
