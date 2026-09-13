@@ -1,0 +1,35 @@
+name: Knowledge features
+on:
+  push:
+    branches: ['feature/knowledge-*']
+permissions:
+  contents: write
+concurrency:
+  group: knowledge-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  knowledge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply rustfmt
+        run: |
+          cargo fmt --all
+          if ! git diff --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add -- '*.rs'
+            git commit -m 'style: rustfmt knowledge stack'
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
+      - name: Test knowledge engine and companion CLI
+        run: cargo test --locked --bin codanna-knowledge
+      - name: Clippy knowledge companion
+        run: cargo clippy --locked --bin codanna-knowledge -- -D warnings
+      - name: CLI entry point
+        run: cargo run --locked --bin codanna-knowledge -- --help
