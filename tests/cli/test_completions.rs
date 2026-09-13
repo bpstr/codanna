@@ -11,7 +11,9 @@ fn completion_scripts_are_generated_without_project_setup() {
             .env_remove("OPENAI_API_KEY")
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("GOOGLE_API_KEY")
-            .env_remove("CODANNA_EMBED_PROVIDER")
+            // Completion output remains a thin path even when the caller's
+            // normal CLI environment requests a provider.
+            .env("CODANNA_EMBED_PROVIDER", "invalid-fixture-provider")
             .output()
             .expect("run completion generator");
 

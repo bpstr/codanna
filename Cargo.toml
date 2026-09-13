@@ -16,7 +16,7 @@ exclude = [".github/", "contributing/", "tests/", "docs/", "agents/", ".claude-p
 
 [package.metadata.binstall]
 pkg-fmt = "txz"
-bin-dir = "{ name }-{ version }-{ target-family }/{ bin }{ binary-ext }"
+bin-dir = "{ name }-{ version }-{ target-family}/{ bin }{ binary-ext }"
 
 [package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-linux-x64.tar.xz"
@@ -123,6 +123,12 @@ thread-id = "5.1.0"
 default = ["http-server"]
 http-server = ["axum", "tower", "tower-http"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
+# Optional local embedding acceleration. The active target decides which ORT
+# execution provider is compiled: CoreML on Apple, CUDA on Linux/Windows.
+gpu-embeddings = ["dep:ort"]
+# Convenience aliases; both resolve to the target-appropriate implementation.
+gpu-coreml = ["gpu-embeddings"]
+gpu-cuda = ["gpu-embeddings"]
 axum = ["dep:axum"]
 tower = ["dep:tower"]
 tower-http = ["dep:tower-http"]
@@ -166,3 +172,9 @@ harness = false
 
 [target."cfg(windows)".dependencies]
 dunce = "1.0.5"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, optional = true, features = ["coreml"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, optional = true, features = ["cuda"] }

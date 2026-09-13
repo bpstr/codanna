@@ -230,6 +230,8 @@ async fn main() {
         return;
     }
 
+    codanna::embedding_runtime::configure_embedding_runtime();
+
     // For index command, auto-initialize if needed (but not when using --config)
     if matches!(cli.command, Commands::Index { .. }) && cli.config.is_none() {
         if Settings::check_init().is_err() {
