@@ -516,6 +516,11 @@ pub enum PluginAction {
 /// Document collection management actions
 #[derive(Subcommand)]
 pub enum DocumentAction {
+    /// Inspect recent indexing runs without loading the embedding model
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     /// Index documents from a collection
     #[command(
         about = "Index documents from a configured collection",

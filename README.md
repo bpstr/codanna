@@ -149,6 +149,27 @@ codanna documents index
 codanna mcp search_documents query:"authentication flow"
 ```
 
+Inspect indexing from another terminal without loading an embedding model:
+
+```bash
+codanna documents status
+codanna documents status --json
+codanna documents stats docs
+```
+
+Document indexing records its phase, collection, current file, completed embedding
+count, elapsed time, and time since progress last advanced. A heartbeat is written
+every 10 seconds, including during embedding batches and with `--no-progress`.
+The latest ten run records are available through `documents status`; records live
+under the configured index directory in `documents/runs/`. Failed runs retain their
+error. A heartbeat older than 30 seconds is marked stale, with completion unconfirmed.
+This indicates a missing heartbeat, not proof of a deadlock. A fresh heartbeat also
+does not prove the embedding batch is advancing; check the progress age and count.
+Completed runs describe only the collections selected for that run and whether
+embeddings were enabled. Older indexes have no run record. Collection statistics
+report stored metadata counts, which do not establish embedding completeness after
+an interrupted run. These diagnostics currently cover CLI document indexing.
+
 ## What It Does
 
 Your AI assistant gains structured knowledge of your code:

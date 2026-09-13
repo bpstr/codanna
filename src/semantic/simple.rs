@@ -571,6 +571,23 @@ impl SimpleSemanticSearch {
         }
     }
 
+    /// Create an empty local semantic index without owning an embedding model.
+    /// The facade's shared embedding backend performs both indexing and query
+    /// inference, avoiding a duplicate native model session.
+    pub fn new_empty_local(dimensions: usize, model_name: &str) -> Self {
+        let metadata =
+            crate::semantic::SemanticMetadata::new(model_name.to_string(), dimensions, 0);
+        Self {
+            embeddings: Arc::new(HashMap::new()),
+            symbol_languages: Arc::new(HashMap::new()),
+            model: None,
+            dimensions,
+            metadata: Some(metadata),
+            persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
+            persist_io: Arc::new(Mutex::new(())),
+        }
+    }
+
     /// Load symbol-to-language mappings from `languages.json`.
     pub(super) fn load_symbol_languages(
         path: &Path,
@@ -619,6 +636,12 @@ impl SimpleSemanticSearch {
             persistence: Arc::new(Mutex::new(snapshot.persistence)),
             persist_io: Arc::new(Mutex::new(())),
         })
+    }
+
+    /// Load stored vectors without constructing a query-time model. The
+    /// facade's shared embedding backend supplies query embeddings.
+    pub fn load_without_model(path: &Path) -> Result<Self, SemanticSearchError> {
+        Self::load_remote(path)
     }
 
     pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {

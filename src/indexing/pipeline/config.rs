@@ -3,7 +3,7 @@
 //! Controls threading, batching, and channel sizes for the parallel pipeline.
 //! Reads from Settings (.codanna/settings.toml).
 
-use crate::Settings;
+use crate::{Settings, memory::MemoryBudget};
 
 /// Configuration for the parallel indexing pipeline.
 #[derive(Debug, Clone)]
@@ -72,8 +72,14 @@ impl PipelineConfig {
     /// - `indexing.batches_per_commit` -> batches_per_commit
     /// - `indexing.pipeline_tracing` -> pipeline_tracing
     pub fn from_settings(settings: &Settings) -> Self {
+        Self::from_settings_with_budget(settings, MemoryBudget::current())
+    }
+
+    fn from_settings_with_budget(settings: &Settings, memory: MemoryBudget) -> Self {
         let indexing = &settings.indexing;
         let parallelism = indexing.parallelism;
+        let queue_scale = memory.queue_scale_percent();
+        let scale = |value: usize| (value.saturating_mul(queue_scale) / 100).max(1);
 
         // Derive thread counts from single parallelism value
         // 60% for CPU-heavy parsing, 20% for I/O, 10% for discovery
@@ -82,16 +88,16 @@ impl PipelineConfig {
         let discover_threads = (parallelism * 10 / 100).max(1);
 
         // Channel sizes scale with derived thread counts
-        let path_channel_size = parallelism * 100;
-        let content_channel_size = read_threads * 50;
-        let parsed_channel_size = parse_threads * 100;
-        let batch_channel_size = 20;
+        let path_channel_size = scale(parallelism * 100);
+        let content_channel_size = scale(read_threads * 50);
+        let parsed_channel_size = scale(parse_threads * 100);
+        let batch_channel_size = scale(20);
 
         Self {
             parse_threads,
             read_threads,
             discover_threads,
-            batch_size: indexing.batch_size,
+            batch_size: scale(indexing.batch_size),
             path_channel_size,
             content_channel_size,
             parsed_channel_size,
@@ -193,7 +199,11 @@ mod tests {
     #[test]
     fn test_from_settings() {
         let settings = Settings::default();
-        let config = PipelineConfig::from_settings(&settings);
+        let gib = 1024 * 1024 * 1024;
+        let config = PipelineConfig::from_settings_with_budget(
+            &settings,
+            MemoryBudget::from_values(32 * gib, 24 * gib, 0),
+        );
 
         // Should use values from settings.indexing
         assert_eq!(config.batch_size, settings.indexing.batch_size);
@@ -214,6 +224,23 @@ mod tests {
         println!("  discover_threads: {}", config.discover_threads);
         println!("  batch_size: {}", config.batch_size);
         println!("  batches_per_commit: {}", config.batches_per_commit);
+    }
+
+    #[test]
+    fn constrained_host_reduces_byte_heavy_buffers() {
+        let settings = Settings::default();
+        let gib = 1024 * 1024 * 1024;
+        let config = PipelineConfig::from_settings_with_budget(
+            &settings,
+            MemoryBudget::from_values(8 * gib, 2 * gib, 0),
+        );
+
+        assert_eq!(config.batch_size, (settings.indexing.batch_size / 4).max(1));
+        assert!(config.content_channel_size < settings.indexing.parallelism * 50);
+        assert_eq!(
+            config.batches_per_commit,
+            settings.indexing.batches_per_commit
+        );
     }
 
     #[test]

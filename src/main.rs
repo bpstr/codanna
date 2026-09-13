@@ -281,10 +281,13 @@ async fn main() {
     // - Thin: No index, no providers (Parse, McpTest, Benchmark)
     // - Config-only: Settings but no index (Init, Config, AddDir, RemoveDir, ListDirs, Plugin, Profile, Documents)
     // - Full: Index + providers (Retrieve, Mcp, Serve, Index)
-    let needs_providers = !matches!(
-        &cli.command,
-        Commands::Parse { .. } | Commands::McpTest { .. } | Commands::Benchmark { .. }
-    );
+    let needs_providers = match &cli.command {
+        Commands::Parse { .. } | Commands::McpTest { .. } | Commands::Benchmark { .. } => false,
+        // A normal MCP process is a reader. Resolver caches are only needed
+        // when an explicitly watched server may perform incremental indexing.
+        Commands::Serve { watch, .. } => *watch,
+        _ => true,
+    };
 
     let needs_indexer = !matches!(
         &cli.command,
@@ -676,8 +679,10 @@ async fn main() {
     let index_command_fresh_index =
         matches!(cli.command, Commands::Index { .. }) && !index_preexisted;
 
+    let read_only_serve = matches!(&cli.command, Commands::Serve { .. });
     if let Some(ref mut idx) = indexer {
-        if persistence.exists() && !is_force_index && !index_command_fresh_index {
+        if !read_only_serve && persistence.exists() && !is_force_index && !index_command_fresh_index
+        {
             // Load stored indexed_paths from metadata
             match IndexMetadata::load(&config.index_path) {
                 Ok(metadata) => {

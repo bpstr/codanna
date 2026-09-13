@@ -1,64 +1,10 @@
 //! Serve command - MCP server modes (stdio, HTTP, HTTPS).
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
-
-/// Lifetime-owned OS lock for stdio MCP servers.
-///
-/// The inode must remain at this path after release. Unlinking a lockfile lets
-/// contenders lock different inodes and defeats mutual exclusion. PID contents
-/// are diagnostics only; kernel lock ownership is authoritative.
-#[derive(Debug)]
-struct ServeLockGuard {
-    _file: std::fs::File,
-}
-
-#[derive(Debug)]
-enum ServeLockError {
-    AlreadyRunning { pid: u32, lock_path: PathBuf },
-    Io(std::io::Error),
-}
-
-impl ServeLockGuard {
-    fn acquire(index_path: &Path) -> Result<Self, ServeLockError> {
-        let lock_path = index_path.join("serve.lock");
-        std::fs::create_dir_all(index_path).map_err(ServeLockError::Io)?;
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(ServeLockError::Io)?;
-        match fs4::fs_std::FileExt::try_lock_exclusive(&file) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(ServeLockError::AlreadyRunning {
-                    pid: read_lock_pid(&lock_path).unwrap_or(0),
-                    lock_path,
-                });
-            }
-            Err(err) => return Err(ServeLockError::Io(err)),
-        }
-        // Only a lock owner may change the diagnostic PID. Closing the handle
-        // releases the lock even when writing fails, or the process crashes.
-        file.set_len(0).map_err(ServeLockError::Io)?;
-        write!(file, "{}", std::process::id()).map_err(ServeLockError::Io)?;
-        Ok(Self { _file: file })
-    }
-}
-
-fn read_lock_pid(lock_path: &Path) -> Option<u32> {
-    std::fs::read_to_string(lock_path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-}
-
 /// Arguments for the serve command.
 pub struct ServeArgs {
     pub watch: bool,
@@ -194,36 +140,9 @@ async fn run_stdio_server(
     watch: bool,
     actual_watch_interval: u64,
 ) {
-    // Acquire the stdio serve lock before doing anything else. Bound at
-    // function scope so the guard releases the OS lock on return / unwind.
-    // The process::exit arms below must drop it explicitly: exit skips
-    // destructors (the OS still releases the descriptor on process exit).
-    let serve_lock = match ServeLockGuard::acquire(&index_path) {
-        Ok(guard) => guard,
-        Err(ServeLockError::AlreadyRunning { pid, lock_path }) => {
-            eprintln!(
-                "Another codanna serve is already running for this index (PID {pid}, lock at {}).",
-                crate::parsing::paths::render_absolute_path(&lock_path).display()
-            );
-            eprintln!();
-            eprintln!("Subagents and other AI tools may have spawned a duplicate. To run multiple");
-            eprintln!("clients against one index, use HTTP mode:");
-            eprintln!("  codanna serve --http --watch");
-            eprintln!("HTTP mode supports concurrent clients without lock conflicts.");
-            eprintln!();
-            eprintln!("Stop the owning server and retry. Do not unlink an active OS lock file.");
-            std::process::exit(1);
-        }
-        Err(ServeLockError::Io(e)) => {
-            eprintln!(
-                "Failed to acquire serve lock under {}: {e}",
-                crate::parsing::paths::render_absolute_path(&index_path).display()
-            );
-            std::process::exit(1);
-        }
-    };
-
-    // stdio mode - current implementation
+    // Stdio servers are read-only unless --watch is explicitly requested.
+    // Tantivy supports concurrent readers, so every MCP client can own its
+    // own stdio process while an index writer publishes new commits.
     eprintln!("Starting MCP server on stdio transport");
     if watch {
         eprintln!("Index watching enabled (interval: {actual_watch_interval}s)");
@@ -276,7 +195,7 @@ async fn run_stdio_server(
     }
 
     // Start unified file watcher if enabled
-    if watch || config.file_watch.enabled {
+    if watch {
         use crate::watcher::UnifiedWatcher;
         use crate::watcher::handlers::{CodeFileHandler, ConfigFileHandler, DocumentFileHandler};
 
@@ -330,7 +249,6 @@ async fn run_stdio_server(
                 // otherwise disappear without a filesystem event.
                 if let Err(error) = unified_watcher.prepare().await {
                     eprintln!("Failed to prepare unified watcher: {error}");
-                    drop(serve_lock);
                     std::process::exit(1);
                 }
                 background_tasks.push(tokio::spawn(async move {
@@ -345,7 +263,6 @@ async fn run_stdio_server(
             }
             Err(e) => {
                 eprintln!("Failed to start unified watcher: {e}");
-                drop(serve_lock);
                 std::process::exit(1);
             }
         }
@@ -362,13 +279,12 @@ async fn run_stdio_server(
         Ok(service) => service,
         Err(e) => {
             eprintln!("Failed to start MCP server: {e}");
-            drop(serve_lock);
             std::process::exit(1);
         }
     };
 
     // Wait for the stdio transport, then synchronously tear down all work
-    // owned by that session before releasing serve.lock. `abort` is sufficient
+    // owned by that session. `abort` is sufficient
     // for these async loops because the native notify watcher is owned inside
     // the task and drops when the future is cancelled.
     let service_result = service.waiting().await;
@@ -381,7 +297,6 @@ async fn run_stdio_server(
 
     if let Err(e) = service_result {
         eprintln!("MCP server error: {e}");
-        drop(serve_lock);
         std::process::exit(1);
     }
 }
@@ -478,68 +393,4 @@ fn probe_tolerant_stdio(
     });
 
     (transport_side, tokio::io::stdout())
-}
-
-#[cfg(test)]
-mod serve_lock_tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn hardening_review_serve_lock_releases_without_unlinking() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("serve.lock");
-        let guard = ServeLockGuard::acquire(dir.path()).unwrap();
-        assert_eq!(read_lock_pid(&path), Some(std::process::id()));
-        assert!(matches!(
-            ServeLockGuard::acquire(dir.path()),
-            Err(ServeLockError::AlreadyRunning { .. })
-        ));
-        drop(guard);
-        assert!(path.exists(), "never unlink the lock inode");
-        let _next = ServeLockGuard::acquire(dir.path()).unwrap();
-    }
-
-    #[test]
-    fn hardening_review_serve_lock_ignores_stale_pid_contents() {
-        let dir = TempDir::new().unwrap();
-        for contents in ["", "garbled", "4294967295"] {
-            std::fs::write(dir.path().join("serve.lock"), contents).unwrap();
-            let _guard = ServeLockGuard::acquire(dir.path()).unwrap();
-            assert!(matches!(
-                ServeLockGuard::acquire(dir.path()),
-                Err(ServeLockError::AlreadyRunning { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn hardening_review_serve_lock_two_contenders_have_one_owner() {
-        use std::sync::{Barrier, mpsc};
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("serve.lock"), "stale").unwrap();
-        let barrier = Arc::new(Barrier::new(3));
-        let (tx, rx) = mpsc::channel();
-        std::thread::scope(|scope| {
-            for _ in 0..2 {
-                let barrier = barrier.clone();
-                let tx = tx.clone();
-                let path = dir.path();
-                scope.spawn(move || {
-                    barrier.wait();
-                    let guard = ServeLockGuard::acquire(path);
-                    tx.send(guard.is_ok()).unwrap();
-                    // Keep the winning descriptor alive until both contenders
-                    // have completed their acquisition attempt.
-                    barrier.wait();
-                    drop(guard);
-                });
-            }
-            barrier.wait();
-            let owners = usize::from(rx.recv().unwrap()) + usize::from(rx.recv().unwrap());
-            barrier.wait();
-            assert_eq!(owners, 1);
-        });
-        let _guard = ServeLockGuard::acquire(dir.path()).unwrap();
-    }
 }

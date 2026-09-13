@@ -45,6 +45,25 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
     };
 
     match action {
+        DocumentAction::Status { json } => match crate::documents::status::read_runs(&doc_path) {
+            Ok(runs) => {
+                if json {
+                    print_json(&runs);
+                } else if runs.is_empty() {
+                    println!(
+                        "No indexing run status recorded. Older indexes have unknown completion status."
+                    );
+                } else {
+                    for run in runs {
+                        println!("{}", run.summary());
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Cannot read indexing status: {error}");
+                std::process::exit(1);
+            }
+        },
         DocumentAction::Index {
             collection,
             all,
@@ -179,7 +198,7 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
         }
 
         DocumentAction::List { json } => {
-            let store = match create_store_with_embeddings() {
+            let store = match DocumentStore::new(&doc_path, dimension) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("{e}");
@@ -205,7 +224,7 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
         }
 
         DocumentAction::Stats { collection, json } => {
-            let store = match create_store_with_embeddings() {
+            let store = match DocumentStore::new(&doc_path, dimension) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("{e}");
@@ -257,10 +276,22 @@ fn run_index<F>(
     use std::cell::RefCell;
     use std::sync::Arc;
 
+    let monitor = match crate::documents::status::RunMonitor::start(
+        &config.index_path.join("documents"),
+        config.semantic_search.enabled,
+        force,
+    ) {
+        Ok(monitor) => monitor,
+        Err(error) => {
+            eprintln!("Cannot create indexing status: {error}");
+            std::process::exit(1);
+        }
+    };
     // Create or open document store with embeddings
     let mut store = match create_store_with_embeddings() {
         Ok(s) => s,
         Err(e) => {
+            monitor.fail(&e);
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -277,6 +308,7 @@ fn run_index<F>(
         match config.documents.collections.get(&name) {
             Some(col_config) => vec![(name, col_config.clone())],
             None => {
+                monitor.fail(format!("Collection '{name}' not found in settings.toml"));
                 eprintln!("Collection '{name}' not found in settings.toml");
                 eprintln!("\nConfigured collections:");
                 for name in config.documents.collections.keys() {
@@ -293,6 +325,7 @@ fn run_index<F>(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     } else {
+        monitor.fail("Document indexing is disabled");
         eprintln!("Document indexing is disabled. Enable with:");
         eprintln!("  [documents]");
         eprintln!("  enabled = true");
@@ -319,13 +352,16 @@ fn run_index<F>(
         for name in &stale_collections {
             eprintln!("  - {name}");
             if let Err(e) = store.delete_collection(name) {
+                monitor.fail(format!("Removing stale collection '{name}': {e}"));
                 eprintln!("    Failed to remove: {e}");
+                std::process::exit(1);
             }
         }
     }
 
     // Now check if there's anything to index
     if collections_to_index.is_empty() {
+        monitor.finish("completed: no collections to index");
         if stale_collections.is_empty() {
             eprintln!("No collections configured in settings.toml");
             eprintln!("\nTo add a collection:");
@@ -343,8 +379,17 @@ fn run_index<F>(
 
     let mut total_files = 0usize;
     let mut total_chunks = 0usize;
+    let mut failed = false;
 
     for (name, col_config) in collections_to_index {
+        if let Some((bar, status)) = phase1_bar.borrow_mut().take() {
+            drop(status);
+            eprintln!("{bar}");
+        }
+        if let Some((bar, status)) = phase2_bar.borrow_mut().take() {
+            drop(status);
+            eprintln!("{bar}");
+        }
         let chunking = col_config.effective_chunking(&config.documents.defaults);
 
         if !progress {
@@ -353,10 +398,12 @@ fn run_index<F>(
 
         // Index with two-phase progress callback
         let result = store.index_collection_with_progress(&name, &col_config, &chunking, |prog| {
+            monitor.update(&name, &prog);
             if !progress {
                 return;
             }
             match prog {
+                IndexProgress::Phase { .. } => {}
                 IndexProgress::ProcessingFile { current, total, .. } => {
                     let mut p1 = phase1_bar.borrow_mut();
                     if p1.is_none() && total > 0 {
@@ -419,7 +466,10 @@ fn run_index<F>(
                 }
             }
             Err(e) => {
+                failed = true;
+                monitor.fail(format!("Collection '{name}': {e}"));
                 eprintln!("Failed to index collection '{name}': {e}");
+                break;
             }
         };
     }
@@ -435,6 +485,10 @@ fn run_index<F>(
     }
     if progress {
         eprintln!("Total: {total_files} files, {total_chunks} chunks");
+    }
+    monitor.finish(if failed { "failed" } else { "completed" });
+    if failed {
+        std::process::exit(1);
     }
 }
 

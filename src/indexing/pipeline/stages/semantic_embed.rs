@@ -134,33 +134,50 @@ impl SemanticEmbedStage {
 
     /// Process a batch of embedding candidates.
     fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
-        // Convert to the format expected by embed_parallel
-        let items: Vec<_> = batch
-            .candidates
-            .iter()
-            .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
-            .collect();
+        let accelerated = crate::memory::accelerated_embeddings_requested();
+        let mut stored = 0;
+        let mut offset = 0;
 
-        // Generate embeddings in parallel using pool
-        let embeddings = self
-            .pool
-            .embed_parallel(&items)
-            .map_err(|e| PipelineError::Parse {
-                path: std::path::PathBuf::new(),
-                reason: format!("Embedding generation failed: {e}"),
-            })?;
+        // Persist each bounded inference result before producing the next one.
+        // Previously a 5,000-symbol pipeline batch could retain every output
+        // vector plus all native inference temporaries at the same time.
+        while offset < batch.candidates.len() {
+            let memory = crate::memory::MemoryBudget::current();
+            if memory.under_pressure() {
+                return Err(PipelineError::Parse {
+                    path: std::path::PathBuf::new(),
+                    reason: format!(
+                        "semantic embedding stopped before swap pressure \
+                         (available={} MiB, rss={} MiB)",
+                        memory.available / (1024 * 1024),
+                        memory.process_rss / (1024 * 1024),
+                    ),
+                });
+            }
+            let batch_size = memory.embedding_batch_size(64, accelerated);
+            let end = (offset + batch_size).min(batch.candidates.len());
+            let items: Vec<_> = batch.candidates[offset..end]
+                .iter()
+                .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
+                .collect();
 
-        // Store in semantic search; use the returned count which excludes any
-        // embeddings dropped due to dimension mismatch (store_embeddings warns).
-        let stored = if !embeddings.is_empty() {
-            let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
-                path: std::path::PathBuf::new(),
-                reason: "Failed to lock semantic search".to_string(),
-            })?;
-            semantic.store_embeddings(embeddings)
-        } else {
-            0
-        };
+            let embeddings =
+                self.pool
+                    .embed_parallel(&items)
+                    .map_err(|e| PipelineError::Parse {
+                        path: std::path::PathBuf::new(),
+                        reason: format!("Embedding generation failed: {e}"),
+                    })?;
+
+            if !embeddings.is_empty() {
+                let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+                    path: std::path::PathBuf::new(),
+                    reason: "Failed to lock semantic search".to_string(),
+                })?;
+                stored += semantic.store_embeddings(embeddings);
+            }
+            offset = end;
+        }
 
         Ok(stored)
     }

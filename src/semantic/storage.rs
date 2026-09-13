@@ -163,6 +163,47 @@ impl SemanticVectorStorage {
         Ok(result)
     }
 
+    /// Exact top-k search directly over mmap storage. Memory is O(limit), while
+    /// the operating system remains free to cache as many vector pages as the
+    /// host can afford.
+    pub fn search_top_k(
+        &mut self,
+        query: &[f32],
+        limit: usize,
+        threshold: f32,
+        mut accept: impl FnMut(SymbolId) -> bool,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut top = Vec::<(SymbolId, f32)>::with_capacity(limit);
+        self.storage
+            .for_each_score(query, |vector_id, score| {
+                let Some(symbol_id) = SymbolId::new(vector_id.get()) else {
+                    return;
+                };
+                if score < threshold || !score.is_finite() || !accept(symbol_id) {
+                    return;
+                }
+                if top.len() < limit {
+                    top.push((symbol_id, score));
+                } else if let Some((min_index, _)) = top
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, left), (_, right)| left.1.total_cmp(&right.1))
+                    && score > top[min_index].1
+                {
+                    top[min_index] = (symbol_id, score);
+                }
+            })
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Failed to scan semantic vectors: {e}"),
+                suggestion: "Rebuild the semantic index if the vector file is corrupt".to_string(),
+            })?;
+        top.sort_unstable_by(|left, right| right.1.total_cmp(&left.1));
+        Ok(top)
+    }
+
     /// Saves multiple embeddings in batch.
     ///
     /// More efficient than calling save_embedding repeatedly.

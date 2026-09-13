@@ -4,10 +4,13 @@
 //! combining tantivy for metadata/filtering with mmap vectors for semantic search.
 
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 /// Progress updates during document indexing.
 #[derive(Debug, Clone)]
 pub enum IndexProgress<'a> {
+    /// A phase without a measurable completion count.
+    Phase { name: &'static str },
     /// Processing a file (chunking, metadata extraction)
     ProcessingFile {
         current: usize,
@@ -41,7 +44,7 @@ use super::types::{ChunkId, CollectionId, FileState};
 use crate::indexing::file_info::{calculate_hash, get_utc_timestamp};
 use crate::vector::{
     ClusterId, EmbeddingGenerator, MmapVectorStorage, SegmentOrdinal, VectorDimension, VectorId,
-    VectorStorageError, cosine_similarity, kmeans_clustering,
+    VectorStorageError,
 };
 
 /// Errors from document storage operations.
@@ -384,7 +387,7 @@ impl DocumentStore {
 
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::Manual)
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
         // If opening existing index, reload to get latest segments
@@ -485,6 +488,9 @@ impl DocumentStore {
         let _collection_id = self.get_or_create_collection_id(name);
 
         // Collect files to process
+        on_progress(IndexProgress::Phase {
+            name: "discovering files",
+        });
         let files = self.collect_files(config)?;
 
         // Detect changes
@@ -517,7 +523,14 @@ impl DocumentStore {
         }
 
         // Phase 1: Process files (chunking and metadata)
-        let mut pending_embeddings: Vec<(ChunkId, String)> = Vec::new();
+        // Chunk text can be much larger than its final vector. Spool it to disk
+        // instead of retaining an entire collection generation in RAM.
+        let mut embedding_spool = self
+            .embedding_generator
+            .as_ref()
+            .map(|_| tempfile::NamedTempFile::new_in(&self.base_path))
+            .transpose()?;
+        let mut pending_embedding_count = 0usize;
         let total_files = changed.len();
 
         for (idx, path) in changed.iter().enumerate() {
@@ -540,8 +553,19 @@ impl DocumentStore {
                 // Store chunk metadata in tantivy
                 self.store_chunk(chunk_id, name, path, &raw_chunk, &content)?;
 
-                // Queue for embedding
-                pending_embeddings.push((chunk_id, raw_chunk.content.clone()));
+                if let Some(spool) = embedding_spool.as_mut() {
+                    serde_json::to_writer(
+                        &mut *spool,
+                        &(chunk_id.get(), raw_chunk.content.as_str()),
+                    )
+                    .map_err(|e| {
+                        DocumentStoreError::Index(format!(
+                            "Failed to spool document embedding input: {e}"
+                        ))
+                    })?;
+                    spool.write_all(b"\n")?;
+                    pending_embedding_count += 1;
+                }
 
                 stats.chunks_created += 1;
             }
@@ -561,12 +585,15 @@ impl DocumentStore {
         }
 
         // Commit tantivy changes
+        on_progress(IndexProgress::Phase {
+            name: "committing metadata",
+        });
         self.commit()?;
 
         // Phase 2: Generate embeddings in batches
-        if !pending_embeddings.is_empty() {
-            let embed_count = pending_embeddings.len();
-            self.process_embeddings_batched(&pending_embeddings, &mut on_progress)?;
+        if let Some(mut spool) = embedding_spool {
+            let embed_count = pending_embedding_count;
+            self.process_embedding_spool(&mut spool, embed_count, &mut on_progress)?;
             tracing::info!(
                 target: "rag",
                 "generated embeddings for {} chunks",
@@ -580,6 +607,9 @@ impl DocumentStore {
         }
 
         // Persist state
+        on_progress(IndexProgress::Phase {
+            name: "saving state",
+        });
         self.save_state()?;
 
         Ok(stats)
@@ -860,7 +890,15 @@ impl DocumentStore {
 
     fn collect_files(&self, config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
         let mut files = Vec::new();
-        let patterns = config.effective_patterns();
+        let patterns = config
+            .effective_patterns()
+            .into_iter()
+            .map(|pattern| {
+                glob::Pattern::new(&pattern).map_err(|e| {
+                    DocumentStoreError::Index(format!("Invalid glob pattern '{pattern}': {e}"))
+                })
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
 
         for base_path in &config.paths {
             if !base_path.exists() {
@@ -872,18 +910,32 @@ impl DocumentStore {
                 continue;
             }
 
-            // Use glob patterns
-            for pattern in &patterns {
-                let full_pattern = base_path.join(pattern);
-                let pattern_str = full_pattern.to_string_lossy();
+            // Document collections are governed by Codanna's indexing policy,
+            // not Git's tracking policy. A user may intentionally index local
+            // knowledge that is excluded from version control, while dependency
+            // and generated trees belong in `.codannaignore`.
+            let mut walker = ignore::WalkBuilder::new(base_path);
+            walker
+                .hidden(false)
+                .ignore(false)
+                .git_ignore(false)
+                .git_global(false)
+                .git_exclude(false)
+                .follow_links(false);
+            walker.add_custom_ignore_filename(".codannaignore");
 
-                for path in glob::glob(&pattern_str)
-                    .map_err(|e| DocumentStoreError::Index(format!("Invalid glob pattern: {e}")))?
-                    .flatten()
+            for entry in walker.build().filter_map(Result::ok) {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+
+                let relative = path.strip_prefix(base_path).unwrap_or(path);
+                if patterns
+                    .iter()
+                    .any(|pattern| pattern.matches_path(relative))
                 {
-                    if path.is_file() {
-                        files.push(path);
-                    }
+                    files.push(path.to_path_buf());
                 }
             }
         }
@@ -1067,43 +1119,29 @@ impl DocumentStore {
     where
         F: FnMut(IndexProgress<'_>),
     {
-        let Some(ref generator) = self.embedding_generator else {
-            return Ok(());
-        };
-
-        let Some(ref mut vector_storage) = self.vector_storage else {
-            return Ok(());
-        };
-
         let total_chunks = chunks.len();
-        let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(total_chunks);
         let mut processed = 0;
+        let accelerated = crate::memory::accelerated_embeddings_requested();
 
-        // Process in batches
-        for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
-            // Extract texts for this batch
-            let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
+        on_progress(IndexProgress::GeneratingEmbeddings {
+            current: 0,
+            total: total_chunks,
+        });
 
-            // Generate embeddings for batch
-            let embeddings = generator
-                .generate_embeddings(&texts)
-                .map_err(|e| DocumentStoreError::Embedding(e.to_string()))?;
-
-            // Store vectors immediately (releases memory pressure)
-            let vector_pairs: Vec<(VectorId, &[f32])> = batch
-                .iter()
-                .zip(embeddings.iter())
-                .filter_map(|((chunk_id, _), embedding)| {
-                    VectorId::new(chunk_id.get()).map(|vid| (vid, embedding.as_slice()))
-                })
-                .collect();
-
-            vector_storage.write_batch(&vector_pairs)?;
-
-            // Keep embeddings for clustering
-            all_embeddings.extend(embeddings);
-
-            processed += batch.len();
+        while processed < chunks.len() {
+            let memory = crate::memory::MemoryBudget::current();
+            if memory.under_pressure() {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "embedding stopped before swap pressure (available={} MiB, rss={} MiB); \
+                     metadata is safe and the run can be resumed",
+                    memory.available / (1024 * 1024),
+                    memory.process_rss / (1024 * 1024),
+                )));
+            }
+            let batch_size = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
+            let end = (processed + batch_size).min(chunks.len());
+            self.process_embedding_batch(&chunks[processed..end])?;
+            processed = end;
 
             // Report progress
             on_progress(IndexProgress::GeneratingEmbeddings {
@@ -1112,40 +1150,98 @@ impl DocumentStore {
             });
         }
 
-        // Update clustering with all embeddings
-        self.update_clustering(&all_embeddings, chunks)?;
+        on_progress(IndexProgress::Phase {
+            name: "finalizing embeddings",
+        });
 
         Ok(())
     }
 
-    fn update_clustering(
-        &mut self,
-        embeddings: &[Vec<f32>],
-        chunks: &[(ChunkId, String)],
-    ) -> StoreResult<()> {
-        if embeddings.is_empty() {
+    fn process_embedding_batch(&mut self, batch: &[(ChunkId, String)]) -> StoreResult<()> {
+        let Some(ref generator) = self.embedding_generator else {
             return Ok(());
-        }
+        };
+        let Some(ref mut vector_storage) = self.vector_storage else {
+            return Ok(());
+        };
+        let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
+        let embeddings = generator
+            .generate_embeddings(&texts)
+            .map_err(|e| DocumentStoreError::Embedding(e.to_string()))?;
+        let vector_pairs: Vec<(VectorId, &[f32])> = batch
+            .iter()
+            .zip(embeddings.iter())
+            .filter_map(|((chunk_id, _), embedding)| {
+                VectorId::new(chunk_id.get()).map(|id| (id, embedding.as_slice()))
+            })
+            .collect();
+        vector_storage.write_batch(&vector_pairs)?;
 
-        // For now, do full re-clustering (incremental clustering would be more efficient)
-        let k = ((embeddings.len() as f32).sqrt().ceil() as usize).clamp(1, 100);
+        Ok(())
+    }
 
-        let clustering_result = kmeans_clustering(embeddings, k)
-            .map_err(|e| DocumentStoreError::Index(format!("Clustering failed: {e}")))?;
+    fn process_embedding_spool<F>(
+        &mut self,
+        spool: &mut tempfile::NamedTempFile,
+        total_chunks: usize,
+        on_progress: &mut F,
+    ) -> StoreResult<()>
+    where
+        F: FnMut(IndexProgress<'_>),
+    {
+        spool.as_file_mut().flush()?;
+        spool.as_file_mut().seek(SeekFrom::Start(0))?;
+        let reader = BufReader::new(spool.reopen()?);
+        let accelerated = crate::memory::accelerated_embeddings_requested();
+        let mut processed = 0usize;
+        let mut batch = Vec::new();
 
-        self.centroids = clustering_result.centroids;
+        on_progress(IndexProgress::GeneratingEmbeddings {
+            current: 0,
+            total: total_chunks,
+        });
 
-        // Update assignments
-        for (i, (chunk_id, _)) in chunks.iter().enumerate() {
-            if let Some(vid) = VectorId::new(chunk_id.get()) {
-                self.cluster_assignments
-                    .insert(vid, clustering_result.assignments[i]);
+        for line in reader.lines() {
+            let line = line?;
+            let (raw_id, text): (u32, String) = serde_json::from_str(&line).map_err(|e| {
+                DocumentStoreError::Index(format!("Failed to read embedding spool: {e}"))
+            })?;
+            let id = ChunkId::from_u32(raw_id).ok_or_else(|| {
+                DocumentStoreError::Index(format!("Invalid chunk ID in embedding spool: {raw_id}"))
+            })?;
+            batch.push((id, text));
+
+            let memory = crate::memory::MemoryBudget::current();
+            if memory.under_pressure() {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "embedding stopped before swap pressure (available={} MiB, rss={} MiB); \
+                     metadata is safe and the run can be resumed",
+                    memory.available / (1024 * 1024),
+                    memory.process_rss / (1024 * 1024),
+                )));
+            }
+            let target = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
+            if batch.len() >= target {
+                self.process_embedding_batch(&batch)?;
+                processed += batch.len();
+                batch.clear();
+                on_progress(IndexProgress::GeneratingEmbeddings {
+                    current: processed,
+                    total: total_chunks,
+                });
             }
         }
-
-        // Save cluster data
-        self.save_cluster_data()?;
-
+        if !batch.is_empty() {
+            self.process_embedding_batch(&batch)?;
+            processed += batch.len();
+            on_progress(IndexProgress::GeneratingEmbeddings {
+                current: processed,
+                total: total_chunks,
+            });
+        }
+        on_progress(IndexProgress::Phase {
+            name: "finalizing embeddings",
+        });
         Ok(())
     }
 
@@ -1222,18 +1318,15 @@ impl DocumentStore {
             return Ok(candidates.iter().map(|&id| (id, 0.0)).collect());
         };
 
-        let mut scored = Vec::new();
-
-        for &chunk_id in candidates {
-            if let Some(vid) = VectorId::new(chunk_id.get()) {
-                if let Some(chunk_vec) = vector_storage.read_vector(vid) {
-                    let similarity = cosine_similarity(query_vec, &chunk_vec);
-                    scored.push((chunk_id, similarity));
-                }
-            }
-        }
-
-        Ok(scored)
+        let ids: std::collections::HashSet<_> = candidates
+            .iter()
+            .filter_map(|chunk_id| VectorId::new(chunk_id.get()))
+            .collect();
+        let scored = vector_storage.score_vectors(&ids, query_vec)?;
+        Ok(scored
+            .into_iter()
+            .filter_map(|(id, score)| ChunkId::from_u32(id.get()).map(|chunk| (chunk, score)))
+            .collect())
     }
 
     fn enrich_results(
@@ -1402,25 +1495,6 @@ impl DocumentStore {
 
         Ok(())
     }
-
-    fn save_cluster_data(&self) -> StoreResult<()> {
-        let data = ClusterData {
-            centroids: self.centroids.clone(),
-            assignments: self
-                .cluster_assignments
-                .iter()
-                .map(|(vid, cid)| (vid.get(), cid.get()))
-                .collect(),
-        };
-
-        let content = serde_json::to_string_pretty(&data)
-            .map_err(|e| DocumentStoreError::Index(format!("Failed to serialize clusters: {e}")))?;
-
-        let cluster_path = self.base_path.join("clusters.json");
-        std::fs::write(cluster_path, content)?;
-
-        Ok(())
-    }
 }
 
 /// Statistics about a collection.
@@ -1477,6 +1551,121 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store = DocumentStore::new(temp_dir.path(), test_dimension());
         assert!(store.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_progress_includes_initial_and_final_counts() {
+        let temp = TempDir::new().unwrap();
+        let dimension = VectorDimension::new(8).unwrap();
+        let generator = crate::vector::MockEmbeddingGenerator::with_dimension(dimension);
+        let mut store = DocumentStore::new(temp.path(), dimension)
+            .unwrap()
+            .with_embeddings(Box::new(generator))
+            .unwrap();
+        let chunks: Vec<_> = (1..=65)
+            .map(|id| {
+                let text = ["parse", "json", "error", "async"]
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| id & (1 << bit) != 0)
+                    .map(|(_, word)| *word)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (ChunkId::from_u32(id).unwrap(), text)
+            })
+            .collect();
+        let mut counts = Vec::new();
+        let mut phases = Vec::new();
+        store
+            .process_embeddings_batched(&chunks, &mut |event| match event {
+                IndexProgress::GeneratingEmbeddings { current, total } => {
+                    counts.push((current, total))
+                }
+                IndexProgress::Phase { name } => phases.push(name),
+                _ => {}
+            })
+            .unwrap();
+        assert_eq!(counts.first(), Some(&(0, 65)));
+        assert_eq!(counts.last(), Some(&(65, 65)));
+        assert!(counts.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert_eq!(phases, vec!["finalizing embeddings"]);
+    }
+
+    #[test]
+    fn collection_embeddings_stream_through_disk_spool() {
+        use crate::documents::config::{ChunkingConfig, CollectionConfig};
+
+        let store_dir = TempDir::new().unwrap();
+        let source_dir = TempDir::new().unwrap();
+        let body = "# Memory-safe indexing\n\n".to_string()
+            + &"This prepared fixture is long enough to create a document chunk. ".repeat(8);
+        std::fs::write(source_dir.path().join("guide.md"), body).unwrap();
+
+        let dimension = VectorDimension::new(8).unwrap();
+        let generator = crate::vector::MockEmbeddingGenerator::with_dimension(dimension);
+        let mut store = DocumentStore::new(store_dir.path(), dimension)
+            .unwrap()
+            .with_embeddings(Box::new(generator))
+            .unwrap();
+        let config = CollectionConfig {
+            paths: vec![source_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+
+        let stats = store
+            .index_collection("guides", &config, &ChunkingConfig::default())
+            .unwrap();
+
+        assert!(stats.chunks_created > 0);
+        assert_eq!(
+            store.vector_storage.as_ref().unwrap().vector_count(),
+            stats.chunks_created
+        );
+    }
+
+    #[test]
+    fn test_collect_files_uses_codannaignore_not_gitignore() {
+        let store_dir = TempDir::new().unwrap();
+        let source_dir = TempDir::new().unwrap();
+        let store = DocumentStore::new(store_dir.path(), test_dimension()).unwrap();
+
+        std::fs::write(source_dir.path().join(".gitignore"), "node_modules/\n").unwrap();
+        std::fs::write(source_dir.path().join(".codannaignore"), "vendor/\n").unwrap();
+        std::fs::write(source_dir.path().join("README.md"), "included").unwrap();
+        std::fs::create_dir_all(source_dir.path().join(".agents")).unwrap();
+        std::fs::write(
+            source_dir.path().join(".agents/guide.md"),
+            "included hidden doc",
+        )
+        .unwrap();
+        std::fs::create_dir_all(source_dir.path().join("vendor/pkg")).unwrap();
+        std::fs::write(
+            source_dir.path().join("vendor/pkg/README.md"),
+            "ignored vendored doc",
+        )
+        .unwrap();
+        std::fs::create_dir_all(source_dir.path().join("node_modules/pkg")).unwrap();
+        std::fs::write(
+            source_dir.path().join("node_modules/pkg/README.md"),
+            "ignored dependency doc",
+        )
+        .unwrap();
+
+        let config = CollectionConfig {
+            paths: vec![source_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+
+        let mut files = store.collect_files(&config).unwrap();
+        files.sort();
+
+        assert_eq!(files.len(), 3);
+        assert!(files.contains(&source_dir.path().join("README.md")));
+        assert!(files.contains(&source_dir.path().join(".agents/guide.md")));
+        assert!(files.contains(&source_dir.path().join("node_modules/pkg/README.md")));
+        assert!(!files.contains(&source_dir.path().join("vendor/pkg/README.md")));
     }
 
     #[test]

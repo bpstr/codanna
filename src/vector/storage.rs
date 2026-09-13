@@ -407,6 +407,119 @@ impl MmapVectorStorage {
         Ok(vectors)
     }
 
+    /// Score requested vectors directly from the memory map without allocating
+    /// an owned `Vec<f32>` for every candidate. The first persisted occurrence
+    /// of an ID wins, matching `read_vectors` and legacy point lookup behavior.
+    pub fn score_vectors(
+        &mut self,
+        ids: &HashSet<VectorId>,
+        query: &[f32],
+    ) -> Result<Vec<(VectorId, f32)>, VectorStorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.dimension.validate_vector(query)?;
+        self.ensure_mapped()?;
+        let mmap = self.mmap.as_ref().ok_or_else(|| {
+            VectorStorageError::InvalidFormat("Vector storage is not mapped".to_string())
+        })?;
+
+        let query_norm = query.iter().map(|value| value * value).sum::<f32>().sqrt();
+        let dimension = self.dimension.get();
+        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;
+        let mut remaining = ids.clone();
+        let mut scored = Vec::with_capacity(ids.len());
+        let mut offset = HEADER_SIZE;
+
+        while offset + vector_size <= mmap.len() && !remaining.is_empty() {
+            let id = VectorId::from_bytes([
+                mmap[offset],
+                mmap[offset + 1],
+                mmap[offset + 2],
+                mmap[offset + 3],
+            ])
+            .ok_or_else(|| VectorStorageError::InvalidFormat("Invalid vector ID".to_string()))?;
+
+            if remaining.remove(&id) {
+                let data_offset = offset + BYTES_PER_ID;
+                let mut dot = 0.0f32;
+                let mut vector_norm_sq = 0.0f32;
+                for (index, query_value) in query.iter().enumerate() {
+                    let bytes_offset = data_offset + index * BYTES_PER_F32;
+                    let value = f32::from_le_bytes([
+                        mmap[bytes_offset],
+                        mmap[bytes_offset + 1],
+                        mmap[bytes_offset + 2],
+                        mmap[bytes_offset + 3],
+                    ]);
+                    dot += query_value * value;
+                    vector_norm_sq += value * value;
+                }
+                let vector_norm = vector_norm_sq.sqrt();
+                let similarity = if query_norm == 0.0 || vector_norm == 0.0 {
+                    0.0
+                } else {
+                    dot / (query_norm * vector_norm)
+                };
+                scored.push((id, similarity));
+            }
+            offset += vector_size;
+        }
+
+        Ok(scored)
+    }
+
+    /// Visit cosine scores for every persisted vector without allocating owned
+    /// vectors or a corpus-sized result list.
+    pub fn for_each_score(
+        &mut self,
+        query: &[f32],
+        mut visit: impl FnMut(VectorId, f32),
+    ) -> Result<(), VectorStorageError> {
+        self.dimension.validate_vector(query)?;
+        self.ensure_mapped()?;
+        let mmap = self.mmap.as_ref().ok_or_else(|| {
+            VectorStorageError::InvalidFormat("Vector storage is not mapped".to_string())
+        })?;
+        let query_norm = query.iter().map(|value| value * value).sum::<f32>().sqrt();
+        let dimension = self.dimension.get();
+        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;
+        let mut offset = HEADER_SIZE;
+
+        while offset + vector_size <= mmap.len() {
+            let id = VectorId::from_bytes([
+                mmap[offset],
+                mmap[offset + 1],
+                mmap[offset + 2],
+                mmap[offset + 3],
+            ])
+            .ok_or_else(|| VectorStorageError::InvalidFormat("Invalid vector ID".to_string()))?;
+            let data_offset = offset + BYTES_PER_ID;
+            let mut dot = 0.0f32;
+            let mut vector_norm_sq = 0.0f32;
+            for (index, query_value) in query.iter().enumerate() {
+                let bytes_offset = data_offset + index * BYTES_PER_F32;
+                let value = f32::from_le_bytes([
+                    mmap[bytes_offset],
+                    mmap[bytes_offset + 1],
+                    mmap[bytes_offset + 2],
+                    mmap[bytes_offset + 3],
+                ]);
+                dot += query_value * value;
+                vector_norm_sq += value * value;
+            }
+            let vector_norm = vector_norm_sq.sqrt();
+            let score = if query_norm == 0.0 || vector_norm == 0.0 {
+                0.0
+            } else {
+                dot / (query_norm * vector_norm)
+            };
+            visit(id, score);
+            offset += vector_size;
+        }
+        Ok(())
+    }
+
     /// Reads all vectors from storage.
     ///
     /// This is useful for operations that need to process all vectors,
@@ -656,6 +769,15 @@ impl ConcurrentVectorStorage {
         ids: &HashSet<VectorId>,
     ) -> Result<Vec<(VectorId, Vec<f32>)>, VectorStorageError> {
         self.inner.write().read_vectors(ids)
+    }
+
+    /// Score selected vectors in one mmap scan without materializing vectors.
+    pub fn score_vectors(
+        &self,
+        ids: &HashSet<VectorId>,
+        query: &[f32],
+    ) -> Result<Vec<(VectorId, f32)>, VectorStorageError> {
+        self.inner.write().score_vectors(ids, query)
     }
 
     /// Replaces the complete vector generation with exclusive access.
@@ -950,6 +1072,31 @@ mod tests {
 
         // Non-existent vector should return None
         assert!(storage.read_vector(VectorId::new(999).unwrap()).is_none());
+    }
+
+    #[test]
+    fn scores_selected_vectors_without_materializing_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let values = [
+            (VectorId::new(1).unwrap(), vec![1.0, 0.0]),
+            (VectorId::new(2).unwrap(), vec![0.0, 1.0]),
+            (VectorId::new(3).unwrap(), vec![-1.0, 0.0]),
+        ];
+        let batch: Vec<_> = values
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&batch).unwrap();
+
+        let selected = HashSet::from([VectorId::new(1).unwrap(), VectorId::new(2).unwrap()]);
+        let mut scores = storage.score_vectors(&selected, &[1.0, 0.0]).unwrap();
+        scores.sort_by_key(|(id, _)| id.get());
+        assert_eq!(scores.len(), 2);
+        assert!((scores[0].1 - 1.0).abs() < f32::EPSILON);
+        assert!(scores[1].1.abs() < f32::EPSILON);
     }
 
     #[test]

@@ -127,7 +127,10 @@ impl DocumentIndex {
 
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::Manual)
+            // Reader-only MCP processes can stay connected while a separate
+            // indexer commits. Tantivy refreshes their snapshot after commits
+            // without requiring a writer or a Codanna file watcher.
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
         // If opening existing index, reload to get latest segments

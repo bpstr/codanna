@@ -17,6 +17,7 @@ pub mod init;
 pub mod io;
 pub mod logging;
 pub mod mcp;
+pub mod memory;
 pub mod parsing;
 pub mod plugins;
 pub mod profiles;
