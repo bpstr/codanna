@@ -3,12 +3,15 @@
 mod context;
 #[path = "../knowledge/contracts.rs"]
 mod contracts;
+#[path = "../knowledge/drift.rs"]
+mod drift;
 #[path = "../knowledge/mod.rs"]
 mod knowledge;
 #[allow(dead_code)]
 #[path = "../knowledge/service.rs"]
 mod service;
 use clap::{Parser, Subcommand};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 #[derive(Parser)]
@@ -75,9 +78,25 @@ enum Action {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Compare indexed evidence with current local sources. --root uses repo=path.
+    Check {
+        #[arg(long, default_value = ".codanna/knowledge.json")]
+        graph: PathBuf,
+        #[arg(long="root", value_parser=parse_root)]
+        roots: Vec<(String, String)>,
+        #[arg(long)]
+        fail_on_review: bool,
+    },
+}
+fn parse_root(value: &str) -> Result<(String, String), String> {
+    let (repo, path) = value.split_once('=').ok_or("expected REPO=PATH")?;
+    knowledge::validate_repo(repo).map_err(|e| e.to_string())?;
+    Ok((repo.into(), path.into()))
 }
 fn run() -> knowledge::Result<()> {
-    let result = match Cli::parse().command {
+    let cli = Cli::parse();
+    let mut exit_failure = false;
+    let result = match cli.command {
         Action::Index {
             root,
             repo,
@@ -158,10 +177,24 @@ fn run() -> knowledge::Result<()> {
             knowledge::io::save(&graph, &out)?;
             serde_json::json!({"repositories":graph.repositories.keys().collect::<Vec<_>>(),"nodes":graph.nodes.len(),"edges":graph.edges.len(),"unresolved":graph.unresolved.len(),"snapshot":out})
         }
+        Action::Check {
+            graph,
+            roots,
+            fail_on_review,
+        } => {
+            let graph = knowledge::io::load(&graph)?;
+            let roots: BTreeMap<_, _> = roots.into_iter().collect();
+            let report = drift::check(&graph, &roots)?;
+            exit_failure = report.errors > 0 || (fail_on_review && report.reviews > 0);
+            serde_json::to_value(report)?
+        }
     };
     let mut out = std::io::stdout().lock();
     serde_json::to_writer(&mut out, &result)?;
     writeln!(out)?;
+    if exit_failure {
+        return Err("knowledge drift policy failed".into());
+    }
     Ok(())
 }
 fn main() -> std::process::ExitCode {
