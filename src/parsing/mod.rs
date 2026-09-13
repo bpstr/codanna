@@ -6,6 +6,7 @@ pub mod cpp;
 pub mod csharp;
 pub mod factory;
 pub mod gdscript;
+pub mod generic_pack;
 pub mod go;
 pub mod import;
 pub mod java;

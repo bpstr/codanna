@@ -6,7 +6,7 @@
 //! - Language filtering
 //! - Hidden file handling
 
-use crate::parsing::get_registry;
+use crate::parsing::{generic_pack, get_registry};
 use crate::{IndexError, IndexResult, Settings};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
@@ -49,6 +49,7 @@ impl FileWalker {
             Ok(extensions) => extensions,
             Err(error) => return Box::new(std::iter::once(Err(error))),
         };
+        let settings = self.settings.clone();
         let root = root.to_path_buf();
         Box::new(
             Self::configured_builder(&root)
@@ -69,10 +70,14 @@ impl FileWalker {
                     {
                         return None;
                     }
-                    path.extension()
+                    if path
+                        .extension()
                         .and_then(|ext| ext.to_str())
-                        .filter(|ext| enabled_extensions.iter().any(|enabled| enabled == ext))
-                        .map(|_| Ok(path.to_path_buf()))
+                        .is_some_and(|ext| enabled_extensions.iter().any(|enabled| enabled == ext))
+                    {
+                        return Some(Ok(path.to_path_buf()));
+                    }
+                    generic_pack::detect_path(path, &settings).map(|_| Ok(path.to_path_buf()))
                 }),
         )
     }
@@ -146,11 +151,12 @@ impl FileWalker {
                 {
                     continue;
                 }
-                if !entry
+                let registered = entry
                     .path()
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|e| extensions.iter().any(|x| x == e))
+                    .is_some_and(|e| extensions.iter().any(|x| x == e));
+                if !registered && generic_pack::detect_path(entry.path(), &self.settings).is_none()
                 {
                     continue;
                 }
@@ -278,10 +284,28 @@ mod tests {
 
         let files: Vec<_> = walker.walk(root).collect::<IndexResult<Vec<_>>>().unwrap();
 
-        // Should find only Rust files (Python and PHP disabled in test settings)
-        assert_eq!(files.len(), 2);
+        // Rich Python is disabled; Rust and generic Markdown remain discoverable.
+        assert_eq!(files.len(), 3);
         assert!(files.iter().any(|p| p.ends_with("main.rs")));
         assert!(files.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(files.iter().any(|p| p.ends_with("README.md")));
+        assert!(!files.iter().any(|p| p.ends_with("test.py")));
+    }
+
+    #[test]
+    fn generic_languages_are_discovered_and_snapshotted() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        let source = root.join("main.zig");
+        fs::write(&source, "pub fn main() void {}\n").unwrap();
+
+        let walker = FileWalker::new(Arc::new(Settings::default()));
+        let files = walker.walk(&root).collect::<IndexResult<Vec<_>>>().unwrap();
+        assert_eq!(files, vec![source.clone()]);
+
+        let snapshot = walker.snapshot(&[root], 10, 10, 1024).unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].path, source);
     }
 
     #[test]
