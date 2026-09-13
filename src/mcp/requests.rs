@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Server-owned resource budgets. Internal full-index enumerations are not search APIs.
 pub const MAX_SEARCH_LIMIT: u32 = 1000;
 pub const MAX_IMPACT_DEPTH: u32 = 10;
+pub const MAX_CONTEXT_LIMIT: u32 = 10;
 
 pub(crate) fn validate_search_limit(limit: u32) -> Result<(), rmcp::model::ErrorData> {
     if (1..=MAX_SEARCH_LIMIT).contains(&limit) {
@@ -37,6 +38,16 @@ fn deserialize_depth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::E
     let value = u32::deserialize(d)?;
     validate_impact_depth(value).map_err(serde::de::Error::custom)?;
     Ok(value)
+}
+
+fn deserialize_context_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = u32::deserialize(d)?;
+    if (1..=MAX_CONTEXT_LIMIT).contains(&value) {
+        return Ok(value);
+    }
+    Err(serde::de::Error::custom(format!(
+        "context limit must be between 1 and {MAX_CONTEXT_LIMIT}"
+    )))
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -195,6 +206,38 @@ pub struct SearchDocumentsRequest {
     pub limit: u32,
 }
 
+/// Unified topic lookup across code, indexed documents, and shared conversation recall.
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchContextRequest {
+    /// Topic or phrase to investigate across all available context sources.
+    pub query: String,
+    /// Maximum code-symbol matches (default: 5, max: 10).
+    #[serde(
+        default = "default_context_limit",
+        deserialize_with = "deserialize_context_limit"
+    )]
+    #[schemars(range(min = 1, max = 10))]
+    pub code_limit: u32,
+    /// Maximum document chunks (default: 5, max: 10).
+    #[serde(
+        default = "default_context_limit",
+        deserialize_with = "deserialize_context_limit"
+    )]
+    #[schemars(range(min = 1, max = 10))]
+    pub document_limit: u32,
+    /// Maximum conversation messages (default: 5, max: 10).
+    #[serde(
+        default = "default_context_limit",
+        deserialize_with = "deserialize_context_limit"
+    )]
+    #[schemars(range(min = 1, max = 10))]
+    pub conversation_limit: u32,
+    /// Optional document collection filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+}
+
 fn default_depth() -> u32 {
     3
 }
@@ -248,6 +291,32 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            serde_json::from_value::<SearchContextRequest>(
+                json!({"query": "q", "memory_limit": 5})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn search_context_defaults_and_limits_are_bounded() {
+        let request: SearchContextRequest =
+            serde_json::from_value(json!({"query": "status bar"})).unwrap();
+        assert_eq!(request.code_limit, 5);
+        assert_eq!(request.document_limit, 5);
+        assert_eq!(request.conversation_limit, 5);
+
+        for key in ["code_limit", "document_limit", "conversation_limit"] {
+            for limit in [0, MAX_CONTEXT_LIMIT + 1, u32::MAX] {
+                assert!(
+                    serde_json::from_value::<SearchContextRequest>(
+                        json!({"query": "q", key: limit})
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
 
     #[test]

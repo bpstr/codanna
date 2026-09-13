@@ -744,9 +744,9 @@ pub async fn run(
     // Check semantic search status before moving indexer
     let has_semantic_search = facade.has_semantic_search();
 
-    // Only load document store for tools that need it (search_documents)
+    // Only load document store for tools that need it.
     // This is expensive (~1s to load ML model) so we skip it for other tools
-    let needs_document_store = tool == "search_documents";
+    let needs_document_store = matches!(tool.as_str(), "search_documents" | "search_context");
     let document_store = if needs_document_store {
         crate::documents::load_from_settings(config)
     } else {
@@ -931,7 +931,7 @@ pub async fn run(
     // JSON mode already collected everything above through the shared
     // service layer — one execution per invocation. The JSON emit arms
     // below use only pre-collected data; handler dispatch is text-only.
-    let result = if json {
+    let result = if json && tool_kind != ToolKind::SearchContext {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
         match tool_kind {
@@ -1148,13 +1148,63 @@ pub async fn run(
                     }))
                     .await
             }
+            ToolKind::SearchContext => {
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream")
+                    .to_string();
+                let limit = |key: &str| {
+                    arguments
+                        .as_ref()
+                        .and_then(|m| m.get(key))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5) as u32
+                };
+                let collection = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("collection"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                server
+                    .search_context(Parameters(SearchContextRequest {
+                        query,
+                        code_limit: limit("code_limit"),
+                        document_limit: limit("document_limit"),
+                        conversation_limit: limit("conversation_limit"),
+                        collection,
+                    }))
+                    .await
+            }
         }
     };
 
     // Print result
     match result {
         Ok(call_result) => {
-            if json && tool == "get_index_info" {
+            if json && tool == "search_context" {
+                use crate::io::envelope::{EntityType, Envelope};
+                let text = call_result
+                    .content
+                    .iter()
+                    .filter_map(|content| match content {
+                        rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let envelope = Envelope::success(serde_json::json!({"text": text}))
+                    .with_entity_type(EntityType::SearchResult)
+                    .with_query(query)
+                    .with_message("Unified context search completed");
+                println!("{}", render_envelope_json(&envelope, fields.as_ref()));
+            } else if json && tool == "get_index_info" {
                 use crate::io::envelope::Envelope;
                 use crate::io::guidance_engine::generate_guidance_from_config;
 

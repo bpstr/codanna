@@ -31,4 +31,5 @@ tools! {
     SemanticSearchDocs => ("semantic_search_docs",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SemanticSearchWithContext => ("semantic_search_with_context",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SearchDocuments => ("search_documents",["query","collection","limit"],["query"],Some("query"),Read),
+    SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection"],["query"],Some("query"),Read),
 }
