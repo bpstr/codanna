@@ -3,7 +3,7 @@
 //! Provides commands for indexing, querying, and serving code intelligence data.
 //! Uses the cli module for argument parsing and command definitions.
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use codanna::cli::{Cli, Commands, RetrieveQuery};
 use codanna::indexing::facade::{IndexFacade, format_semantic_status};
 use codanna::project_resolver::{
@@ -218,6 +218,18 @@ fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
 async fn main() {
     let cli = Cli::parse();
 
+    // Completion generation must not depend on a project configuration, index,
+    // provider credentials, or logging setup.
+    if let Commands::Completions { shell } = &cli.command {
+        clap_complete::generate(
+            clap_complete::Shell::from(*shell),
+            &mut Cli::command(),
+            "codanna",
+            &mut std::io::stdout(),
+        );
+        return;
+    }
+
     // For index command, auto-initialize if needed (but not when using --config)
     if matches!(cli.command, Commands::Index { .. }) && cli.config.is_none() {
         if Settings::check_init().is_err() {
@@ -285,6 +297,7 @@ async fn main() {
             | Commands::Plugin { .. }
             | Commands::Documents { .. }
             | Commands::Profile { .. }
+            | Commands::Completions { .. }
     );
 
     // Initialize project resolution providers (only if needed)
@@ -949,6 +962,8 @@ async fn main() {
         Commands::Profile { action } => {
             codanna::cli::commands::profile::run(action);
         }
+
+        Commands::Completions { .. } => unreachable!("handled before configuration loading"),
     }
 }
 

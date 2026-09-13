@@ -58,7 +58,7 @@
             # ABI mismatch causes silent runtime corruption. Verify after nixpkgs updates.
             pkgs.onnxruntime
           ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.installShellFiles ];
           cargoBuildOptions =
             x:
             x
@@ -67,6 +67,12 @@
               "codanna"
             ];
           ORT_SKIP_DOWNLOAD = "1";
+          postInstall = ''
+            installShellCompletion --cmd codanna \
+              --bash <($out/bin/codanna completions bash) \
+              --zsh <($out/bin/codanna completions zsh) \
+              --fish <($out/bin/codanna completions fish)
+          '';
         };
       }
     );

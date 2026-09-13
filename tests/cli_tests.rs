@@ -42,6 +42,9 @@ mod test_mcp_test_client_generation;
 #[path = "cli/test_version_stamp.rs"]
 mod test_version_stamp;
 
+#[path = "cli/test_completions.rs"]
+mod test_completions;
+
 /// `codanna dump` envelope stream and stale gate
 #[path = "cli/test_dump.rs"]
 mod test_dump;

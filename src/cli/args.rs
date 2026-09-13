@@ -3,7 +3,7 @@
 //! Contains the Cli struct, Commands enum, and all subcommand enums.
 
 use clap::{
-    Parser, Subcommand,
+    Parser, Subcommand, ValueEnum,
     builder::styling::{AnsiColor, Effects, Styles},
 };
 use std::path::PathBuf;
@@ -69,6 +69,8 @@ fn create_custom_help() -> String {
     help.push_str("  parse         Output AST nodes in JSONL format\n");
     help.push_str("  plugin        Manage Claude Code plugins\n");
     help.push_str("  documents     Index and search document collections\n");
+    help.push_str("  profile       Initialize and manage project profiles\n");
+    help.push_str("  completions   Generate shell completion scripts\n");
     help.push_str("  help          Print this message or the help of the given subcommand(s)\n\n");
 
     help.push_str("See 'codanna help <command>' for more information on a specific command.\n\n");
@@ -122,6 +124,18 @@ pub struct Cli {
 /// Available CLI commands
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Generate shell completion scripts
+    #[command(
+        about = "Generate shell completion scripts",
+        long_about = "Generate a completion script for a supported shell and write it to standard output.",
+        after_help = "Examples:\n  codanna completions bash > ~/.local/share/bash-completion/completions/codanna\n  codanna completions zsh > ~/.zfunc/_codanna\n  codanna completions fish > ~/.config/fish/completions/codanna.fish"
+    )]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
+
     /// Initialize project
     #[command(about = "Set up .codanna directory with default configuration")]
     Init {
@@ -373,6 +387,28 @@ pub enum Commands {
         #[command(subcommand)]
         action: crate::profiles::commands::ProfileAction,
     },
+}
+
+/// Shells supported by completion generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    Powershell,
+    Zsh,
+}
+
+impl From<CompletionShell> for clap_complete::Shell {
+    fn from(shell: CompletionShell) -> Self {
+        match shell {
+            CompletionShell::Bash => Self::Bash,
+            CompletionShell::Elvish => Self::Elvish,
+            CompletionShell::Fish => Self::Fish,
+            CompletionShell::Powershell => Self::PowerShell,
+            CompletionShell::Zsh => Self::Zsh,
+        }
+    }
 }
 
 /// Plugin management actions
