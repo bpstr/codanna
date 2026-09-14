@@ -4,7 +4,9 @@
 //! Workers are spawned lazily and never share cwd, settings, or recall selectors.
 //! Network transports and explicitly watched servers keep their existing path.
 
+#[path = "mcp/scope.rs"]
 mod scope;
+#[path = "mcp/workers.rs"]
 mod workers;
 
 use crate::IndexError;
@@ -185,7 +187,7 @@ fn catalogue() -> Result<Vec<Tool>, serde_json::Error> {
     let router = CodeIntelligenceServer::symbols_router()
         + CodeIntelligenceServer::search_router()
         + CodeIntelligenceServer::context_router();
-    let mut tools = Vec::new();
+    let mut tools: Vec<Tool> = Vec::new();
     for tool in router.list_all() {
         let mut value = serde_json::to_value(tool)?;
         value["inputSchema"]["properties"]["workspace"] = json!({
