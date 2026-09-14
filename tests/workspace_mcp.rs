@@ -221,7 +221,12 @@ async fn hardening_workspace_mcp_one_connection_queries_independent_workspaces()
             .len(),
         2
     );
-    let before = call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await;
+    let before = call(
+        &client,
+        "get_workspace",
+        json!({"workspace": "workspace-a"}),
+    )
+    .await;
     assert_eq!(
         before.structured_content.unwrap()["result"]["worker_loaded"],
         false
@@ -245,7 +250,12 @@ async fn hardening_workspace_mcp_one_connection_queries_independent_workspaces()
     assert!(!rendered(&primary).contains("unrelated_only_identity"));
     assert!(rendered(&unrelated).contains("unrelated_only_identity"));
     assert!(!rendered(&unrelated).contains("primary_only_identity"));
-    let after = call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await;
+    let after = call(
+        &client,
+        "get_workspace",
+        json!({"workspace": "workspace-a"}),
+    )
+    .await;
     assert_eq!(
         after.structured_content.unwrap()["result"]["worker_loaded"],
         true
@@ -283,7 +293,14 @@ async fn hardening_workspace_mcp_explicit_override_never_changes_the_connection_
         "workspace-a"
     );
     assert_eq!(
-        owner(&call(&client, "get_workspace", json!({"workspace": "workspace-b"})).await),
+        owner(
+            &call(
+                &client,
+                "get_workspace",
+                json!({"workspace": "workspace-b"})
+            )
+            .await
+        ),
         "workspace-b"
     );
     assert_eq!(
@@ -355,7 +372,14 @@ async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_workspaces_without
                 .is_err()
         );
         assert_eq!(
-            owner(&call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await),
+            owner(
+                &call(
+                    &client,
+                    "get_workspace",
+                    json!({"workspace": "workspace-a"})
+                )
+                .await
+            ),
             "workspace-a"
         );
         let unknown = fixture.home.join("unregistered");
@@ -395,7 +419,14 @@ async fn hardening_workspace_mcp_root_continuations_are_bound_and_single_use() {
     replay.request_state = Some(state);
     assert!(client.call_tool_once(replay).await.is_err());
     assert_eq!(
-        owner(&call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await),
+        owner(
+            &call(
+                &client,
+                "get_workspace",
+                json!({"workspace": "workspace-a"})
+            )
+            .await
+        ),
         "workspace-a"
     );
     client.cancel().await.unwrap();
@@ -457,9 +488,8 @@ async fn hardening_workspace_mcp_arbitrary_renamed_single_repository_workspaces_
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
     fs::create_dir(&home).unwrap();
-    let registry = codanna::init::workspaces::WorkspaceRegistry::new(
-        home.join(".codanna/projects.json"),
-    );
+    let registry =
+        codanna::init::workspaces::WorkspaceRegistry::new(home.join(".codanna/projects.json"));
     let mut workspaces = Vec::new();
     for index in 0..2 {
         let directory = format!("checkout-{index}");
