@@ -99,7 +99,10 @@ impl ServerHandler for WorkspaceServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         if request.is_some_and(|request| request.cursor.is_some()) {
-            return Err(ErrorData::invalid_params("The tool catalogue has no continuation cursor", None));
+            return Err(ErrorData::invalid_params(
+                "The tool catalogue has no continuation cursor",
+                None,
+            ));
         }
         Ok(ListToolsResult {
             result_type: Some(ResultType::COMPLETE),
@@ -120,20 +123,33 @@ impl ServerHandler for WorkspaceServer {
             return Err(ErrorData::invalid_params("Unknown Codanna tool", None));
         }
         if serde_json::to_vec(&request).map_err(internal)?.len() > 64 * 1024 {
-            return Err(ErrorData::invalid_params("Tool request exceeds 64 KiB", None));
+            return Err(ErrorData::invalid_params(
+                "Tool request exceeds 64 KiB",
+                None,
+            ));
         }
         if request.name == "list_workspaces" {
-            if request.arguments.as_ref().is_some_and(|args| !args.is_empty())
+            if request
+                .arguments
+                .as_ref()
+                .is_some_and(|args| !args.is_empty())
                 || request.request_state.is_some()
                 || request.input_responses.is_some()
             {
-                return Err(ErrorData::invalid_params("list_workspaces takes no arguments or continuation state", None));
+                return Err(ErrorData::invalid_params(
+                    "list_workspaces takes no arguments or continuation state",
+                    None,
+                ));
             }
             let registry = self.registry.clone();
             let workspaces = tokio::task::spawn_blocking(move || registry.list())
-                .await.map_err(internal)?.map_err(internal)?;
-            return json_result(json!({"workspaces": workspaces, "mode": "local-read-only-router"}))
-                .map(Into::into);
+                .await
+                .map_err(internal)?
+                .map_err(internal)?;
+            return json_result(
+                json!({"workspaces": workspaces, "mode": "local-read-only-router"}),
+            )
+            .map(Into::into);
         }
         let (workspace, arguments) = match self.scope.resolve(&request, &context).await? {
             Route::Ready(workspace, arguments) => (workspace, arguments),
@@ -143,8 +159,15 @@ impl ServerHandler for WorkspaceServer {
         request.request_state = None;
         request.input_responses = None;
         let result = if request.name == "get_workspace" {
-            if request.arguments.as_ref().is_some_and(|args| !args.is_empty()) {
-                return Err(ErrorData::invalid_params("get_workspace accepts only workspace or project_path", None));
+            if request
+                .arguments
+                .as_ref()
+                .is_some_and(|args| !args.is_empty())
+            {
+                return Err(ErrorData::invalid_params(
+                    "get_workspace accepts only workspace or project_path",
+                    None,
+                ));
             }
             self.workspace_info(&workspace).await?
         } else {
@@ -158,10 +181,13 @@ impl ServerHandler for WorkspaceServer {
 }
 
 fn with_ownership(mut result: CallToolResult, workspace: &Workspace) -> CallToolResult {
-    result.content.insert(0, ContentBlock::text(format!(
-        "Workspace: {} [{}]. Use this workspace with subsequent symbol-ID queries.",
-        workspace.name, workspace.id,
-    )));
+    result.content.insert(
+        0,
+        ContentBlock::text(format!(
+            "Workspace: {} [{}]. Use this workspace with subsequent symbol-ID queries.",
+            workspace.name, workspace.id,
+        )),
+    );
     let backend = result.structured_content.take();
     result.structured_content = Some(json!({
         "workspace": {"id": workspace.id, "name": workspace.name},
@@ -199,15 +225,26 @@ fn catalogue() -> Result<Vec<Tool>, serde_json::Error> {
             "description": "Absolute local path in an already registered product. Does not register or index a directory. Mutually exclusive with workspace."
         });
         // This adapter wraps structured backend output with workspace provenance.
-        value.as_object_mut().expect("serialized tool is an object").remove("outputSchema");
+        value
+            .as_object_mut()
+            .expect("serialized tool is an object")
+            .remove("outputSchema");
         tools.push(serde_json::from_value(value)?);
     }
     for (name, description, properties) in [
-        ("list_workspaces", "List locally registered product workspaces without loading indexes or models.", json!({})),
-        ("get_workspace", "Inspect selected workspace configuration and worker state. Directory presence does not prove indexing completeness.", json!({
-            "workspace": {"type": "string", "minLength": 1, "maxLength": 256},
-            "project_path": {"type": "string", "minLength": 1, "maxLength": 4096}
-        })),
+        (
+            "list_workspaces",
+            "List locally registered product workspaces without loading indexes or models.",
+            json!({}),
+        ),
+        (
+            "get_workspace",
+            "Inspect selected workspace configuration and worker state. Directory presence does not prove indexing completeness.",
+            json!({
+                "workspace": {"type": "string", "minLength": 1, "maxLength": 256},
+                "project_path": {"type": "string", "minLength": 1, "maxLength": 4096}
+            }),
+        ),
     ] {
         tools.push(serde_json::from_value(json!({
             "name": name,
@@ -226,12 +263,18 @@ pub async fn run(cwd: &Path, home: Option<&Path>) -> Result<i32, IndexError> {
     if let Ok((root, _)) = super::resolve_root(cwd, home) {
         let config = super::config_path(&root);
         if config.is_file() && super::read_settings(&root)?.server.mode == "http" {
-            return Err(IndexError::General("Network server mode requires explicit --config or --workspace selection".into()));
+            return Err(IndexError::General(
+                "Network server mode requires explicit --config or --workspace selection".into(),
+            ));
         }
     }
-    let executable = std::env::current_exe().map_err(|error| IndexError::General(error.to_string()))?;
+    let executable =
+        std::env::current_exe().map_err(|error| IndexError::General(error.to_string()))?;
     let server = WorkspaceServer::new(
-        WorkspaceRegistry::default(), cwd.to_path_buf(), home.map(Path::to_path_buf), executable,
+        WorkspaceRegistry::default(),
+        cwd.to_path_buf(),
+        home.map(Path::to_path_buf),
+        executable,
     )?;
     let cleanup = server.clone();
     let running = server.serve(rmcp::transport::stdio()).await

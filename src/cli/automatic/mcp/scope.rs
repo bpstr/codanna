@@ -35,7 +35,12 @@ pub(super) struct ScopeResolver {
 
 impl ScopeResolver {
     pub(super) fn new(registry: WorkspaceRegistry, cwd: PathBuf, home: Option<PathBuf>) -> Self {
-        Self { registry, cwd, home, pending: Mutex::new(HashMap::new()) }
+        Self {
+            registry,
+            cwd,
+            home,
+            pending: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Roots are requested from a tool handler, never during the handshake. A
@@ -54,13 +59,17 @@ impl ScopeResolver {
             return Err(invalid("Supply workspace OR project_path, not both"));
         }
         if request.request_state.is_some() && (workspace.is_some() || project_path.is_some()) {
-            return Err(invalid("Do not change the scope while continuing a roots request"));
+            return Err(invalid(
+                "Do not change the scope while continuing a roots request",
+            ));
         }
         if let Some(selector) = workspace {
             reject_unsolicited_input(request)?;
             let registry = self.registry.clone();
             let workspace = tokio::task::spawn_blocking(move || registry.get(&selector))
-                .await.map_err(super::internal)?.map_err(super::internal)?;
+                .await
+                .map_err(super::internal)?
+                .map_err(super::internal)?;
             return Ok(Route::Ready(workspace, arguments));
         }
         if let Some(path) = project_path {
@@ -78,46 +87,74 @@ impl ScopeResolver {
             if state.len() != 64 {
                 return Err(invalid("Unknown or expired workspace request state"));
             }
-            let pending = self.pending.lock().await.remove(state)
+            let pending = self
+                .pending
+                .lock()
+                .await
+                .remove(state)
                 .ok_or_else(|| invalid("Unknown or expired workspace request state"))?;
             if pending.expires <= Instant::now()
                 || pending.tool != request.name.as_ref()
                 || pending.arguments != arguments
             {
-                return Err(invalid("Workspace continuation expired or its tool arguments changed"));
+                return Err(invalid(
+                    "Workspace continuation expired or its tool arguments changed",
+                ));
             }
-            let responses = request.input_responses.as_ref()
+            let responses = request
+                .input_responses
+                .as_ref()
                 .ok_or_else(|| invalid("Missing roots response"))?;
             if responses.len() != 1 {
                 return Err(invalid("Expected exactly one roots response"));
             }
-            let roots = responses.get(ROOT_INPUT).ok_or_else(|| invalid("Missing roots response"))?;
+            let roots = responses
+                .get(ROOT_INPUT)
+                .ok_or_else(|| invalid("Missing roots response"))?;
             return self.resolve_paths(root_paths(roots)?, arguments).await;
         }
         reject_unsolicited_input(request)?;
-        let capabilities = context.client_capabilities()
-            .map(serde_json::to_value).transpose().map_err(super::internal)?;
-        let supports_roots = capabilities.as_ref()
-            .and_then(|caps| caps.get("roots")).is_some_and(|roots| roots.is_object());
+        let capabilities = context
+            .client_capabilities()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(super::internal)?;
+        let supports_roots = capabilities
+            .as_ref()
+            .and_then(|caps| caps.get("roots"))
+            .is_some_and(|roots| roots.is_object());
         if !supports_roots {
             return self.resolve_paths(vec![self.cwd.clone()], arguments).await;
         }
-        if context.protocol_version().is_some_and(|v| v >= ProtocolVersion::V_2026_07_28) {
+        if context
+            .protocol_version()
+            .is_some_and(|v| v >= ProtocolVersion::V_2026_07_28)
+        {
             let mut pending = self.pending.lock().await;
             pending.retain(|_, state| state.expires > Instant::now());
             if pending.len() >= MAX_PENDING {
-                return Err(invalid("Too many pending workspace-root requests; supply workspace explicitly"));
+                return Err(invalid(
+                    "Too many pending workspace-root requests; supply workspace explicitly",
+                ));
             }
             let state = hex::encode(rand::random::<[u8; 32]>());
-            pending.insert(state.clone(), PendingRoots {
-                tool: request.name.to_string(), arguments,
-                expires: Instant::now() + STATE_LIFETIME,
-            });
-            let roots: ListRootsRequest = serde_json::from_value(serde_json::json!({"method": "roots/list"}))
-                .map_err(super::internal)?;
+            pending.insert(
+                state.clone(),
+                PendingRoots {
+                    tool: request.name.to_string(),
+                    arguments,
+                    expires: Instant::now() + STATE_LIFETIME,
+                },
+            );
+            let roots: ListRootsRequest =
+                serde_json::from_value(serde_json::json!({"method": "roots/list"}))
+                    .map_err(super::internal)?;
             let mut inputs = InputRequests::new();
             inputs.insert(ROOT_INPUT.into(), InputRequest::ListRoots(roots));
-            return Ok(Route::InputRequired(InputRequiredResult::new(Some(inputs), Some(state))));
+            return Ok(Route::InputRequired(InputRequiredResult::new(
+                Some(inputs),
+                Some(state),
+            )));
         }
         // Query on each unscoped legacy call. Root-change notifications need no
         // mutable "current workspace" and cannot retarget an in-flight operation.
@@ -132,11 +169,18 @@ impl ScopeResolver {
         self.resolve_paths(root_paths(&roots)?, arguments).await
     }
 
-    async fn resolve_paths(&self, paths: Vec<PathBuf>, arguments: Map<String, Value>) -> Result<Route, ErrorData> {
+    async fn resolve_paths(
+        &self,
+        paths: Vec<PathBuf>,
+        arguments: Map<String, Value>,
+    ) -> Result<Route, ErrorData> {
         let registry = self.registry.clone();
         let home = self.home.clone();
-        let selected = tokio::task::spawn_blocking(move || registered_owner(&registry, &paths, home.as_deref()))
-            .await.map_err(super::internal)??;
+        let selected = tokio::task::spawn_blocking(move || {
+            registered_owner(&registry, &paths, home.as_deref())
+        })
+        .await
+        .map_err(super::internal)??;
         Ok(Route::Ready(selected, arguments))
     }
 }
@@ -148,11 +192,19 @@ fn reject_unsolicited_input(request: &CallToolRequestParams) -> Result<(), Error
     Ok(())
 }
 
-fn take_selector(arguments: &mut Map<String, Value>, key: &str, limit: usize) -> Result<Option<String>, ErrorData> {
+fn take_selector(
+    arguments: &mut Map<String, Value>,
+    key: &str,
+    limit: usize,
+) -> Result<Option<String>, ErrorData> {
     match arguments.remove(key) {
         None => Ok(None),
-        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= limit => Ok(Some(value)),
-        Some(_) => Err(invalid(format!("{key} must be a nonempty string of at most {limit} bytes"))),
+        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= limit => {
+            Ok(Some(value))
+        }
+        Some(_) => Err(invalid(format!(
+            "{key} must be a nonempty string of at most {limit} bytes"
+        ))),
     }
 }
 
@@ -161,49 +213,84 @@ fn invalid(message: impl Into<String>) -> ErrorData {
 }
 
 fn root_paths(value: &Value) -> Result<Vec<PathBuf>, ErrorData> {
-    let roots = value.get("roots").and_then(Value::as_array)
+    let roots = value
+        .get("roots")
+        .and_then(Value::as_array)
         .ok_or_else(|| invalid("Client did not return a valid roots list"))?;
     if roots.is_empty() || roots.len() > MAX_ROOTS {
-        return Err(invalid("Client must supply 1-64 roots, or select a workspace explicitly"));
+        return Err(invalid(
+            "Client must supply 1-64 roots, or select a workspace explicitly",
+        ));
     }
-    roots.iter().map(|root| {
-        let uri = root.get("uri").and_then(Value::as_str)
-            .filter(|uri| uri.len() <= 8192)
-            .ok_or_else(|| invalid("Invalid client root URI"))?;
-        let url = reqwest::Url::parse(uri).map_err(|_| invalid("Invalid client root URI"))?;
-        if url.scheme() != "file"
-            || url.host_str().is_some_and(|host| host != "localhost")
-            || !url.username().is_empty() || url.password().is_some()
-            || url.port().is_some() || url.query().is_some() || url.fragment().is_some()
-        {
-            return Err(invalid("Only local file:// client roots are supported"));
-        }
-        url.to_file_path().map_err(|_| invalid("Client root is not a local absolute path"))
-    }).collect()
+    roots
+        .iter()
+        .map(|root| {
+            let uri = root
+                .get("uri")
+                .and_then(Value::as_str)
+                .filter(|uri| uri.len() <= 8192)
+                .ok_or_else(|| invalid("Invalid client root URI"))?;
+            let url = reqwest::Url::parse(uri).map_err(|_| invalid("Invalid client root URI"))?;
+            if url.scheme() != "file"
+                || url.host_str().is_some_and(|host| host != "localhost")
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.port().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid("Only local file:// client roots are supported"));
+            }
+            url.to_file_path()
+                .map_err(|_| invalid("Client root is not a local absolute path"))
+        })
+        .collect()
 }
 
 /// Resolve every root. Do not discard unknown roots then accidentally select an
 /// unrelated remaining workspace. The registry is authorization for this local
 /// router; client roots cannot create registrations or open arbitrary indexes.
-fn registered_owner(registry: &WorkspaceRegistry, paths: &[PathBuf], home: Option<&Path>) -> Result<Workspace, ErrorData> {
+fn registered_owner(
+    registry: &WorkspaceRegistry,
+    paths: &[PathBuf],
+    home: Option<&Path>,
+) -> Result<Workspace, ErrorData> {
     let known = registry.list().map_err(super::internal)?;
     let mut selected = BTreeMap::new();
     for path in paths {
         let (root, _) = super::super::resolve_root(path, home)
             .map_err(|error| invalid(format!("Cannot select workspace: {error}. Use list_workspaces or run codanna index in the intended product root.")))?;
-        let matches: Vec<_> = known.iter().filter(|workspace| {
-            workspace.root.canonicalize().ok().as_deref() == Some(root.as_path())
-        }).collect();
+        let matches: Vec<_> = known
+            .iter()
+            .filter(|workspace| {
+                workspace.root.canonicalize().ok().as_deref() == Some(root.as_path())
+            })
+            .collect();
         match matches.as_slice() {
-            [workspace] => { selected.insert(workspace.id.as_str().to_owned(), (*workspace).clone()); }
-            [] => return Err(invalid("Client root is not registered. Run codanna index once in the intended product root; setup is automatic.")),
-            _ => return Err(invalid("Multiple registrations claim a client root; repair duplicate registrations by ID")),
+            [workspace] => {
+                selected.insert(workspace.id.as_str().to_owned(), (*workspace).clone());
+            }
+            [] => {
+                return Err(invalid(
+                    "Client root is not registered. Run codanna index once in the intended product root; setup is automatic.",
+                ));
+            }
+            _ => {
+                return Err(invalid(
+                    "Multiple registrations claim a client root; repair duplicate registrations by ID",
+                ));
+            }
         }
     }
     if selected.len() != 1 {
-        return Err(invalid("Client roots span multiple workspaces. Supply workspace or project_path explicitly; Codanna will not guess."));
+        return Err(invalid(
+            "Client roots span multiple workspaces. Supply workspace or project_path explicitly; Codanna will not guess.",
+        ));
     }
-    selected.into_values().next().ok_or_else(|| invalid("Workspace selection required"))
+    selected
+        .into_values()
+        .next()
+        .ok_or_else(|| invalid("Workspace selection required"))
 }
 
 #[cfg(test)]
@@ -212,10 +299,23 @@ mod tests {
 
     #[test]
     fn workspace_mcp_selectors_are_strict_and_removed_before_forwarding() {
-        let mut args = serde_json::json!({"workspace": "assign", "query": "task"}).as_object().unwrap().clone();
-        assert_eq!(take_selector(&mut args, "workspace", 256).unwrap().as_deref(), Some("assign"));
+        let mut args = serde_json::json!({"workspace": "assign", "query": "task"})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            take_selector(&mut args, "workspace", 256)
+                .unwrap()
+                .as_deref(),
+            Some("assign")
+        );
         assert_eq!(args.len(), 1);
-        for value in [Value::Null, Value::Bool(true), Value::String(" ".into()), serde_json::json!(["assign"])] {
+        for value in [
+            Value::Null,
+            Value::Bool(true),
+            Value::String(" ".into()),
+            serde_json::json!(["assign"]),
+        ] {
             args.insert("workspace".into(), value);
             assert!(take_selector(&mut args, "workspace", 256).is_err());
         }
@@ -223,10 +323,20 @@ mod tests {
 
     #[test]
     fn workspace_mcp_roots_reject_remote_empty_and_excessive_inputs() {
-        for uri in ["https://example.org/repo", "file://other-host/repo", "file:///repo?query=yes", "file:///repo#fragment"] {
+        for uri in [
+            "https://example.org/repo",
+            "file://other-host/repo",
+            "file:///repo?query=yes",
+            "file:///repo#fragment",
+        ] {
             assert!(root_paths(&serde_json::json!({"roots": [{"uri": uri}]})).is_err());
         }
         assert!(root_paths(&serde_json::json!({"roots": []})).is_err());
-        assert!(root_paths(&serde_json::json!({"roots": vec![serde_json::json!({"uri": "file:///repo"}); 65]})).is_err());
+        assert!(
+            root_paths(
+                &serde_json::json!({"roots": vec![serde_json::json!({"uri": "file:///repo"}); 65]})
+            )
+            .is_err()
+        );
     }
 }
