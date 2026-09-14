@@ -78,9 +78,17 @@ pub fn run(action: &WorkspaceAction) -> Result<i32, IndexError> {
             if *json {
                 write_json(&mut out, &discovery)?;
             } else {
-                writeln!(out, "Workspace root: {}\nSelection: {}\nConfigured: {}", discovery.root.display(), discovery.reason, discovery.configured).map_err(output_error)?;
+                writeln!(
+                    out,
+                    "Workspace root: {}\nSelection: {}\nConfigured: {}",
+                    discovery.root.display(),
+                    discovery.reason,
+                    discovery.configured
+                )
+                .map_err(output_error)?;
                 for repository in discovery.repositories {
-                    writeln!(out, "Repository: {}", repository.path.display()).map_err(output_error)?;
+                    writeln!(out, "Repository: {}", repository.path.display())
+                        .map_err(output_error)?;
                 }
                 if discovery.inventory_truncated {
                     writeln!(out, "Repository inventory truncated by discovery budget; this is not an index plan.").map_err(output_error)?;
@@ -263,8 +271,17 @@ fn validate_source_arguments(
             // empty configuration. This is not a partial rebuild of old data.
             let initial_root = settings.indexing.indexed_paths.is_empty()
                 && paths.len() == 1
-                && workspace.root.join(&paths[0]).canonicalize().ok().as_deref() == Some(workspace.root.as_path())
-                && crate::cli::automatic::is_uninitialized_index(&confined_index_path(&workspace.root, settings)?)?;
+                && workspace
+                    .root
+                    .join(&paths[0])
+                    .canonicalize()
+                    .ok()
+                    .as_deref()
+                    == Some(workspace.root.as_path())
+                && crate::cli::automatic::is_uninitialized_index(&confined_index_path(
+                    &workspace.root,
+                    settings,
+                )?)?;
             if !initial_root {
                 return Err(IndexError::General(
                     "With --workspace, configure roots using add-dir and run index without paths. Partial workspace rebuilds are not supported yet.".to_owned(),
