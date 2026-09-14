@@ -342,7 +342,10 @@ fn workspace_auto_preserves_existing_ignore_rules() {
 fn workspace_auto_selection_is_independent_of_workspace_and_repository_names() {
     let temp = TempDir::new().unwrap();
     let registry = registry(&temp);
-    for (index, name) in ["workspace-17", "Example.Space", "9_sandbox"].iter().enumerate() {
+    for (index, name) in ["workspace-17", "Example.Space", "9_sandbox"]
+        .iter()
+        .enumerate()
+    {
         let root = temp.path().join(name);
         let member = root.join(format!("member-{index}"));
         checkout(&member);
@@ -359,6 +362,11 @@ fn workspace_auto_selection_is_independent_of_workspace_and_repository_names() {
     assert_eq!(workspaces.len(), 3);
     for (index, workspace) in workspaces.iter().enumerate() {
         assert_eq!(workspace.name, format!("alias-{index}"));
-        assert!(workspaces.iter().skip(index + 1).all(|other| other.id != workspace.id));
+        assert!(
+            workspaces
+                .iter()
+                .skip(index + 1)
+                .all(|other| other.id != workspace.id)
+        );
     }
 }
