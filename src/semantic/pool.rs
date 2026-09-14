@@ -218,6 +218,16 @@ pub struct EmbeddingPool {
 /// surfaces as `PoolExhausted` instead of an indefinite silent block.
 const ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+fn parallel_batch_size(item_count: usize, worker_count: usize, configured_max: usize) -> usize {
+    if item_count == 0 {
+        return 1;
+    }
+    let active_workers = worker_count.max(1).min(item_count);
+    item_count
+        .div_ceil(active_workers)
+        .min(configured_max.max(1))
+}
+
 impl EmbeddingPool {
     /// Create a new embedding pool with the specified number of model instances.
     ///
@@ -364,7 +374,7 @@ impl EmbeddingPool {
     ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
         use rayon::prelude::*;
 
-        const BATCH_SIZE: usize = 64;
+        const MAX_BATCH_SIZE: usize = 64;
 
         let valid_items: Vec<_> = items
             .iter()
@@ -375,10 +385,15 @@ impl EmbeddingPool {
             return Ok(Vec::new());
         }
 
+        // The caller already bounds the total item count with the current
+        // memory budget. Split that allowance across available instances so a
+        // 32/64-item indexing batch can actually occupy the model pool.
+        let batch_size = parallel_batch_size(valid_items.len(), self.pool_size(), MAX_BATCH_SIZE);
+
         // Failed batches warn and skip; pool exhaustion aborts the whole call.
         let results: Result<Vec<Vec<_>>, SemanticSearchError> = self.embed_workers.install(|| {
             valid_items
-                .chunks(BATCH_SIZE)
+                .chunks(batch_size)
                 .par_bridge()
                 .map(|batch| {
                     let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
@@ -425,6 +440,21 @@ impl EmbeddingPool {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn parallel_batches_fill_workers_without_exceeding_item_budget() {
+        assert_eq!(parallel_batch_size(64, 4, 64), 16);
+        assert_eq!(64usize.div_ceil(parallel_batch_size(64, 4, 64)), 4);
+        assert_eq!(parallel_batch_size(32, 3, 64), 11);
+        assert_eq!(32usize.div_ceil(parallel_batch_size(32, 3, 64)), 3);
+    }
+
+    #[test]
+    fn parallel_batch_size_respects_inference_ceiling() {
+        assert_eq!(parallel_batch_size(5_000, 3, 64), 64);
+        assert_eq!(parallel_batch_size(1, 8, 64), 1);
+        assert_eq!(parallel_batch_size(0, 8, 64), 1);
+    }
 
     #[test]
     fn test_acquire_times_out_when_all_instances_checked_out() {

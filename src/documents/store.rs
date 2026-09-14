@@ -27,10 +27,10 @@ const EMBEDDING_BATCH_SIZE: usize = 64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tantivy::collector::TopDocs;
+use tantivy::collector::DocSetCollector;
 use tantivy::directory::MmapDirectory;
 use tantivy::directory::error::OpenDirectoryError;
-use tantivy::query::{BooleanQuery, Occur, Query, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query, TermQuery, TermSetQuery};
 use tantivy::schema::Value;
 use tantivy::{
     Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument as Document, Term,
@@ -339,6 +339,9 @@ pub struct DocumentStore {
     /// Embedding generator (optional).
     embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
 
+    /// Optional accelerator keyed by exact chunk content, independent of chunk IDs.
+    embedding_cache: Option<crate::embedding_cache::EmbeddingCache>,
+
     /// Vector dimension.
     dimension: VectorDimension,
 
@@ -417,6 +420,7 @@ impl DocumentStore {
             next_chunk_id,
             chunker: Box::new(HybridChunker::new()),
             embedding_generator: None,
+            embedding_cache: None,
             dimension,
             heap_size: 50_000_000, // 50MB default
         })
@@ -434,8 +438,14 @@ impl DocumentStore {
             self.dimension,
         )?;
 
+        let generator: Arc<dyn EmbeddingGenerator> = Arc::from(generator);
+        self.embedding_cache = Some(crate::embedding_cache::EmbeddingCache::load(
+            &self.base_path.join("embedding-cache.json"),
+            &generator.cache_identity(),
+            self.dimension.get(),
+        ));
         self.vector_storage = Some(vector_storage);
-        self.embedding_generator = Some(Arc::from(generator));
+        self.embedding_generator = Some(generator);
 
         // Load cluster data if available
         self.load_cluster_data()?;
@@ -757,6 +767,7 @@ impl DocumentStore {
             next_chunk_id: self.next_chunk_id,
             chunker: Box::new(HybridChunker::new()),
             embedding_generator: self.embedding_generator.clone(),
+            embedding_cache: None,
             dimension: self.dimension,
             heap_size: self.heap_size,
         })
@@ -792,10 +803,7 @@ impl DocumentStore {
         // Score candidates by vector similarity
         let mut scored_candidates = self.score_by_similarity(&candidates, &query_vec)?;
 
-        // Sort by similarity (highest first) and limit
-        scored_candidates
-            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored_candidates.truncate(query.limit);
+        retain_top_chunks(&mut scored_candidates, query.limit);
 
         // Enrich with full metadata and KWIC preview
         self.build_search_results(scored_candidates, &query)
@@ -1158,24 +1166,75 @@ impl DocumentStore {
     }
 
     fn process_embedding_batch(&mut self, batch: &[(ChunkId, String)]) -> StoreResult<()> {
-        let Some(ref generator) = self.embedding_generator else {
+        let Some(generator) = self.embedding_generator.clone() else {
             return Ok(());
         };
-        let Some(ref mut vector_storage) = self.vector_storage else {
+        if self.vector_storage.is_none() {
             return Ok(());
-        };
-        let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
-        let embeddings = generator
-            .generate_embeddings(&texts)
-            .map_err(|e| DocumentStoreError::Embedding(e.to_string()))?;
-        let vector_pairs: Vec<(VectorId, &[f32])> = batch
+        }
+
+        let mut vectors: Vec<(ChunkId, Arc<[f32]>)> = Vec::with_capacity(batch.len());
+        let mut missing: Vec<(&str, Vec<ChunkId>)> = Vec::new();
+        let mut missing_by_text: HashMap<&str, usize> = HashMap::new();
+        for (chunk_id, text) in batch {
+            if let Some(hit) = self
+                .embedding_cache
+                .as_ref()
+                .and_then(|cache| cache.get(text))
+            {
+                vectors.push((*chunk_id, hit));
+            } else if let Some(index) = missing_by_text.get(text.as_str()).copied() {
+                missing[index].1.push(*chunk_id);
+            } else {
+                missing_by_text.insert(text, missing.len());
+                missing.push((text, vec![*chunk_id]));
+            }
+        }
+
+        if !missing.is_empty() {
+            let texts: Vec<&str> = missing.iter().map(|(text, _)| *text).collect();
+            let generated = generator
+                .generate_embeddings(&texts)
+                .map_err(|e| DocumentStoreError::Embedding(e.to_string()))?;
+            if generated.len() != missing.len() {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "embedding backend returned {} vectors for {} inputs",
+                    generated.len(),
+                    missing.len()
+                )));
+            }
+            for ((text, chunk_ids), embedding) in missing.into_iter().zip(generated) {
+                if embedding.len() != self.dimension.get()
+                    || !embedding.iter().all(|value| value.is_finite())
+                {
+                    return Err(DocumentStoreError::Embedding(format!(
+                        "embedding backend returned an invalid {}-element vector; expected {} finite elements",
+                        embedding.len(),
+                        self.dimension.get()
+                    )));
+                }
+                let embedding: Arc<[f32]> = Arc::from(embedding);
+                if let Some(cache) = self.embedding_cache.as_mut() {
+                    cache.insert(text, Arc::clone(&embedding));
+                }
+                vectors.extend(
+                    chunk_ids
+                        .into_iter()
+                        .map(|chunk_id| (chunk_id, Arc::clone(&embedding))),
+                );
+            }
+        }
+
+        let vector_pairs: Vec<(VectorId, &[f32])> = vectors
             .iter()
-            .zip(embeddings.iter())
-            .filter_map(|((chunk_id, _), embedding)| {
-                VectorId::new(chunk_id.get()).map(|id| (id, embedding.as_slice()))
+            .filter_map(|(chunk_id, embedding)| {
+                VectorId::new(chunk_id.get()).map(|id| (id, embedding.as_ref()))
             })
             .collect();
-        vector_storage.write_batch(&vector_pairs)?;
+        self.vector_storage
+            .as_mut()
+            .expect("checked above")
+            .write_batch(&vector_pairs)?;
 
         Ok(())
     }
@@ -1195,6 +1254,17 @@ impl DocumentStore {
         let accelerated = crate::memory::accelerated_embeddings_requested();
         let mut processed = 0usize;
         let mut batch = Vec::new();
+        let mut memory_sampler = crate::memory::MemorySampler::new();
+        let mut memory = memory_sampler.sample();
+        if memory.under_pressure() {
+            return Err(DocumentStoreError::Embedding(format!(
+                "embedding stopped before swap pressure (available={} MiB, rss={} MiB); \
+                 metadata is safe and the run can be resumed",
+                memory.available / (1024 * 1024),
+                memory.process_rss / (1024 * 1024),
+            )));
+        }
+        let mut target = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
 
         on_progress(IndexProgress::GeneratingEmbeddings {
             current: 0,
@@ -1211,7 +1281,29 @@ impl DocumentStore {
             })?;
             batch.push((id, text));
 
-            let memory = crate::memory::MemoryBudget::current();
+            if batch.len() >= target {
+                memory = memory_sampler.sample();
+                if memory.under_pressure() {
+                    return Err(DocumentStoreError::Embedding(format!(
+                        "embedding stopped before swap pressure (available={} MiB, rss={} MiB); \
+                         metadata is safe and the run can be resumed",
+                        memory.available / (1024 * 1024),
+                        memory.process_rss / (1024 * 1024),
+                    )));
+                }
+                target = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
+                let take = target.min(batch.len());
+                self.process_embedding_batch(&batch[..take])?;
+                batch.drain(..take);
+                processed += take;
+                on_progress(IndexProgress::GeneratingEmbeddings {
+                    current: processed,
+                    total: total_chunks,
+                });
+            }
+        }
+        while !batch.is_empty() {
+            memory = memory_sampler.sample();
             if memory.under_pressure() {
                 return Err(DocumentStoreError::Embedding(format!(
                     "embedding stopped before swap pressure (available={} MiB, rss={} MiB); \
@@ -1220,20 +1312,12 @@ impl DocumentStore {
                     memory.process_rss / (1024 * 1024),
                 )));
             }
-            let target = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
-            if batch.len() >= target {
-                self.process_embedding_batch(&batch)?;
-                processed += batch.len();
-                batch.clear();
-                on_progress(IndexProgress::GeneratingEmbeddings {
-                    current: processed,
-                    total: total_chunks,
-                });
-            }
-        }
-        if !batch.is_empty() {
-            self.process_embedding_batch(&batch)?;
-            processed += batch.len();
+            let take = memory
+                .embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated)
+                .min(batch.len());
+            self.process_embedding_batch(&batch[..take])?;
+            batch.drain(..take);
+            processed += take;
             on_progress(IndexProgress::GeneratingEmbeddings {
                 current: processed,
                 total: total_chunks,
@@ -1288,20 +1372,27 @@ impl DocumentStore {
 
         let filter_query = BooleanQuery::new(subqueries);
 
-        // Execute query
-        let top_docs =
-            searcher.search(&filter_query, &TopDocs::with_limit(10_000).order_by_score())?;
+        // Enumerate the complete filtered set. A TopDocs limit here used to
+        // silently exclude matching chunks from semantic ranking once a
+        // collection crossed 10,000 chunks.
+        let mut doc_addresses: Vec<_> = searcher
+            .search(&filter_query, &DocSetCollector)?
+            .into_iter()
+            .collect();
+        doc_addresses.sort_unstable();
 
         // Extract chunk IDs
-        let mut chunk_ids = Vec::new();
-        for (_score, doc_address) in top_docs {
-            let doc: Document = searcher.doc(doc_address)?;
-            if let Some(id_value) = doc.get_first(self.schema.chunk_id) {
-                if let Some(id) = id_value.as_u64() {
-                    if let Some(chunk_id) = ChunkId::from_u32(id as u32) {
-                        chunk_ids.push(chunk_id);
-                    }
-                }
+        let mut chunk_ids = Vec::with_capacity(doc_addresses.len());
+        for doc_address in doc_addresses {
+            let chunk_ids_column = searcher
+                .segment_reader(doc_address.segment_ord)
+                .fast_fields()
+                .u64("chunk_id")?;
+            if let Some(chunk_id) = chunk_ids_column
+                .first(doc_address.doc_id)
+                .and_then(|id| ChunkId::from_u32(id as u32))
+            {
+                chunk_ids.push(chunk_id);
             }
         }
 
@@ -1351,21 +1442,38 @@ impl DocumentStore {
         let searcher = self.reader.searcher();
         let mut results = Vec::new();
 
+        if scored.is_empty() {
+            return Ok(results);
+        }
+
+        // Hydrate all winners with one term-set query against this pinned
+        // reader generation instead of issuing one Tantivy query per result.
+        let chunk_query = TermSetQuery::new(scored.iter().map(|(chunk_id, _)| {
+            Term::from_field_u64(self.schema.chunk_id, chunk_id.get() as u64)
+        }));
+        let mut doc_addresses: Vec<_> = searcher
+            .search(&chunk_query, &DocSetCollector)?
+            .into_iter()
+            .collect();
+        doc_addresses.sort_unstable();
+        let mut documents = HashMap::with_capacity(doc_addresses.len());
+        for doc_address in doc_addresses {
+            let doc: Document = searcher.doc(doc_address)?;
+            if let Some(chunk_id) = doc
+                .get_first(self.schema.chunk_id)
+                .and_then(|value| value.as_u64())
+                .and_then(|id| ChunkId::from_u32(id as u32))
+            {
+                documents.insert(chunk_id, doc);
+            }
+        }
+
         // Get preview config (use defaults if not provided)
         let default_config = super::config::SearchConfig::default();
         let preview_config = query.preview_config.as_ref().unwrap_or(&default_config);
 
         for (chunk_id, similarity) in scored {
-            // Find document by chunk_id
-            let term = Term::from_field_u64(self.schema.chunk_id, chunk_id.get() as u64);
-            let tantivy_query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
-
-            let top_docs =
-                searcher.search(&tantivy_query, &TopDocs::with_limit(1).order_by_score())?;
-
-            if let Some((_score, doc_address)) = top_docs.first() {
-                let doc: Document = searcher.doc(*doc_address)?;
-
+            if let Some(doc) = documents.get(&chunk_id) {
                 let collection = doc
                     .get_first(self.schema.collection_name)
                     .and_then(|v| v.as_str())
@@ -1468,6 +1576,12 @@ impl DocumentStore {
         let state_path = self.base_path.join("state.json");
         std::fs::write(state_path, content)?;
 
+        if let Some(cache) = &self.embedding_cache {
+            if let Err(error) = cache.save(&self.base_path.join("embedding-cache.json")) {
+                tracing::warn!(target: "embedding_cache", %error, "failed to persist document embedding cache");
+            }
+        }
+
         Ok(())
     }
 
@@ -1495,6 +1609,18 @@ impl DocumentStore {
 
         Ok(())
     }
+}
+
+fn retain_top_chunks(scored: &mut Vec<(ChunkId, f32)>, limit: usize) {
+    if limit == 0 {
+        scored.clear();
+        return;
+    }
+    if scored.len() > limit {
+        scored.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));
+        scored.truncate(limit);
+    }
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 }
 
 /// Statistics about a collection.
@@ -1542,8 +1668,78 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    struct CountingGenerator {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        dimension: VectorDimension,
+    }
+
+    impl EmbeddingGenerator for CountingGenerator {
+        fn generate_embeddings(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, crate::vector::VectorError> {
+            self.calls
+                .fetch_add(texts.len(), std::sync::atomic::Ordering::Relaxed);
+            Ok(texts
+                .iter()
+                .map(|_| vec![0.5; self.dimension.get()])
+                .collect())
+        }
+
+        fn dimension(&self) -> VectorDimension {
+            self.dimension
+        }
+
+        fn cache_identity(&self) -> String {
+            "counting-fixture@1".to_string()
+        }
+    }
+
     fn test_dimension() -> VectorDimension {
         VectorDimension::new(4).unwrap()
+    }
+
+    #[test]
+    fn top_chunk_selection_partitions_before_sorting() {
+        let mut scored: Vec<_> = (1..=100)
+            .map(|id| (ChunkId::from_u32(id).unwrap(), id as f32))
+            .collect();
+        retain_top_chunks(&mut scored, 3);
+
+        assert_eq!(scored.len(), 3);
+        assert_eq!(scored[0].0.get(), 100);
+        assert_eq!(scored[1].0.get(), 99);
+        assert_eq!(scored[2].0.get(), 98);
+    }
+
+    #[test]
+    fn filtered_candidates_are_not_capped_at_ten_thousand() {
+        let temp = TempDir::new().unwrap();
+        let mut store = DocumentStore::new(temp.path(), test_dimension()).unwrap();
+        let chunk = RawChunk::new((0, 4), "body".to_string(), Vec::new());
+        let path = Path::new("large.md");
+
+        for raw_id in 1..=10_001 {
+            store
+                .store_chunk(
+                    ChunkId::from_u32(raw_id).unwrap(),
+                    "large",
+                    path,
+                    &chunk,
+                    "body",
+                )
+                .unwrap();
+        }
+        store.commit().unwrap();
+
+        let candidates = store
+            .get_filtered_candidates(&SearchQuery {
+                text: "body".to_string(),
+                collection: Some("large".to_string()),
+                ..SearchQuery::default()
+            })
+            .unwrap();
+        assert_eq!(candidates.len(), 10_001);
     }
 
     #[test]
@@ -1551,6 +1747,47 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store = DocumentStore::new(temp_dir.path(), test_dimension());
         assert!(store.is_ok());
+    }
+
+    #[test]
+    fn document_embedding_cache_reuses_content_after_reopen() {
+        let temp = TempDir::new().unwrap();
+        let dimension = test_dimension();
+        let first_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let generator = CountingGenerator {
+            calls: Arc::clone(&first_calls),
+            dimension,
+        };
+        let mut store = DocumentStore::new(temp.path(), dimension)
+            .unwrap()
+            .with_embeddings(Box::new(generator))
+            .unwrap();
+        store
+            .process_embedding_batch(&[(
+                ChunkId::from_u32(1).unwrap(),
+                "unchanged chunk".to_string(),
+            )])
+            .unwrap();
+        store.save_state().unwrap();
+        assert_eq!(first_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        drop(store);
+
+        let reopened_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let generator = CountingGenerator {
+            calls: Arc::clone(&reopened_calls),
+            dimension,
+        };
+        let mut reopened = DocumentStore::new(temp.path(), dimension)
+            .unwrap()
+            .with_embeddings(Box::new(generator))
+            .unwrap();
+        reopened
+            .process_embedding_batch(&[(
+                ChunkId::from_u32(2).unwrap(),
+                "unchanged chunk".to_string(),
+            )])
+            .unwrap();
+        assert_eq!(reopened_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[test]

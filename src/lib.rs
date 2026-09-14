@@ -9,6 +9,7 @@ pub mod config;
 pub mod display;
 pub mod documents;
 pub mod dump;
+mod embedding_cache;
 pub mod embedding_runtime;
 pub mod error;
 pub mod git;

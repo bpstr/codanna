@@ -150,6 +150,12 @@ pub trait EmbeddingGenerator: Send + Sync {
     /// Get the dimension of embeddings produced by this generator.
     #[must_use]
     fn dimension(&self) -> VectorDimension;
+
+    /// Stable identity used to scope content-addressed embedding reuse.
+    /// Implementors should include a model revision when one is available.
+    fn cache_identity(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
 }
 
 /// FastEmbed implementation with configurable embedding models.
@@ -285,6 +291,10 @@ impl EmbeddingGenerator for FastEmbedGenerator {
     fn dimension(&self) -> VectorDimension {
         self.dimension
     }
+
+    fn cache_identity(&self) -> String {
+        self.model_name.clone()
+    }
 }
 
 /// Mock embedding generator for testing.
@@ -364,6 +374,10 @@ impl EmbeddingGenerator for MockEmbeddingGenerator {
 
     fn dimension(&self) -> VectorDimension {
         self.dimension
+    }
+
+    fn cache_identity(&self) -> String {
+        format!("mock-v1-{}", self.dimension.get())
     }
 }
 

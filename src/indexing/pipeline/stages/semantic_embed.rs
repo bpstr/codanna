@@ -161,9 +161,22 @@ impl SemanticEmbedStage {
                 .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
                 .collect();
 
+            let missing = {
+                let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+                    path: std::path::PathBuf::new(),
+                    reason: "Failed to lock semantic search".to_string(),
+                })?;
+                semantic.reuse_cached_embeddings(&items)
+            };
+            stored += items.len() - missing.len();
+            if missing.is_empty() {
+                offset = end;
+                continue;
+            }
+
             let embeddings =
                 self.pool
-                    .embed_parallel(&items)
+                    .embed_parallel(&missing)
                     .map_err(|e| PipelineError::Parse {
                         path: std::path::PathBuf::new(),
                         reason: format!("Embedding generation failed: {e}"),
@@ -174,7 +187,7 @@ impl SemanticEmbedStage {
                     path: std::path::PathBuf::new(),
                     reason: "Failed to lock semantic search".to_string(),
                 })?;
-                stored += semantic.store_embeddings(embeddings);
+                stored += semantic.store_embeddings_with_inputs(embeddings, &missing);
             }
             offset = end;
         }

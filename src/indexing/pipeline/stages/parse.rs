@@ -13,7 +13,7 @@ use crate::parsing::{
 };
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -53,7 +53,13 @@ thread_local! {
 /// Initialize thread-local parser cache for current thread.
 pub fn init_parser_cache(settings: Arc<Settings>) {
     PARSER_CACHE.with(|cache| {
-        *cache.borrow_mut() = Some(ParserCache::new(settings));
+        let mut cache = cache.borrow_mut();
+        let reuse = cache
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.settings, &settings));
+        if !reuse {
+            *cache = Some(ParserCache::new(settings));
+        }
     });
 }
 
@@ -425,7 +431,17 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
     // Method-channel records end here; the bare-segment absorb below is
     // scoped to them — plain-vs-plain must not absorb (a nested
     // `foo(Bar::foo())` keeps both records).
-    let method_records = relationships.len();
+    let mut exact_calls: HashSet<(Arc<str>, u32, Arc<str>)> = relationships
+        .iter()
+        .map(|relationship| {
+            (
+                Arc::clone(&relationship.from_name),
+                relationship.to_range.start_line,
+                Arc::clone(&relationship.to_name),
+            )
+        })
+        .collect();
+    let method_calls: HashSet<(Arc<str>, u32, Arc<str>)> = exact_calls.clone();
 
     // Plain function calls (legacy - no caller_range available)
     for (caller, called, call_site) in parser.find_calls(content) {
@@ -436,27 +452,36 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
         // qualified form, so the method-call record also absorbs on
         // last-`::`-segment match at the same call-site line.
         let bare = called.rsplit_once("::").map_or(called, |(_, tail)| tail);
-        let already_exists = relationships.iter().enumerate().any(|(i, r)| {
-            r.from_name.as_ref() == caller
-                && r.to_range.start_line == call_site.start_line
-                && (r.to_name.as_ref() == called
-                    || (i < method_records && r.to_name.as_ref() == bare))
-        });
+        let exact_key = (
+            Arc::<str>::from(caller),
+            call_site.start_line,
+            Arc::<str>::from(called),
+        );
+        let method_key = (
+            Arc::<str>::from(caller),
+            call_site.start_line,
+            Arc::<str>::from(bare),
+        );
+        let already_exists = exact_calls.contains(&exact_key) || method_calls.contains(&method_key);
         if !already_exists {
             // from_range = call_site triggers fallback to name-only lookup in COLLECT
-            relationships.push(
-                RawRelationship::new(
-                    caller,
-                    call_site, // no caller_range available, use call_site
-                    called,
-                    call_site, // to_range = call site
-                    crate::RelationKind::Calls,
-                )
-                .with_metadata(
-                    crate::relationship::RelationshipMetadata::new()
-                        .at_position(call_site.start_line, call_site.start_column),
-                ),
+            let relationship = RawRelationship::new(
+                caller,
+                call_site, // no caller_range available, use call_site
+                called,
+                call_site, // to_range = call site
+                crate::RelationKind::Calls,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(call_site.start_line, call_site.start_column),
             );
+            exact_calls.insert((
+                Arc::clone(&relationship.from_name),
+                relationship.to_range.start_line,
+                Arc::clone(&relationship.to_name),
+            ));
+            relationships.push(relationship);
         }
     }
 
@@ -580,6 +605,23 @@ mod tests {
 
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn parser_cache_survives_reinitialization_with_same_settings() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(Arc::clone(&settings));
+        let content = FileContent::new(
+            "cache.ts".into(),
+            "export const value = 1;".to_string(),
+            "cache_hash".to_string(),
+        );
+        parse_file(content, &settings).unwrap();
+
+        init_parser_cache(Arc::clone(&settings));
+        PARSER_CACHE.with(|cache| {
+            assert_eq!(cache.borrow().as_ref().unwrap().parsers.len(), 1);
+        });
     }
 
     #[test]
@@ -762,6 +804,49 @@ fn build_alpha() {
             .expect("surviving edge is the receiver-carrying record");
         assert_eq!(meta.receiver.as_deref(), Some("Alpha"));
         assert!(meta.static_call);
+    }
+
+    #[test]
+    fn nested_plain_and_qualified_calls_are_both_preserved() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(settings.clone());
+
+        let content = FileContent::new(
+            "nested.rs".into(),
+            r#"
+struct Alpha;
+impl Alpha { fn make() -> Self { Alpha } }
+fn consume<T>(_value: T) {}
+fn build() { consume(Alpha::make()); }
+"#
+            .to_string(),
+            "nested_calls_hash".to_string(),
+        );
+
+        let parsed = parse_file(content, &settings).unwrap();
+        let calls: Vec<_> = parsed
+            .raw_relationships
+            .iter()
+            .filter(|relationship| {
+                relationship.from_name.as_ref() == "build"
+                    && relationship.kind == crate::RelationKind::Calls
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "nested calls must remain distinct: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|relationship| relationship.to_name.as_ref() == "consume")
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|relationship| relationship.to_name.as_ref() == "make")
+        );
     }
 
     #[test]

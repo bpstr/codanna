@@ -314,18 +314,29 @@ impl Pipeline {
                     .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
                     .collect();
 
-                // Generate embeddings
-                let embeddings = pool
-                    .embed_parallel(&items)
-                    .map_err(|e| PipelineError::Parse {
+                let missing = sem
+                    .lock()
+                    .map_err(|_| PipelineError::Parse {
                         path: path.to_path_buf(),
-                        reason: format!("Embedding generation failed: {e}"),
-                    })?;
+                        reason: "Failed to lock semantic search".to_string(),
+                    })?
+                    .reuse_cached_embeddings(&items);
+
+                // Generate embeddings
+                let embeddings = if missing.is_empty() {
+                    Vec::new()
+                } else {
+                    pool.embed_parallel(&missing)
+                        .map_err(|e| PipelineError::Parse {
+                            path: path.to_path_buf(),
+                            reason: format!("Embedding generation failed: {e}"),
+                        })?
+                };
 
                 // store_embeddings warns internally on any dropped embeddings.
                 if !embeddings.is_empty() {
                     if let Ok(mut guard) = sem.lock() {
-                        guard.store_embeddings(embeddings);
+                        guard.store_embeddings_with_inputs(embeddings, &missing);
                     }
                 }
             }

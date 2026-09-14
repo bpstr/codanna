@@ -26,23 +26,51 @@ pub struct MemoryBudget {
     pub headroom: u64,
 }
 
-impl MemoryBudget {
-    /// Snapshot the current host and Codanna process.
-    pub fn current() -> Self {
-        let mut system = System::new();
-        system.refresh_memory();
-        let pid = Pid::from_u32(std::process::id());
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
+/// Reusable host/process sampler for loops that need fresh memory readings at
+/// batch boundaries. Keeping the `System` allocation avoids rebuilding the
+/// process table for every candidate added to a batch.
+pub struct MemorySampler {
+    system: System,
+    pid: Pid,
+}
+
+impl MemorySampler {
+    pub fn new() -> Self {
+        Self {
+            system: System::new(),
+            pid: Pid::from_u32(std::process::id()),
+        }
+    }
+
+    pub fn sample(&mut self) -> MemoryBudget {
+        self.system.refresh_memory();
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[self.pid]),
             true,
             ProcessRefreshKind::nothing().with_memory(),
         );
-        let process_rss = system.process(pid).map_or(0, |process| process.memory());
-        Self::from_values(
-            system.total_memory(),
-            system.available_memory(),
+        let process_rss = self
+            .system
+            .process(self.pid)
+            .map_or(0, |process| process.memory());
+        MemoryBudget::from_values(
+            self.system.total_memory(),
+            self.system.available_memory(),
             process_rss,
         )
+    }
+}
+
+impl Default for MemorySampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemoryBudget {
+    /// Snapshot the current host and Codanna process.
+    pub fn current() -> Self {
+        MemorySampler::new().sample()
     }
 
     /// Deterministic constructor used by tests and by callers with a fresher

@@ -13,11 +13,18 @@ use crate::parsing::{
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
-use tree_sitter::{Language, Node, Parser};
+use tree_sitter::{Language, Node, Parser, Tree};
 
 /// TypeScript language parser
 pub struct TypeScriptParser {
     parser: Parser,
+    /// Last syntax tree produced by this parser. The indexing pipeline runs all
+    /// extractors for one source consecutively, so retaining one tree removes
+    /// the otherwise repeated tree-sitter parse before every extraction pass.
+    cached_tree: Option<Tree>,
+    cached_source: Option<String>,
+    #[cfg(test)]
+    parse_count: usize,
     context: ParserContext,
     node_tracker: NodeTrackingState,
     /// Track symbols that are default exported (e.g., export default Container)
@@ -33,6 +40,21 @@ pub struct TypeScriptParser {
 }
 
 impl TypeScriptParser {
+    fn syntax_tree(&mut self, code: &str) -> Option<Tree> {
+        if self.cached_source.as_deref() == Some(code) {
+            return self.cached_tree.clone();
+        }
+
+        let tree = self.parser.parse(code, None);
+        self.cached_source = Some(code.to_owned());
+        self.cached_tree = tree.clone();
+        #[cfg(test)]
+        {
+            self.parse_count += 1;
+        }
+        tree
+    }
+
     /// Helper to create a symbol with all optional fields
     fn create_symbol(
         &self,
@@ -79,7 +101,7 @@ impl TypeScriptParser {
         self.component_usages.clear();
         let mut symbols = Vec::new();
 
-        match self.parser.parse(code, None) {
+        match self.syntax_tree(code) {
             Some(tree) => {
                 let root_node = tree.root_node();
                 self.extract_symbols_from_node(
@@ -130,6 +152,10 @@ impl TypeScriptParser {
 
         Ok(Self {
             parser,
+            cached_tree: None,
+            cached_source: None,
+            #[cfg(test)]
+            parse_count: 0,
             context: ParserContext::new(),
             node_tracker: NodeTrackingState::new(),
             default_exported_symbols: std::collections::HashSet::new(),
@@ -2742,7 +2768,7 @@ impl LanguageParser for TypeScriptParser {
     }
 
     fn find_calls<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        let tree = match self.parser.parse(code, None) {
+        let tree = match self.syntax_tree(code) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
@@ -2757,7 +2783,7 @@ impl LanguageParser for TypeScriptParser {
     }
 
     fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
-        let tree = match self.parser.parse(code, None) {
+        let tree = match self.syntax_tree(code) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
@@ -2773,7 +2799,7 @@ impl LanguageParser for TypeScriptParser {
     fn find_implementations<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let mut implementations = Vec::new();
 
-        if let Some(tree) = self.parser.parse(code, None) {
+        if let Some(tree) = self.syntax_tree(code) {
             self.find_implementations_in_node(tree.root_node(), code, &mut implementations, false);
         }
 
@@ -2783,7 +2809,7 @@ impl LanguageParser for TypeScriptParser {
     fn find_extends<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let mut extends = Vec::new();
 
-        if let Some(tree) = self.parser.parse(code, None) {
+        if let Some(tree) = self.syntax_tree(code) {
             self.find_implementations_in_node(tree.root_node(), code, &mut extends, true);
         }
 
@@ -2793,7 +2819,7 @@ impl LanguageParser for TypeScriptParser {
     fn find_imports(&mut self, code: &str, file_id: FileId) -> Vec<Import> {
         let mut imports = Vec::new();
 
-        if let Some(tree) = self.parser.parse(code, None) {
+        if let Some(tree) = self.syntax_tree(code) {
             let root = tree.root_node();
             self.extract_imports_from_node(root, code, file_id, &mut imports);
         }
@@ -2802,7 +2828,7 @@ impl LanguageParser for TypeScriptParser {
     }
 
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        let tree = match self.parser.parse(code, None) {
+        let tree = match self.syntax_tree(code) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
@@ -2819,7 +2845,7 @@ impl LanguageParser for TypeScriptParser {
     }
 
     fn find_defines<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        let tree = match self.parser.parse(code, None) {
+        let tree = match self.syntax_tree(code) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
@@ -2840,7 +2866,7 @@ impl LanguageParser for TypeScriptParser {
         // Non-arrow callables own their `this`; arrows bind lexically and
         // contribute no barrier.
         let mut spans = Vec::new();
-        if let Some(tree) = self.parser.parse(code, None) {
+        if let Some(tree) = self.syntax_tree(code) {
             fn walk(node: &tree_sitter::Node, spans: &mut Vec<Range>) {
                 if BARRIERS.contains(&node.kind()) {
                     spans.push(Range::new(
@@ -2870,7 +2896,7 @@ impl LanguageParser for TypeScriptParser {
     fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         // Basic TS variable type inference for `const/let/var x = new Type()` patterns
         let mut bindings = Vec::new();
-        if let Some(tree) = self.parser.parse(code, None) {
+        if let Some(tree) = self.syntax_tree(code) {
             let root = tree.root_node();
 
             fn walk<'a>(
@@ -2945,6 +2971,30 @@ impl LanguageParser for TypeScriptParser {
 mod tests {
     use super::*;
     use crate::types::FileId;
+
+    #[test]
+    fn extraction_passes_reuse_the_same_syntax_tree() {
+        let mut parser = TypeScriptParser::new().unwrap();
+        let file_id = FileId::new(1).unwrap();
+        let mut counter = SymbolCounter::new();
+        let code = "import { x } from './x'; function run() { return x(); }";
+
+        parser.parse(code, file_id, &mut counter);
+        parser.find_imports(code, file_id);
+        parser.find_method_calls(code);
+        parser.find_calls(code);
+        parser.find_implementations(code);
+        parser.find_extends(code);
+        parser.find_uses(code);
+        parser.find_defines(code);
+        parser.find_variable_types(code);
+        parser.find_this_barrier_spans(code);
+
+        assert_eq!(parser.parse_count, 1);
+
+        parser.find_calls("function changed() { return 1; }");
+        assert_eq!(parser.parse_count, 2);
+    }
 
     #[test]
     fn test_typescript_import_extraction() {
