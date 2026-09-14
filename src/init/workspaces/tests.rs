@@ -274,21 +274,49 @@ fn workspace_launch_rejects_partial_rebuild_and_external_sources() {
     let temp = TempDir::new().unwrap();
     let root = fixture(temp.path(), "assign");
     let outside = fixture(temp.path(), "codanna");
+    fs::create_dir(root.join("src")).unwrap();
     let registry = registry(temp.path());
     registry.add(&root, None).unwrap();
-    let args: Vec<_> = ["--workspace", "assign", "index", ".", "--force"]
+    let config_path = root.join(local_dir_name()).join("settings.toml");
+    let config_before = fs::read(&config_path).unwrap();
+    let index = confined_index_path(&root, &read_settings(&root).unwrap()).unwrap();
+    let full_root: Vec<_> = ["--workspace", "assign", "index", ".", "--force"]
         .into_iter()
         .map(OsString::from)
         .collect();
-    assert!(WorkspaceLaunch::prepare(&registry, "assign", &args).is_err());
-    let args = vec![
+
+    // First-time full-root setup is the only explicit-path exception. Merely
+    // preparing it must not create an index or edit the user's configuration.
+    assert!(WorkspaceLaunch::prepare(&registry, "assign", &full_root).is_ok());
+    assert!(!index.exists());
+    for paths in [vec!["src"], vec![".", "src"]] {
+        let partial: Vec<_> = ["--workspace", "assign", "index", "--force"]
+            .into_iter()
+            .chain(paths)
+            .map(OsString::from)
+            .collect();
+        assert!(WorkspaceLaunch::prepare(&registry, "assign", &partial).is_err());
+    }
+    let external = vec![
         OsString::from("--workspace"),
         OsString::from("assign"),
         OsString::from("add-dir"),
         outside.into_os_string(),
     ];
-    assert!(WorkspaceLaunch::prepare(&registry, "assign", &args).is_err());
-    assert!(!root.join(local_dir_name()).join("index").exists());
+    assert!(WorkspaceLaunch::prepare(&registry, "assign", &external).is_err());
+    assert!(!index.exists());
+    assert_eq!(fs::read(&config_path).unwrap(), config_before);
+
+    // Once any data exists, even the same full-root --force command is refused.
+    // This preserves the original test's destructive-rebuild boundary.
+    fs::create_dir_all(&index).unwrap();
+    fs::write(index.join("sentinel"), b"existing workspace data").unwrap();
+    assert!(WorkspaceLaunch::prepare(&registry, "assign", &full_root).is_err());
+    assert_eq!(
+        fs::read(index.join("sentinel")).unwrap(),
+        b"existing workspace data"
+    );
+    assert_eq!(fs::read(&config_path).unwrap(), config_before);
 }
 
 #[test]
