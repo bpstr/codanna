@@ -376,15 +376,17 @@ fn serve_stale_stdio_completes_degraded_handshake() {
     );
 }
 
-/// Run a serve session in the workspace: legacy handshake, then
-/// tools/list. Returns the initialize instructions, the tool count,
-/// and the exit status after stdin EOF.
+/// Run an explicitly configured serve session: legacy handshake, then tools/list.
+/// This exercises empty-index compatibility, not automatic first-run discovery.
+/// Automatic unindexed startup is covered by workspace_auto and workspace_mcp.
 fn serve_session(workspace: &Path) -> (String, usize, std::process::ExitStatus) {
     let bin = codanna_binary();
     let test_home = workspace.join(".home");
     std::fs::create_dir_all(&test_home).expect("create test home");
 
     let mut child = Command::new(&bin)
+        .arg("--config")
+        .arg(workspace.join(".codanna/settings.toml"))
         .args(["serve"])
         .current_dir(workspace)
         .env("HOME", &test_home)
@@ -455,15 +457,12 @@ fn serve_session(workspace: &Path) -> (String, usize, std::process::ExitStatus) 
     (instructions, tool_count, status)
 }
 
-/// Fresh-workspace skeleton is empty, not stale: with no registered
-/// indexed paths, serve's startup manufactures a bare tantivy
-/// directory and never writes `index.meta`. A second serve must list
-/// all tools rather than gate-refuse the skeleton it created itself.
+/// An explicitly configured fresh-workspace skeleton is empty, not stale.
+/// A second serve must not gate-refuse the skeleton it created itself.
 #[test]
 fn serve_twice_in_fresh_workspace_serves_all_tools() {
     let workspace = TempDir::new().expect("temp dir");
-    // No indexed_paths: registered paths make serve index at startup
-    // and stamp index.meta, which is the healthy shape, not this bug's.
+    // No indexed_paths: this fixture intentionally retains an empty index.
     let codanna_dir = workspace.path().join(".codanna");
     std::fs::create_dir_all(&codanna_dir).expect("create .codanna");
     std::fs::write(
