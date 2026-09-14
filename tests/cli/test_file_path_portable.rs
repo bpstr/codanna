@@ -2,6 +2,8 @@
 //! indexed root in both indexing modes. Out-of-tree indexes store
 //! absolute paths internally; the serving boundary decodes them, so
 //! in-tree and out-of-tree emit identical shapes for the same file.
+//! These fixtures exercise explicit legacy configurations, including external
+//! source roots. Automatic product selection has separate workspace fixtures.
 
 use serde_json::Value;
 use std::env;
@@ -45,10 +47,22 @@ fn run_cli(workspace: &Path, args: &[&str]) -> (i32, String, String) {
     let test_home = workspace.join(".home");
     std::fs::create_dir_all(&test_home).expect("create test home");
 
-    let output = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command.env_clear().env("HOME", &test_home);
+    for key in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"] {
+        if let Some(value) = env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    // Explicit out-of-tree configurations remain supported. Do not route these
+    // codec fixtures through automatic product-membership validation instead.
+    if args.first() != Some(&"init") {
+        command.arg("--config").arg(workspace.join(".codanna/settings.toml"));
+    }
+    let output = command
         .args(args)
         .current_dir(workspace)
-        .env("HOME", &test_home)
+        .env("CI_SEMANTIC_SEARCH__ENABLED", "false")
         .output()
         .expect("run codanna CLI");
 
