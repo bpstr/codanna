@@ -1,145 +1,72 @@
-# Multi-workspace implementation checklist
+# Workspace implementation and qualification
 
-**Canonical contract:** [Isolated workspaces](multi-workspace.md).
-**Implemented usage:** [Workspace guide](../workspaces.md) and
-[local MCP router guide](../workspace-mcp.md).
+Canonical requirements: [isolated workspaces](multi-workspace.md).
+User behavior: [workspace guide](../workspaces.md) and [MCP guide](../workspace-mcp.md).
 
-## Scope
+## Required experience
 
-Build a generic solution for independent coding-agent workspaces, each with a
-separate graph/index. Workspaces come from runtime discovery and configuration,
-not a predefined project list. A workspace can contain one repository, a monorepo,
-or multiple intentionally grouped repositories; none of those layouts is mandatory.
+One reusable local MCP configuration serves arbitrary independent coding-agent
+projects. Open a project, make an unscoped query, automatically prepare its private
+code index, and never receive another project's context by default. No named
+product topology, manual registry, repository inventory, or first indexing command
+is required for the ordinary local case. Examples and fixtures must be synthetic.
 
-Normal usage must not require manual registrations, IDs, member inventories, or
-an MCP definition per workspace. Do not infer membership from matching names or
-merge unrelated graphs just because their directories share a parent.
+A stdio process learns its launch cwd; supported client roots provide authoritative
+session context and changes. A missing trustworthy context signal is an error,
+not permission to choose the last-used or only other indexed project.
 
-Documentation, tests, instructions, and defaults must use synthetic placeholders
-or dynamically generated fixtures, never real user project names or private paths.
+## Audit corrections implemented on the review branch
 
-## Implemented increments under review
+The audit at `b34f414d` found seven correctness/performance gaps. The subsequent
+implementation addresses them as follows; these entries describe code, not a
+blanket assertion that every release/platform test has passed.
 
-The branch contains registry administration, explicit CLI selection, automatic
-local setup/discovery, and an opt-in local read-only MCP router. The router has
-workspace/path selectors, client-root resolution, result ownership, and a bounded
-lazy reader pool per stdio connection. These are not claims of a shared daemon,
-complete repository provenance, or completion of every acceptance gate below.
+| Finding | Implementation | Executable witness |
+| --- | --- | --- |
+| First use required manual setup | Local session-root bootstrap, staged code-only indexing, readiness states | Fresh non-Git projects with no settings or indexing calls; empty project later receives source |
+| Broad parent could capture a child | Nearest independent boundary; plain client root ignores bare ancestor configuration | Broad combined parent above an independent opened project |
+| Recursive query discovery | Ancestor-only query resolution; inventory restricted to diagnostics; bounded metadata refresh | Unreadable irrelevant descendant does not affect routing; client-root cache invalidation |
+| Discovery bypassed admission | Request admission before routing; blocking permits held by actual closures | Cancelled waiter cannot release a still-running blocking worker permit |
+| Bad parameters restarted readers | Preserve tool-error results and typed JSON-RPC errors | Invalid call followed by immediate valid call; controlled backend error-code preservation |
+| Slot lock serialized reads/startup | Shared loading state; lifecycle guard released before bounded concurrent RPC | Two blocked reads overlap; cancelling one leaves the other alive |
+| Lexical lookup loaded models | Private strict lite reader; cancellation-independent lazy semantic/document initialization | Lexical tools make no configured embedding-endpoint calls; cancelled lazy waiter does not duplicate initialization |
 
-Selected and automatic launches still disable inherited conversation recall.
-Initial indexing is explicit. Network routing, index writer/watch coordination,
-and scoped resource/subscription forwarding remain separate work. Consult the
-PR for exact commits and observed validation, not historical aggregate test counts.
+The reader process manager holds physical capacity until child exit is observed,
+not merely until removal from a map. Independent router processes are not a shared
+daemon. Bootstrap locks coordinate the new initial-index lane, not every existing
+CLI or watcher writer. Invalid/partial existing data is never automatically cleared.
 
-## S1. Discovery and registry qualification
+## Qualification gates
 
-- [ ] Qualify arbitrary workspace names and paths, nearest checkouts/manifests,
-  configured-source ownership, and optional multi-root boundaries.
-- [ ] Cover malformed applicable configs, cache-only state directories, HOME/root
-  rejection, symlinks, external-source rejection, and discovery budgets.
-- [ ] Verify automatic initial settings/source/alias selection preserves existing
-  configuration, exclusions, and populated indexes.
-- [ ] Qualify idempotent add/list/show/rename/move/remove/doctor and metadata-only
-  diagnostics; management must not rebuild indexes or delete source data.
-- [ ] Verify full-transaction registry locks, atomic replacement, stale snapshots,
-  concurrent processes, corrupt/versioned input, and recovery semantics.
-- [ ] Qualify copies/worktrees and relocation identity without shared mutable data.
-- [ ] Preserve explicit `--config`, `--workspace`, and legacy CLI behavior while
-  rejecting contradictory selection before provider or index loading.
+- [ ] All focused workspace CLI, automatic discovery, MCP, lazy-initialization,
+  cancellation, and blocking-budget tests pass on the final review commit.
+- [ ] Full default/all-feature suites, strict Clippy, formatting, and documentation
+  checks pass on that same commit; earlier formatted CI checkouts are not substitutes.
+- [ ] Windows and macOS process-lifecycle witnesses, copied/worktree roots,
+  malformed configuration, unavailable filesystems, shutdown, and crash paths
+  are qualified for their advertised support level.
+- [ ] Measure warm routing separately from initial indexing/model loading. Report
+  observed timings and memory rather than implying a measured speedup from code review.
+- [ ] Expand deterministic stress coverage for process admission, delayed child
+  exit, indexing cancellation, source growth, and competing explicit writers.
+- [ ] Keep the PR draft until review scope, documented limitations, and all claimed
+  behavior match executable evidence. No implicit merge, deployment, or installation.
 
-**Exit:** independently discovered workspaces remain distinct regardless of their
-names. Registration is metadata-only. Manual setup is an override, not a prerequisite.
+## Optional capabilities outside basic independent-project onboarding
 
-## S2. Optional member provenance and graph isolation
+The following remain separate work. They must not delay or redefine the basic
+first-use/isolation requirement, and must not be described as implemented merely
+because the local router is usable:
 
-- [ ] Discover repository membership under an established workspace boundary,
-  preserving exclusions and permitting explicit unusual-layout overrides.
-- [ ] Keep one membership authority; preview any `indexed_paths` migration.
-- [ ] Preserve member identity in file keys, symbols, resolver state, documents,
-  recall, and exact references; workspace-wide content remains valid.
-- [ ] Partition resolution so equal names/aliases do not invent cross-repository
-  edges. Permit only relationships supported by actual dependency evidence.
-- [ ] Introduce versioned row/API changes and generation-qualified references
-  with explicit compatibility/rebuild handling, never mixed row semantics.
-- [ ] Preserve member language/ignore behavior and existing standalone indexes.
-- [ ] Make removed members non-queryable through their former scope, with explicit
-  safe data cleanup and no ambiguous shared writable ownership.
+- Workspace-qualified recall and strict document collection/provenance policies.
+- Generation-qualified references and explicit repository-partitioned resolution
+  inside intentionally combined multi-repository workspaces.
+- Shared authenticated HTTP workers with existing principal, origin, TLS, and
+  workspace-visibility constraints.
+- Complete cross-process CLI/watch writer ownership, scoped notifications,
+  subscriptions, and durable user-requested reindex job APIs.
+- External source-root adoption and optional cross-workspace search/groups.
 
-**Exit:** both single-repository and multi-repository workspaces are qualified.
-Use synthetic fixtures with colliding paths/symbols; no named product topology is
-an acceptance requirement. Workspace routing alone does not qualify member graphs.
-
-## S3. Runtime and cross-process ownership
-
-- [ ] Qualify immutable workspace context for settings, stores, resolver, and recall.
-- [ ] Verify lazy loads, load coalescing, active/queued pinning, bounded admission,
-  eviction, independent execution, cancellation, shutdown, and failure backoff.
-- [ ] Establish one index writer/watch authority across CLI and MCP processes;
-  registry locking alone is insufficient. Forward or reject conflicts safely.
-- [ ] Distinguish persistent watches from query-only leases and bound resource use.
-- [ ] Preflight rebuild scope, preserve prior data on failure, and provide accurate
-  job status/receipts. Do not replay mutations after uncertain disconnects.
-- [ ] Remove cwd/environment assumptions before introducing in-process runtimes.
-
-**Exit:** failing or rebuilding one workspace does not mutate or block unrelated
-graphs. Document the difference between per-connection pools and shared workers.
-
-## S4. MCP scope and transport qualification
-
-- [ ] Qualify centralized scope and authorization before runtime access for every
-  supported tool, exact reference, error, cache key, and continuation.
-- [ ] Verify workspace enumeration/details do not load all indexes or models.
-- [ ] Preserve strict backend argument validation and generated schema alignment.
-- [ ] Verify concurrent workspace calls and per-request overrides; no global switch.
-- [ ] Qualify workspace-bound documents and recall; disable unsupported recall
-  rather than use an unrelated namespace.
-- [ ] Add scoped resources, notifications, subscriptions, and custom mutation
-  handling. Until supported, keep these surfaces unadvertised and rejected.
-- [ ] Implement shared HTTP serving with existing auth, host/origin, TLS, session
-  ownership, and workspace visibility constraints; no new unauthenticated access.
-- [ ] Preserve existing bound stdio mode and document its distinction from the router.
-
-**Exit:** each exposed transport operates only on the intended graph/context.
-A local read-only router does not imply shared authenticated HTTP support.
-
-## S5. Automatic client experience
-
-- [ ] Qualify capability-checked legacy/modern root negotiation, deadlines,
-  continuation integrity, unknown/ambiguous roots, and changing roots.
-- [ ] Map multiple roots within an established workspace to that workspace while
-  keeping unrelated workspaces ambiguous; names must not influence ownership.
-- [ ] Test clients without roots, HOME launch, explicit path overrides, reconnects,
-  and real supported clients with recorded versions/capabilities.
-- [ ] Keep root/path hints within authorized registrations, not arbitrary filesystem
-  indexing permissions. Never silently fall back after invalid supported roots.
-- [ ] Add first-use indexing after handshake only with authorization, progress,
-  cancellation, resource/inference limits, and no implicit force rebuild.
-- [ ] Keep recovery commands actionable and metadata diagnostics honest.
-
-**Exit:** developers can use multiple independent Codex/Claude/IDE workspaces with
-one reusable MCP setup. Manual registration/member lists remain optional overrides.
-
-## S6. Release qualification
-
-- [ ] Execute synthetic isolation matrices across code, docs, recall, graph calls,
-  resources, watches, rebuilds, removal, and colliding identities.
-- [ ] Run registry/writer/process tests on supported platforms, including worktrees,
-  moved roots, duplicate basenames, corruption, and recovery.
-- [ ] Measure metadata-only startup with many registered but unloaded workspaces,
-  cold-load queues, peak memory, and warm routing versus the direct-server baseline.
-- [ ] Run focused tests and repository quick/full gates with no real credentials
-  or paid inference; record exact commit/run evidence for completed gates.
-- [ ] Document migrations, rollback/old-binary limits, remaining unsupported cases,
-  watch semantics, remote visibility, and resource/inference behavior.
-- [ ] Keep examples synthetic and describe only implemented behavior as available.
-- [ ] Obtain review before merge; do not deploy or replace installed binaries implicitly.
-
-**Exit:** the declared release scope is reproducible and every claimed boundary has
-test evidence. Leave incomplete gates unchecked, even when some pieces exist.
-
-## Deferred work
-
-Cross-workspace federated search/groups, inferred cross-workspace dependencies,
-shared embedding runtimes, an implicit daemon, and in-process multi-index runtimes
-are not prerequisites for basic independent graphs. Revisit them only after the
-current experience is correct and measured.
+Use deterministic synthetic data and disabled/mocked inference for every automated
+check. Preserve user files, current configuration, source boundaries, and old
+indexes on refusal. Record exact commits and observed CI results in the PR.
