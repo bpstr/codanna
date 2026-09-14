@@ -28,24 +28,24 @@ fn workspace_reads_do_not_create_global_state() {
 }
 
 #[test]
-fn workspace_discovery_keeps_assign_members_in_one_workspace() {
+fn workspace_discovery_keeps_configured_members_in_one_workspace() {
     let temp = TempDir::new().unwrap();
-    let assign = fixture(temp.path(), "assign");
-    let codanna = fixture(temp.path(), "codanna");
-    let nested = assign.join("assign-web/src");
+    let primary = fixture(temp.path(), "workspace-a");
+    let unrelated = fixture(temp.path(), "workspace-b");
+    let nested = primary.join("repo-b/src");
     fs::create_dir_all(&nested).unwrap();
     let registry = registry(temp.path());
-    let first = registry.add(&assign, Some("assign")).unwrap();
+    let first = registry.add(&primary, Some("workspace-a")).unwrap();
     assert_eq!(registry.add(&nested, None).unwrap().id, first.id);
-    registry.add(&codanna, Some("codanna")).unwrap();
+    registry.add(&unrelated, Some("workspace-b")).unwrap();
     let names: Vec<_> = registry
         .list()
         .unwrap()
         .into_iter()
         .map(|w| w.name)
         .collect();
-    assert_eq!(names, ["assign", "codanna"]);
-    assert!(!assign.join(local_dir_name()).join("index").exists());
+    assert_eq!(names, ["workspace-a", "workspace-b"]);
+    assert!(!primary.join(local_dir_name()).join("index").exists());
     assert!(!nested.join(local_dir_name()).exists());
 }
 
@@ -80,9 +80,9 @@ fn workspace_alias_collisions_fail_without_overwriting() {
     let a = fixture(temp.path(), "a");
     let b = fixture(temp.path(), "b");
     let registry = registry(temp.path());
-    let first = registry.add(&a, Some("product")).unwrap();
+    let first = registry.add(&a, Some("workspace")).unwrap();
     let original = fs::read(&registry.path).unwrap();
-    assert!(registry.add(&b, Some("product")).is_err());
+    assert!(registry.add(&b, Some("workspace")).is_err());
     assert!(registry.add(&b, Some(first.id.as_str())).is_err());
     assert!(registry.add(&a, Some("silently-renamed")).is_err());
     assert_eq!(fs::read(&registry.path).unwrap(), original);
@@ -91,9 +91,9 @@ fn workspace_alias_collisions_fail_without_overwriting() {
 #[test]
 fn workspace_reinitialization_preserves_id_alias_and_counters() {
     let temp = TempDir::new().unwrap();
-    let root = fixture(temp.path(), "product");
+    let root = fixture(temp.path(), "project");
     let registry = registry(temp.path());
-    let first = registry.add(&root, Some("assign")).unwrap();
+    let first = registry.add(&root, Some("workspace-a")).unwrap();
     with_registry(&registry.path, |state| {
         state
             .projects
@@ -108,14 +108,14 @@ fn workspace_reinitialization_preserves_id_alias_and_counters() {
         assert_eq!(id, first.id.as_str());
     }
     let state = ProjectRegistry::load_from_path(&registry.path).unwrap();
-    assert_eq!(state.projects[first.id.as_str()].name, "assign");
+    assert_eq!(state.projects[first.id.as_str()].name, "workspace-a");
     assert_eq!(state.projects[first.id.as_str()].symbol_count, 123);
 }
 
 #[test]
 fn workspace_corrupt_or_future_registry_is_preserved() {
     let temp = TempDir::new().unwrap();
-    let root = fixture(temp.path(), "product");
+    let root = fixture(temp.path(), "project");
     let registry = registry(temp.path());
     fs::create_dir_all(registry.path.parent().unwrap()).unwrap();
     for original in [
@@ -206,15 +206,15 @@ fn workspace_copied_root_or_external_index_fails_closed() {
 #[test]
 fn workspace_launch_is_explicit_and_does_not_change_process_state() {
     let temp = TempDir::new().unwrap();
-    let a = fixture(temp.path(), "assign");
+    let a = fixture(temp.path(), "workspace-a");
     let registry = registry(temp.path());
     registry.add(&a, None).unwrap();
     let cwd = std::env::current_dir().unwrap();
-    let args: Vec<_> = ["--workspace", "assign", "serve"]
+    let args: Vec<_> = ["--workspace", "workspace-a", "serve"]
         .iter()
         .map(|value| OsString::from(*value))
         .collect();
-    let plan = WorkspaceLaunch::prepare(&registry, "assign", &args).unwrap();
+    let plan = WorkspaceLaunch::prepare(&registry, "workspace-a", &args).unwrap();
     let command = plan.command(Path::new("codanna-fixture"));
     assert_eq!(command.get_current_dir(), Some(a.as_path()));
     let command_args: Vec<_> = command.get_args().map(OsString::from).collect();
@@ -272,38 +272,38 @@ fn workspace_doctor_does_not_claim_index_completion() {
 #[test]
 fn workspace_launch_rejects_partial_rebuild_and_external_sources() {
     let temp = TempDir::new().unwrap();
-    let root = fixture(temp.path(), "assign");
-    let outside = fixture(temp.path(), "codanna");
+    let root = fixture(temp.path(), "workspace-a");
+    let outside = fixture(temp.path(), "workspace-b");
     fs::create_dir(root.join("src")).unwrap();
     let registry = registry(temp.path());
     registry.add(&root, None).unwrap();
     let config_path = root.join(local_dir_name()).join("settings.toml");
     let config_before = fs::read(&config_path).unwrap();
     let index = confined_index_path(&root, &read_settings(&root).unwrap()).unwrap();
-    let full_root: Vec<_> = ["--workspace", "assign", "index", ".", "--force"]
+    let full_root: Vec<_> = ["--workspace", "workspace-a", "index", ".", "--force"]
         .into_iter()
         .map(OsString::from)
         .collect();
 
     // First-time full-root setup is the only explicit-path exception. Merely
     // preparing it must not create an index or edit the user's configuration.
-    assert!(WorkspaceLaunch::prepare(&registry, "assign", &full_root).is_ok());
+    assert!(WorkspaceLaunch::prepare(&registry, "workspace-a", &full_root).is_ok());
     assert!(!index.exists());
     for paths in [vec!["src"], vec![".", "src"]] {
-        let partial: Vec<_> = ["--workspace", "assign", "index", "--force"]
+        let partial: Vec<_> = ["--workspace", "workspace-a", "index", "--force"]
             .into_iter()
             .chain(paths)
             .map(OsString::from)
             .collect();
-        assert!(WorkspaceLaunch::prepare(&registry, "assign", &partial).is_err());
+        assert!(WorkspaceLaunch::prepare(&registry, "workspace-a", &partial).is_err());
     }
     let external = vec![
         OsString::from("--workspace"),
-        OsString::from("assign"),
+        OsString::from("workspace-a"),
         OsString::from("add-dir"),
         outside.into_os_string(),
     ];
-    assert!(WorkspaceLaunch::prepare(&registry, "assign", &external).is_err());
+    assert!(WorkspaceLaunch::prepare(&registry, "workspace-a", &external).is_err());
     assert!(!index.exists());
     assert_eq!(fs::read(&config_path).unwrap(), config_before);
 
@@ -311,7 +311,7 @@ fn workspace_launch_rejects_partial_rebuild_and_external_sources() {
     // This preserves the original test's destructive-rebuild boundary.
     fs::create_dir_all(&index).unwrap();
     fs::write(index.join("sentinel"), b"existing workspace data").unwrap();
-    assert!(WorkspaceLaunch::prepare(&registry, "assign", &full_root).is_err());
+    assert!(WorkspaceLaunch::prepare(&registry, "workspace-a", &full_root).is_err());
     assert_eq!(
         fs::read(index.join("sentinel")).unwrap(),
         b"existing workspace data"

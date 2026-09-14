@@ -1,245 +1,145 @@
 # Multi-workspace implementation checklist
 
-**Status:** Registry/CLI selection and automatic local discovery are implemented
-on the review branch. The shared MCP router and repository-aware storage remain
-incomplete. Passing a discovery test does not qualify those later boundaries.
+**Canonical contract:** [Isolated workspaces](multi-workspace.md).
+**Implemented usage:** [Workspace guide](../workspaces.md) and
+[local MCP router guide](../workspace-mcp.md).
 
-**Canonical contract:** [Product-level multi-workspace support](multi-workspace.md).
-**Implemented commands and limitations:** [Workspace guide](../workspaces.md).
+## Scope
 
-The required hierarchy is **Assign workspace -> member repositories**, alongside
-an independent **Codanna workspace -> Codanna repository**. Do not turn Assign
-members into separate user-facing workspaces and then require a workspace group.
+Build a generic solution for independent coding-agent workspaces, each with a
+separate graph/index. Workspaces come from runtime discovery and configuration,
+not a predefined project list. A workspace can contain one repository, a monorepo,
+or multiple intentionally grouped repositories; none of those layouts is mandatory.
 
-## Current review scope
+Normal usage must not require manual registrations, IDs, member inventories, or
+an MCP definition per workspace. Do not infer membership from matching names or
+merge unrelated graphs just because their directories share a parent.
 
-PR #34 includes metadata-only workspace management, explicit `--workspace`
-selection, locked registry transactions, and automatic local startup. A fresh
-bare `codanna index` in the product root initializes settings, chooses the root
-source, and registers the workspace without manual add/add-dir commands.
+Documentation, tests, instructions, and defaults must use synthetic placeholders
+or dynamically generated fixtures, never real user project names or private paths.
 
-Configured source ownership lets commands started in an Assign child select
-Assign, including children with standalone settings. Discovery does not overwrite
-or import those child settings/indexes. Unrelated siblings are not grouped by name.
-The parent product boundary must first be established by indexing that parent.
-Existing nonempty source lists stay authoritative.
+## Implemented increments under review
 
-`workspace discover` explains this decision without creating state. One `serve`
-MCP definition can be reused by clients that launch from their project directory.
-This is not yet a shared service or MCP roots negotiation. First indexing remains
-explicit; an unindexed server does not perform a lengthy pre-handshake rebuild.
+The branch contains registry administration, explicit CLI selection, automatic
+local setup/discovery, and an opt-in local read-only MCP router. The router has
+workspace/path selectors, client-root resolution, result ownership, and a bounded
+lazy reader pool per stdio connection. These are not claims of a shared daemon,
+complete repository provenance, or completion of every acceptance gate below.
 
-Registration itself remains metadata-only. Unregistering does not stop independent
-servers. Doctor checks configuration and directory presence, not index health.
-Inherited recall is disabled in selected and automatic launches pending a real
-workspace binding. Explicit configuration retains its existing behavior.
+Selected and automatic launches still disable inherited conversation recall.
+Initial indexing is explicit. Network routing, index writer/watch coordination,
+and scoped resource/subscription forwarding remain separate work. Consult the
+PR for exact commits and observed validation, not historical aggregate test counts.
 
-The original increment added 23 tests. The automatic increment adds 19 unit tests
-and six Unix process tests, including real tiny two-workspace indexing/query
-fixtures with semantic search disabled. The process tests enforce deadlines and
-preserve existing index/configuration data on refusal. Record exact tested commits
-and CI results in the PR; test definitions alone are not proof of success.
+## S1. Discovery and registry qualification
 
-The stages below remain unchecked until each full exit criterion is qualified.
-Keep the PR draft until its intended merge scope is explicit. Nothing in this
-checklist authorizes automatic merge or production deployment.
+- [ ] Qualify arbitrary workspace names and paths, nearest checkouts/manifests,
+  configured-source ownership, and optional multi-root boundaries.
+- [ ] Cover malformed applicable configs, cache-only state directories, HOME/root
+  rejection, symlinks, external-source rejection, and discovery budgets.
+- [ ] Verify automatic initial settings/source/alias selection preserves existing
+  configuration, exclusions, and populated indexes.
+- [ ] Qualify idempotent add/list/show/rename/move/remove/doctor and metadata-only
+  diagnostics; management must not rebuild indexes or delete source data.
+- [ ] Verify full-transaction registry locks, atomic replacement, stale snapshots,
+  concurrent processes, corrupt/versioned input, and recovery semantics.
+- [ ] Qualify copies/worktrees and relocation identity without shared mutable data.
+- [ ] Preserve explicit `--config`, `--workspace`, and legacy CLI behavior while
+  rejecting contradictory selection before provider or index loading.
 
-## Required automatic experience
+**Exit:** independently discovered workspaces remain distinct regardless of their
+names. Registration is metadata-only. Manual setup is an override, not a prerequisite.
 
-Standard product layouts must not require manual workspace registration, a list
-of every member repository, manual IDs, or a separate MCP configuration per product.
-Configuration commands remain overrides for exceptional layouts, not prerequisites.
+## S2. Optional member provenance and graph isolation
 
-Local root discovery and bootstrap are implemented first. Complete this across
-future repository storage and MCP routing: discover members beneath an established
-product boundary, preserve ignore rules and explicit exclusions, and map client
-roots to that product. Ambiguous unrelated roots require an explicit choice, not
-silent merging. First connection must remain responsive; any future automatic
-indexing belongs after initialization with visible status, cancellation, resource
-limits, and the configured inference policy, not before the handshake.
+- [ ] Discover repository membership under an established workspace boundary,
+  preserving exclusions and permitting explicit unusual-layout overrides.
+- [ ] Keep one membership authority; preview any `indexed_paths` migration.
+- [ ] Preserve member identity in file keys, symbols, resolver state, documents,
+  recall, and exact references; workspace-wide content remains valid.
+- [ ] Partition resolution so equal names/aliases do not invent cross-repository
+  edges. Permit only relationships supported by actual dependency evidence.
+- [ ] Introduce versioned row/API changes and generation-qualified references
+  with explicit compatibility/rebuild handling, never mixed row semantics.
+- [ ] Preserve member language/ignore behavior and existing standalone indexes.
+- [ ] Make removed members non-queryable through their former scope, with explicit
+  safe data cleanup and no ambiguous shared writable ownership.
 
-## S1. Deterministic discovery and registry lifecycle
+**Exit:** both single-repository and multi-repository workspaces are qualified.
+Use synthetic fixtures with colliding paths/symbols; no named product topology is
+an acceptance requirement. Workspace routing alone does not qualify member graphs.
 
-Primary areas: `src/config/mod.rs`, `src/config/paths.rs`, `src/init.rs`,
-`src/cli/args.rs`, `src/cli/commands/`, `src/main.rs`.
+## S3. Runtime and cross-process ownership
 
-- [ ] Add typed workspace identity and scoped aliases using the existing project
-  registry infrastructure; keep one authoritative registry at `projects.json`.
-- [ ] Resolve from an explicit start path without changing process cwd. Require
-  a project configuration, not merely a `.codanna` directory. Return a scoped
-  error for a malformed nearest configuration rather than selecting an ancestor.
-- [ ] Define and test stable-ID move behavior and copied-marker/clone conflicts.
-- [ ] Implement idempotent registration, list/show, rename, move, unregister, and
-  metadata-only diagnostics with structured output.
-- [ ] Lock the complete registry read-modify-write transaction, persist safely,
-  preserve corrupt/unknown-version input, and migrate recoverably from v1.
-- [ ] Add explicit CLI workspace selection before provider/model/index setup.
-  Reject contradictory `--workspace` and `--config` choices.
-- [ ] Ensure read/list/doctor paths have no indexing, model, or configuration-write
-  side effects. Unregister must leave source files and local index data intact.
-- [ ] Keep existing local single-workspace commands compatible.
+- [ ] Qualify immutable workspace context for settings, stores, resolver, and recall.
+- [ ] Verify lazy loads, load coalescing, active/queued pinning, bounded admission,
+  eviction, independent execution, cancellation, shutdown, and failure backoff.
+- [ ] Establish one index writer/watch authority across CLI and MCP processes;
+  registry locking alone is insufficient. Forward or reject conflicts safely.
+- [ ] Distinguish persistent watches from query-only leases and bound resource use.
+- [ ] Preflight rebuild scope, preserve prior data on failure, and provide accurate
+  job status/receipts. Do not replay mutations after uncertain disconnects.
+- [ ] Remove cwd/environment assumptions before introducing in-process runtimes.
 
-**Regression gate:** real filesystem fixtures for symlinks, nested folders,
-missing roots, global-cache-only directories, malformed configs, aliases,
-moves, copies, and multiple concurrent registry-writing processes. No tests
-mutate the developer's actual home, cwd, registry, or provider environment.
+**Exit:** failing or rebuilding one workspace does not mutate or block unrelated
+graphs. Document the difference between per-connection pools and shared workers.
 
-**Exit criterion:** Assign and Codanna can be selected independently by CLI;
-registration alone changes no index contents. Product membership comes next.
+## S4. MCP scope and transport qualification
 
-## S2. Multi-repository ownership inside a workspace
+- [ ] Qualify centralized scope and authorization before runtime access for every
+  supported tool, exact reference, error, cache key, and continuation.
+- [ ] Verify workspace enumeration/details do not load all indexes or models.
+- [ ] Preserve strict backend argument validation and generated schema alignment.
+- [ ] Verify concurrent workspace calls and per-request overrides; no global switch.
+- [ ] Qualify workspace-bound documents and recall; disable unsupported recall
+  rather than use an unrelated namespace.
+- [ ] Add scoped resources, notifications, subscriptions, and custom mutation
+  handling. Until supported, keep these surfaces unadvertised and rejected.
+- [ ] Implement shared HTTP serving with existing auth, host/origin, TLS, session
+  ownership, and workspace visibility constraints; no new unauthenticated access.
+- [ ] Preserve existing bound stdio mode and document its distinction from the router.
 
-Primary areas: configuration, indexing path identity, storage metadata, parsing
-and project resolution, documents, and the repository's recall integration.
+**Exit:** each exposed transport operates only on the intended graph/context.
+A local read-only router does not imply shared authenticated HTTP support.
 
-- [ ] Add a repository membership model populated by discovery under the established
-  product root, with canonical paths, repository IDs, aliases, exclusions, and
-  explicit overrides for exceptional/external roots. Manual enumeration must not
-  be required for the normal product-container layout.
-- [ ] Implement repository add/list/remove as overrides against the same membership
-  authority, not a competing source list. Preview legacy `indexed_paths` migration.
-- [ ] Map a member checkout or nested source folder back to its product workspace;
-  disallow ambiguous overlap and duplicate authoritative writable ownership.
-- [ ] Preserve repository ownership in file keys, symbol references, resolver
-  lookups, document scopes, and recall mappings. Support workspace-wide docs and
-  conversations without inventing a repository owner.
-- [ ] Decide and implement the minimal versioned storage change needed for that
-  provenance. Reuse existing compatibility gates; never mix old/new row semantics.
-- [ ] Partition resolver candidates by repository. Do not infer cross-repository
-  edges from matching names, package aliases, or semantic similarity.
-- [ ] Preserve member-specific language config and ignore behavior explicitly.
-  Never silently import or overwrite a nested standalone `.codanna` index.
-- [ ] Define member-removal state so detached sources cannot remain silently
-  searchable. Purging indexed data must be explicit and scoped.
-- [ ] Give public references a workspace, repository, and index-generation
-  namespace without replacing every internal local symbol ID.
+## S5. Automatic client experience
 
-**Regression gate:** Assign contains `assign-core` and `assign-web`; Codanna is
-a different workspace. All contain identical filenames and symbol names. Assert
-exact repository ownership, default search across Assign members, exclusion of
-Codanna, and no false cross-repository graph edges. Include collection aliases,
-recall text, stale references after rebuild, external roots, and member removal.
+- [ ] Qualify capability-checked legacy/modern root negotiation, deadlines,
+  continuation integrity, unknown/ambiguous roots, and changing roots.
+- [ ] Map multiple roots within an established workspace to that workspace while
+  keeping unrelated workspaces ambiguous; names must not influence ownership.
+- [ ] Test clients without roots, HOME launch, explicit path overrides, reconnects,
+  and real supported clients with recorded versions/capabilities.
+- [ ] Keep root/path hints within authorized registrations, not arbitrary filesystem
+  indexing permissions. Never silently fall back after invalid supported roots.
+- [ ] Add first-use indexing after handshake only with authorization, progress,
+  cancellation, resource/inference limits, and no implicit force rebuild.
+- [ ] Keep recovery commands actionable and metadata diagnostics honest.
 
-**Exit criterion:** one product workspace safely contains multiple repositories.
-A router alone must not be used to bypass this gate.
+**Exit:** developers can use multiple independent Codex/Claude/IDE workspaces with
+one reusable MCP setup. Manual registration/member lists remain optional overrides.
 
-## S3. Workspace runtime and writer ownership
+## S6. Release qualification
 
-Primary areas: `src/cli/commands/serve.rs`, `src/project_resolver/`,
-`src/documents/`, `src/watcher/`, `src/mcp/tools/context.rs`, persistence.
+- [ ] Execute synthetic isolation matrices across code, docs, recall, graph calls,
+  resources, watches, rebuilds, removal, and colliding identities.
+- [ ] Run registry/writer/process tests on supported platforms, including worktrees,
+  moved roots, duplicate basenames, corruption, and recovery.
+- [ ] Measure metadata-only startup with many registered but unloaded workspaces,
+  cold-load queues, peak memory, and warm routing versus the direct-server baseline.
+- [ ] Run focused tests and repository quick/full gates with no real credentials
+  or paid inference; record exact commit/run evidence for completed gates.
+- [ ] Document migrations, rollback/old-binary limits, remaining unsupported cases,
+  watch semantics, remote visibility, and resource/inference behavior.
+- [ ] Keep examples synthetic and describe only implemented behavior as available.
+- [ ] Obtain review before merge; do not deploy or replace installed binaries implicitly.
 
-- [ ] Introduce an immutable resolved workspace context containing exact config,
-  roots, storage paths, repository mappings, and recall binding.
-- [ ] Implement a small lazy worker manager around the existing single-workspace
-  engine. Use one worker per workspace, not one per repository.
-- [ ] Set worker cwd and environment only at process creation. Strip unrelated
-  recall/config overrides; never mutate the router's cwd or global environment.
-- [ ] Establish writer/watch ownership across OS processes, including CLI writers
-  and separately spawned stdio clients. Refuse or forward conflicting writes.
-- [ ] Coalesce concurrent loads, pin active runtimes, bound cold starts and memory,
-  and isolate per-workspace failures with restart backoff.
-- [ ] Distinguish persistent watch leases from query-only idle runtimes. Do not
-  silently stop an explicitly requested watch during eviction.
-- [ ] Give rebuilds durable status/receipts. Preflight all selected roots before
-  changing storage; keep previous data recoverable on failure.
-- [ ] Test graceful shutdown and child cleanup. Do not replay uncertain mutations
-  automatically when a worker disconnects.
-
-**Regression gate:** duplicate loads, multiple-process writer attempts, one
-workspace failing while another serves queries, query during rebuild, missing
-rebuild roots, cancellation, eviction, worker crash loops, and shutdown. Verify
-code, docs, and recall use the same context even with conflicting inherited env.
-
-**Exit criterion:** workspace-local lifecycle and failures are enforced rather
-than assumed. No MCP scope expansion is enabled yet.
-
-## S4. Workspace-aware MCP routing
-
-Primary areas: `src/mcp/server.rs`, `src/mcp/requests.rs`, `src/mcp/tools/`,
-`src/mcp/http_server.rs`, transport/auth integration, resources/notifications.
-
-- [ ] Add centralized scope resolution and authorization before opening a runtime.
-- [ ] Add workspace enumeration/details without loading every registered index.
-- [ ] Add consistent workspace selection and appropriate repository filters to
-  search, context, documents, symbols, graph tools, and index information.
-- [ ] Route existing custom requests, resource reads, and notifications too;
-  leaving those on the old default facade is not acceptable.
-- [ ] Return structured provenance plus compatible readable text. Validate
-  qualified references and scope all cache keys and continuation tokens.
-- [ ] Enforce session-local defaults; reject absent/ambiguous scope instead of
-  using a mutable global current workspace or the last-used workspace.
-- [ ] Preserve single-workspace stdio and legacy unambiguous requests.
-- [ ] Implement a shared HTTP service using existing authentication and host/origin
-  controls. Explicitly document that per-client stdio routers do not share a
-  cross-process worker pool without a separate service bridge.
-- [ ] Make workspace allowlists authoritative for discovery and operations. Do
-  not disclose unauthorized workspace metadata or absolute paths in errors.
-
-**Regression gate:** concurrent sessions targeting Assign and Codanna; exact
-request/response schema tests for every affected tool; unknown keys; conflicting
-selectors; stale generation IDs; authorization failures; notification/resource
-isolation; and network transport regression tests.
-
-**Exit criterion:** one shared HTTP MCP service can safely serve both workspaces,
-including product-wide Assign queries, without a new unauthenticated endpoint.
-
-## S5. Client roots and day-to-day usability
-
-- [ ] Negotiate roots only for clients that support them; bound discovery latency.
-- [ ] Resolve `assign-web` and `assign-core` roots to the same Assign workspace.
-- [ ] Keep roots spanning Assign and Codanna ambiguous until explicitly scoped.
-- [ ] Handle symlinks, unregistered roots, roots changes, reconnects, and clients
-  without roots support. Root updates affect future requests, not active ones.
-- [ ] Treat roots and optional `project_path` solely as routing hints within
-  authorized scope; never treat an arbitrary remote path as permission to index it.
-- [ ] Provide responsive first-use setup after the handshake where authorized,
-  with explicit progress and resource/inference limits rather than pre-handshake
-  work or repeated manual repository configuration.
-- [ ] Add workspace-labelled errors with exact recovery commands and metadata-only
-  doctor output. Show unknown/incomplete indexing honestly.
-- [ ] Update user-facing CLI help, MCP instructions, and README only for behavior
-  that is implemented and verified.
-
-**Regression gate:** protocol fixtures for all root scenarios and at least one
-real client smoke test without model/inference spending. Record client versions
-and observed capabilities; do not assume all clients implement roots.
-
-**Exit criterion:** a client opened in an Assign member repository gets Assign
-context automatically when supported, with explicit selection as a reliable fallback.
-
-## S6. Qualification and release
-
-- [ ] Execute the full three-repository/two-workspace isolation matrix in the
-  feature brief for code, documents, recall, graphs, and resource notifications.
-- [ ] Verify a force rebuild/removal in Assign leaves Codanna's persisted data
-  unchanged. Verify repository-scoped operations preserve other Assign members.
-- [ ] Exercise registry and writer locks in separate processes on supported OSes.
-- [ ] Register many unloaded fixtures and measure metadata-only startup, loaded
-  runtime count, peak memory, cold-load queues, and steady-state routing overhead.
-- [ ] Compare warm queries with the direct single-workspace baseline. Report model
-  startup separately; do not present unmeasured latency targets as results.
-- [ ] Run focused tests, then repository quick/full gates with deterministic data,
-  provider credentials removed, and inference mocked or disabled.
-- [ ] Add narrow CI regression coverage using existing repository workflows where
-  possible; do not duplicate expensive build matrices without justification.
-- [ ] Document migration/rollback limits, old-binary behavior, watch semantics,
-  remote permissions, remaining limitations, and explicit recovery commands.
-- [ ] Record evidence for completed checkboxes and obtain review before merge.
-
-**Exit criterion:** the feature's end-to-end scenario is reproducible and all
-claimed isolation boundaries have executable evidence.
+**Exit:** the declared release scope is reproducible and every claimed boundary has
+test evidence. Leave incomplete gates unchecked, even when some pieces exist.
 
 ## Deferred work
 
-Cross-workspace federated search, workspace groups, automatic cross-product graph
-relationships, shared embedding runtimes, an implicit always-running daemon, and
-an in-process multi-workspace engine are deliberately outside S1-S6. Revisit them
-only after the core product-workspace experience is reliable and measured.
-
-## Validation records
-
-The initial documentation-only commits required changed-file whitespace,
-relative-link, and TOML/JSON example checks. Subsequent Rust changes additionally
-require focused regression suites, formatting, compilation, and repository gates.
-Record the tested commit and exact outcome in the PR. Do not confuse successful
-metadata/launch tests with the unimplemented shared MCP or graph isolation gates.
+Cross-workspace federated search/groups, inferred cross-workspace dependencies,
+shared embedding runtimes, an implicit daemon, and in-process multi-index runtimes
+are not prerequisites for basic independent graphs. Revisit them only after the
+current experience is correct and measured.

@@ -5,33 +5,31 @@ Items remain proposals until their implementation and acceptance criteria are
 verified. Completed work should move to the changelog rather than remaining as
 an open roadmap item.
 
-## Product-level multi-workspace support
+## Isolated coding-agent workspaces
 
-**Status:** Implementation started; CLI registration and explicit selection are
-under review in PR #34. The shared MCP router and repository-aware ownership
-remain unimplemented. This is not a completed multi-workspace release.
+**Status:** Automatic local discovery, registry administration, explicit selection,
+and local read-only MCP routing are under review in PR #34. Shared HTTP serving,
+workspace-bound recall, and full repository provenance remain incomplete.
 
-A workspace is an independent product or knowledge boundary containing one or
-more repositories. Assign is one workspace containing assign-core, assign-web,
-assign-mobile, openapi-spec, and SDK repositories. The unrelated Codanna
-repository belongs to a second workspace. Workspace groups are not required
-for this model.
+Support arbitrary independent coding-agent projects with separate graphs/indexes.
+A workspace normally follows the opened checkout; it may also be a monorepo or
+several repositories intentionally indexed together. No specific project name,
+customer, business/product hierarchy, or repository inventory is required.
 
-Preserve independent workspace storage while adding explicit registry-backed
-selection, repository provenance, workspace-scoped code/docs/recall, and an
-optional shared MCP service. Do not merge unrelated indexes or infer graph
-edges merely because repositories contain matching symbol names.
+Keep setup automatic for standard layouts and reuse one MCP configuration.
+Resolve requests from supported client roots or explicit runtime selectors;
+never combine unrelated graphs based on matching names or sibling directories.
+Preserve workspace-scoped code, documents, recall, and mutation boundaries as
+those capabilities are completed. Examples and fixtures must be synthetic.
 
-- [Implemented CLI slice and limitations](docs/workspaces.md)
+- [Implemented workspace usage and limitations](docs/workspaces.md)
+- [Local multi-workspace MCP](docs/workspace-mcp.md)
 - [Feature brief and architecture](docs/design/multi-workspace.md)
 - [Phased implementation and verification checklist](docs/design/multi-workspace-implementation.md)
 
-Deliver discovery/registry, repository ownership, runtime isolation, MCP
-routing, client-root convenience, and qualification in that order. This is a
-separate workstream from index portability below; reuse the shared planner and
-compatibility gates where their contracts apply. Registration alone must not
-force a rebuild, while any later provenance/schema migration must explicitly
-state its compatibility and rebuild requirements.
+This is separate from index portability below. Reuse the shared planner and
+compatibility gates where applicable. Registration alone must not force a
+rebuild; later provenance/schema changes need explicit migration requirements.
 
 ## Index planning and dry runs
 

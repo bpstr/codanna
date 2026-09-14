@@ -259,7 +259,7 @@ fn registered_owner(
     let mut selected = BTreeMap::new();
     for path in paths {
         let (root, _) = super::super::resolve_root(path, home)
-            .map_err(|error| invalid(format!("Cannot select workspace: {error}. Use list_workspaces or run codanna index in the intended product root.")))?;
+            .map_err(|error| invalid(format!("Cannot select workspace: {error}. Use list_workspaces or run codanna index in the intended workspace root.")))?;
         let matches: Vec<_> = known
             .iter()
             .filter(|workspace| {
@@ -272,7 +272,7 @@ fn registered_owner(
             }
             [] => {
                 return Err(invalid(
-                    "Client root is not registered. Run codanna index once in the intended product root; setup is automatic.",
+                    "Client root is not registered. Run codanna index once in the intended workspace root; setup is automatic.",
                 ));
             }
             _ => {
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn workspace_mcp_selectors_are_strict_and_removed_before_forwarding() {
-        let mut args = serde_json::json!({"workspace": "assign", "query": "task"})
+        let mut args = serde_json::json!({"workspace": "workspace-a", "query": "topic"})
             .as_object()
             .unwrap()
             .clone();
@@ -307,14 +307,14 @@ mod tests {
             take_selector(&mut args, "workspace", 256)
                 .unwrap()
                 .as_deref(),
-            Some("assign")
+            Some("workspace-a")
         );
         assert_eq!(args.len(), 1);
         for value in [
             Value::Null,
             Value::Bool(true),
             Value::String(" ".into()),
-            serde_json::json!(["assign"]),
+            serde_json::json!(["workspace-a"]),
         ] {
             args.insert("workspace".into(), value);
             assert!(take_selector(&mut args, "workspace", 256).is_err());

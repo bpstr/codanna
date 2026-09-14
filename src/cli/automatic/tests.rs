@@ -27,12 +27,12 @@ fn registry(temp: &TempDir) -> WorkspaceRegistry {
 #[test]
 fn workspace_auto_first_index_prepares_without_models_or_indexes() {
     let temp = TempDir::new().unwrap();
-    let root = temp.path().join("assign");
-    checkout(&root.join("assign-core"));
-    checkout(&root.join("assign-web"));
+    let root = temp.path().join("workspace-a");
+    checkout(&root.join("repo-a"));
+    checkout(&root.join("repo-b"));
     let registry = registry(&temp);
     let workspace = prepare(&registry, &root, None, StartupMode::Index).unwrap();
-    assert_eq!(workspace.name, "assign");
+    assert_eq!(workspace.name, "workspace-a");
     assert_eq!(
         read_settings(&root).unwrap().indexing.indexed_paths,
         [PathBuf::from(".")]
@@ -50,7 +50,7 @@ fn workspace_auto_first_index_prepares_without_models_or_indexes() {
 #[test]
 fn workspace_auto_git_subdirectory_selects_checkout_not_source_folder() {
     let temp = TempDir::new().unwrap();
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root);
     let discovery = inspect(&root.join("src"), None).unwrap();
     assert_eq!(discovery.root, root.canonicalize().unwrap());
@@ -61,22 +61,22 @@ fn workspace_auto_git_subdirectory_selects_checkout_not_source_folder() {
 #[test]
 fn workspace_auto_parent_owns_members_even_with_legacy_child_configs() {
     let temp = TempDir::new().unwrap();
-    let assign = temp.path().join("assign");
-    let core = assign.join("assign-core");
-    let web = assign.join("assign-web");
-    checkout(&core);
-    checkout(&web);
-    configuration(&assign, &["assign-core", "assign-web"]);
-    configuration(&core, &["src"]);
-    configuration(&web, &["src"]);
-    let child_bytes = fs::read(config_path(&web)).unwrap();
+    let parent = temp.path().join("workspace-a");
+    let first = parent.join("repo-a");
+    let second = parent.join("repo-b");
+    checkout(&first);
+    checkout(&second);
+    configuration(&parent, &["repo-a", "repo-b"]);
+    configuration(&first, &["src"]);
+    configuration(&second, &["src"]);
+    let child_bytes = fs::read(config_path(&second)).unwrap();
     let registry = registry(&temp);
-    let from_web = prepare(&registry, &web.join("src"), None, StartupMode::Index).unwrap();
-    let from_core = prepare(&registry, &core, None, StartupMode::Index).unwrap();
-    assert_eq!(from_web.id, from_core.id);
-    assert_eq!(from_web.root, assign.canonicalize().unwrap());
+    let from_second = prepare(&registry, &second.join("src"), None, StartupMode::Index).unwrap();
+    let from_first = prepare(&registry, &first, None, StartupMode::Index).unwrap();
+    assert_eq!(from_second.id, from_first.id);
+    assert_eq!(from_second.root, parent.canonicalize().unwrap());
     assert_eq!(registry.list().unwrap().len(), 1);
-    assert_eq!(fs::read(config_path(&web)).unwrap(), child_bytes);
+    assert_eq!(fs::read(config_path(&second)).unwrap(), child_bytes);
 }
 
 #[test]
@@ -97,8 +97,8 @@ fn workspace_auto_parent_does_not_claim_unlisted_child() {
 #[test]
 fn workspace_auto_independent_siblings_are_not_combined() {
     let temp = TempDir::new().unwrap();
-    let first = temp.path().join("projects/assign");
-    let second = temp.path().join("projects/codanna");
+    let first = temp.path().join("projects/workspace-a");
+    let second = temp.path().join("projects/workspace-b");
     checkout(&first);
     checkout(&second);
     assert_eq!(
@@ -120,10 +120,10 @@ fn workspace_auto_preserves_configuration_and_existing_registration_alias() {
     configuration(&root, &["src"]);
     let bytes = fs::read(config_path(&root)).unwrap();
     let registry = registry(&temp);
-    let original = registry.add(&root, Some("my-product")).unwrap();
+    let original = registry.add(&root, Some("custom-alias")).unwrap();
     let selected = prepare(&registry, &root, None, StartupMode::Index).unwrap();
     assert_eq!(selected.id, original.id);
-    assert_eq!(selected.name, "my-product");
+    assert_eq!(selected.name, "custom-alias");
     assert_eq!(fs::read(config_path(&root)).unwrap(), bytes);
 }
 
@@ -150,7 +150,7 @@ fn workspace_auto_disambiguates_equal_directory_names() {
 #[test]
 fn workspace_auto_existing_mode_never_bootstraps_missing_index() {
     let temp = TempDir::new().unwrap();
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root);
     let registry = registry(&temp);
     assert!(prepare(&registry, &root, None, StartupMode::Existing).is_err());
@@ -163,7 +163,7 @@ fn workspace_auto_existing_mode_never_bootstraps_missing_index() {
 #[test]
 fn workspace_auto_corrupt_registry_prevents_initialization() {
     let temp = TempDir::new().unwrap();
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root);
     let registry_path = temp.path().join("broken.json");
     fs::write(&registry_path, b"not json").unwrap();
@@ -176,8 +176,8 @@ fn workspace_auto_corrupt_registry_prevents_initialization() {
 #[test]
 fn workspace_auto_malformed_nearest_config_cannot_fall_back_to_parent() {
     let temp = TempDir::new().unwrap();
-    let parent = temp.path().join("assign");
-    let child = parent.join("core");
+    let parent = temp.path().join("workspace-a");
+    let child = parent.join("repo-a");
     checkout(&child);
     configuration(&parent, &["."]);
     configuration(&child, &["src"]);
@@ -261,7 +261,7 @@ fn workspace_auto_modes_exclude_network_explicit_config_and_dry_run() {
         vec!["codanna", "index", "src"],
         vec!["codanna", "serve", "--http"],
         vec!["codanna", "--config", "settings.toml", "serve"],
-        vec!["codanna", "--workspace", "assign", "serve"],
+        vec!["codanna", "--workspace", "workspace-a", "serve"],
         vec!["codanna", "completions", "zsh"],
     ] {
         assert!(startup_mode(&Cli::try_parse_from(command).unwrap()).is_none());
@@ -283,12 +283,12 @@ fn workspace_auto_modes_exclude_network_explicit_config_and_dry_run() {
 fn workspace_auto_symlinks_deduplicate_without_scanning_external_repos() {
     use std::os::unix::fs::symlink;
     let temp = TempDir::new().unwrap();
-    let root = temp.path().join("assign");
+    let root = temp.path().join("workspace-a");
     checkout(&root);
-    let external = temp.path().join("codanna");
+    let external = temp.path().join("workspace-b");
     checkout(&external);
     symlink(&external, root.join("linked")).unwrap();
-    let alias = temp.path().join("assign-link");
+    let alias = temp.path().join("workspace-link");
     symlink(&root, &alias).unwrap();
     let discovery = inspect(&alias, None).unwrap();
     assert_eq!(discovery.root, root.canonicalize().unwrap());
@@ -336,4 +336,29 @@ fn workspace_auto_preserves_existing_ignore_rules() {
         fs::read_to_string(root.join(".codannaignore")).unwrap(),
         "secret/\n"
     );
+}
+
+#[test]
+fn workspace_auto_selection_is_independent_of_workspace_and_repository_names() {
+    let temp = TempDir::new().unwrap();
+    let registry = registry(&temp);
+    for (index, name) in ["workspace-17", "Example.Space", "9_sandbox"].iter().enumerate() {
+        let root = temp.path().join(name);
+        let member = root.join(format!("member-{index}"));
+        checkout(&member);
+        let selected = prepare(&registry, &root, None, StartupMode::Index).unwrap();
+        let alias = format!("alias-{index}");
+        let renamed = registry.rename(selected.id.as_str(), &alias).unwrap();
+        let nested = prepare(&registry, &member.join("src"), None, StartupMode::Index).unwrap();
+        assert_eq!(nested.id, renamed.id);
+        assert_eq!(nested.name, alias);
+        assert_eq!(nested.root, root.canonicalize().unwrap());
+        assert!(!member.join(crate::init::local_dir_name()).exists());
+    }
+    let workspaces = registry.list().unwrap();
+    assert_eq!(workspaces.len(), 3);
+    for (index, workspace) in workspaces.iter().enumerate() {
+        assert_eq!(workspace.name, format!("alias-{index}"));
+        assert!(workspaces.iter().skip(index + 1).all(|other| other.id != workspace.id));
+    }
 }
