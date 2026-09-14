@@ -1,24 +1,42 @@
 # Multi-workspace implementation checklist
 
-**Status:** Design-first branch. Application implementation has not started.
+**Status:** Implementation started; the first CLI/registry slice is under review.
+The shared MCP router and repository-aware storage are not implemented yet.
 
 **Canonical contract:** [Product-level multi-workspace support](multi-workspace.md).
+**Implemented commands and limitations:** [Workspace guide](../workspaces.md).
 
 The required hierarchy is **Assign workspace -> member repositories**, alongside
 an independent **Codanna workspace -> Codanna repository**. Do not turn Assign
 members into separate user-facing workspaces and then require a workspace group.
 
-## Review scope of this branch
+## Current review scope
 
-This initial PR adds the corrected feature brief, this delivery checklist, and
-a roadmap entry. It does not add CLI commands, change index formats, implement
-MCP routing, or claim that any runtime acceptance test has passed.
+PR #34 now includes Rust code for metadata-only workspace management, explicit
+`--workspace` CLI/server selection, locked registry transactions, and deterministic
+unit/process tests. This is a first implementation increment, not completion of
+S1-S6. The existing v1 registry and code index formats are retained.
 
-Review the ownership model, membership authority, migration policy, transport
-boundaries, and rollout order before changing compatibility-sensitive code.
-Future commits should state which slice they implement and which checks actually
-ran. Keep the PR draft until the intended merge scope is explicit; nothing in
-this checklist authorizes an automatic merge or production deployment.
+Implemented commands include add/list/show/rename/move/remove/doctor. Selected
+commands run with a fixed cwd and exact configuration before legacy initialization
+or provider/model/index loading. Existing `indexed_paths` still defines source
+roots. A nested unconfigured directory discovers its parent; an already configured
+child remains a separate legacy boundary until explicit adoption is implemented.
+
+Registration does not index anything. Removal does not stop independently running
+servers. Doctor checks configuration and directory presence, not index health.
+Inherited recall is disabled in selected launches pending workspace-bound recall.
+Repository-qualified identities, graph partitioning, a shared worker pool, per-tool
+MCP workspace selection, client roots, and cross-process index writer ownership
+remain pending. The guide documents these limits and the supported commands.
+
+The first commit adds 23 regression test functions, including six Unix process
+tests. Record exact CI runs and results in the PR; writing a test is not evidence
+that it passed. The stages below remain unchecked until each full exit criterion
+is qualified, even where individual pieces already have implementation.
+
+Keep the PR draft until its intended merge scope is explicit. Nothing in this
+checklist authorizes automatic merge or production deployment.
 
 ## S1. Deterministic discovery and registry lifecycle
 
@@ -193,10 +211,10 @@ relationships, shared embedding runtimes, an implicit always-running daemon, and
 an in-process multi-workspace engine are deliberately outside S1-S6. Revisit them
 only after the core product-workspace experience is reliable and measured.
 
-## Validation of this design-only PR
+## Validation records
 
-For the initial documentation change, validate changed-file whitespace, relative
-links, and TOML/JSON example syntax. Every new command and config field must remain
-labelled as proposed. Check that the root roadmap does not advertise a released
-feature. Rust compilation, runtime tests, and performance claims are not applicable
-to this docs-only diff and must not be reported as passed.
+The initial documentation-only commits required changed-file whitespace,
+relative-link, and TOML/JSON example checks. Subsequent Rust changes additionally
+require focused regression suites, formatting, compilation, and repository gates.
+Record the tested commit and exact outcome in the PR. Do not confuse successful
+metadata/launch tests with the unimplemented shared MCP or graph isolation gates.

@@ -7,7 +7,9 @@ an open roadmap item.
 
 ## Product-level multi-workspace support
 
-**Status:** Proposed; design review only, no runtime implementation yet.
+**Status:** Implementation started; CLI registration and explicit selection are
+under review in PR #34. The shared MCP router and repository-aware ownership
+remain unimplemented. This is not a completed multi-workspace release.
 
 A workspace is an independent product or knowledge boundary containing one or
 more repositories. Assign is one workspace containing assign-core, assign-web,
@@ -20,6 +22,7 @@ selection, repository provenance, workspace-scoped code/docs/recall, and an
 optional shared MCP service. Do not merge unrelated indexes or infer graph
 edges merely because repositories contain matching symbol names.
 
+- [Implemented CLI slice and limitations](docs/workspaces.md)
 - [Feature brief and architecture](docs/design/multi-workspace.md)
 - [Phased implementation and verification checklist](docs/design/multi-workspace-implementation.md)
 

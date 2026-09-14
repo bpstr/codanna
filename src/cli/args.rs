@@ -382,7 +382,7 @@ pub enum Commands {
     #[command(
         about = "Index and search document collections",
         long_about = "Index markdown and text documents for semantic search.\n\nDocuments are chunked, embedded, and stored separately from code symbols.",
-        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents list\n  codanna documents stats docs"
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents search \"error handling\" --collection docs\n  codanna documents list\n  codanna documents stats docs"
     )]
     Documents {
         #[command(subcommand)]
@@ -460,7 +460,7 @@ pub enum PluginAction {
         /// Plugin name to remove
         plugin_name: String,
 
-        /// Force removal even if other plugins depend on it
+        /// Force removal even if local modifications exist
         #[arg(short, long)]
         force: bool,
 
@@ -471,14 +471,14 @@ pub enum PluginAction {
 
     /// Update an installed plugin
     #[command(
-        about = "Update an installed plugin",
+        about = "Update a plugin to a newer version",
         after_help = "Examples:\n  codanna plugin update plugin-name\n  codanna plugin update plugin-name --ref v2.0"
     )]
     Update {
         /// Plugin name to update
         plugin_name: String,
 
-        /// Git reference (branch, tag, or commit SHA)
+        /// Git reference to update to (branch, tag, or commit SHA)
         #[arg(long)]
         r#ref: Option<String>,
 
