@@ -248,6 +248,14 @@ async fn main() {
         exit_workspace_command(result);
     }
 
+    // Local discovery pins the product root before any configuration fallback,
+    // model loading, or index access. Explicit selectors retain their behavior.
+    match codanna::cli::automatic::try_run(&cli) {
+        Ok(None) => {}
+        Ok(Some(code)) => exit_workspace_command(Ok(code)),
+        Err(error) => exit_workspace_command(Err(error)),
+    }
+
     codanna::embedding_runtime::configure_embedding_runtime();
 
     // For index command, auto-initialize if needed (but not when using --config)
