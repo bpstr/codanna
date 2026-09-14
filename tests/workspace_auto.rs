@@ -52,8 +52,14 @@ fn cli(home: &Path, cwd: &Path, args: &[&str]) -> Output {
     stderr.rewind().unwrap();
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
-    stdout.take(1024 * 1024).read_to_end(&mut stdout_bytes).unwrap();
-    stderr.take(1024 * 1024).read_to_end(&mut stderr_bytes).unwrap();
+    stdout
+        .take(1024 * 1024)
+        .read_to_end(&mut stdout_bytes)
+        .unwrap();
+    stderr
+        .take(1024 * 1024)
+        .read_to_end(&mut stderr_bytes)
+        .unwrap();
     Output {
         status,
         stdout: stdout_bytes,
@@ -208,7 +214,10 @@ fn hardening_workspace_auto_empty_sources_never_broaden_existing_index() {
     let result = cli(&home, &root, &["index", "--force", "--no-progress"]);
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("will not broaden"));
-    assert_eq!(fs::read(index.join("tantivy/meta.json")).unwrap(), tantivy_before);
+    assert_eq!(
+        fs::read(index.join("tantivy/meta.json")).unwrap(),
+        tantivy_before
+    );
     assert_eq!(
         fs::read(root.join(".codanna/settings.toml")).unwrap(),
         settings_before
