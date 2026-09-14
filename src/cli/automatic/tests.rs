@@ -8,7 +8,11 @@ fn configuration(root: &Path, roots: &[&str]) {
     settings.semantic_search.enabled = false;
     settings.index_path = PathBuf::from(crate::init::local_dir_name()).join("index");
     settings.indexing.indexed_paths = roots.iter().map(PathBuf::from).collect();
-    fs::write(config_path(root), toml::to_string_pretty(&settings).unwrap()).unwrap();
+    fs::write(
+        config_path(root),
+        toml::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
 }
 
 fn checkout(path: &Path) {
@@ -29,8 +33,16 @@ fn workspace_auto_first_index_prepares_without_models_or_indexes() {
     let registry = registry(&temp);
     let workspace = prepare(&registry, &root, None, StartupMode::Index).unwrap();
     assert_eq!(workspace.name, "assign");
-    assert_eq!(read_settings(&root).unwrap().indexing.indexed_paths, [PathBuf::from(".")]);
-    assert!(!root.join(crate::init::local_dir_name()).join("index").exists());
+    assert_eq!(
+        read_settings(&root).unwrap().indexing.indexed_paths,
+        [PathBuf::from(".")]
+    );
+    assert!(
+        !root
+            .join(crate::init::local_dir_name())
+            .join("index")
+            .exists()
+    );
     assert!(!temp.path().join("home/models").exists());
     assert_eq!(registry.list().unwrap().len(), 1);
 }
@@ -76,7 +88,10 @@ fn workspace_auto_parent_does_not_claim_unlisted_child() {
     fs::create_dir_all(parent.join("other")).unwrap();
     configuration(&parent, &["other"]);
     configuration(&child, &["src"]);
-    assert_eq!(inspect(&child, None).unwrap().root, child.canonicalize().unwrap());
+    assert_eq!(
+        inspect(&child, None).unwrap().root,
+        child.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -86,8 +101,14 @@ fn workspace_auto_independent_siblings_are_not_combined() {
     let second = temp.path().join("projects/codanna");
     checkout(&first);
     checkout(&second);
-    assert_eq!(inspect(&first.join("src"), None).unwrap().root, first.canonicalize().unwrap());
-    assert_eq!(inspect(&second.join("src"), None).unwrap().root, second.canonicalize().unwrap());
+    assert_eq!(
+        inspect(&first.join("src"), None).unwrap().root,
+        first.canonicalize().unwrap()
+    );
+    assert_eq!(
+        inspect(&second.join("src"), None).unwrap().root,
+        second.canonicalize().unwrap()
+    );
     assert!(!config_path(&temp.path().join("projects")).exists());
 }
 
@@ -118,7 +139,12 @@ fn workspace_auto_disambiguates_equal_directory_names() {
     let b = prepare(&registry, &two, None, StartupMode::Index).unwrap();
     assert_ne!(a.id, b.id);
     assert_ne!(a.name, b.name);
-    assert_eq!(prepare(&registry, &two, None, StartupMode::Index).unwrap().id, b.id);
+    assert_eq!(
+        prepare(&registry, &two, None, StartupMode::Index)
+            .unwrap()
+            .id,
+        b.id
+    );
 }
 
 #[test]
@@ -173,10 +199,18 @@ fn workspace_auto_rejects_home_and_filesystem_root() {
 #[test]
 fn workspace_auto_cache_only_ancestor_is_not_a_workspace() {
     let temp = TempDir::new().unwrap();
-    fs::create_dir_all(temp.path().join(crate::init::local_dir_name()).join("models")).unwrap();
+    fs::create_dir_all(
+        temp.path()
+            .join(crate::init::local_dir_name())
+            .join("models"),
+    )
+    .unwrap();
     let root = temp.path().join("project");
     checkout(&root);
-    assert_eq!(inspect(&root, None).unwrap().root, root.canonicalize().unwrap());
+    assert_eq!(
+        inspect(&root, None).unwrap().root,
+        root.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -190,10 +224,18 @@ fn workspace_auto_inventory_is_bounded_and_skips_dependencies() {
     checkout(&deep);
     let discovery = inspect(temp.path(), None).unwrap();
     assert!(discovery.inventory_truncated);
-    let paths: Vec<_> = discovery.repositories.iter().map(|r| r.path.as_path()).collect();
+    let paths: Vec<_> = discovery
+        .repositories
+        .iter()
+        .map(|r| r.path.as_path())
+        .collect();
     assert!(paths.contains(&Path::new(".")));
     assert!(paths.contains(&Path::new("web")));
-    assert!(!paths.iter().any(|p| p.starts_with("vendor") || p.starts_with("node_modules")));
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p.starts_with("vendor") || p.starts_with("node_modules"))
+    );
 }
 
 #[test]
@@ -201,8 +243,15 @@ fn workspace_auto_worktree_marker_is_not_followed_outside_checkout() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("worktree");
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join(".git"), "gitdir: /unavailable/common/git/worktrees/demo\n").unwrap();
-    assert_eq!(inspect(&root.join("src"), None).unwrap().root, root.canonicalize().unwrap());
+    fs::write(
+        root.join(".git"),
+        "gitdir: /unavailable/common/git/worktrees/demo\n",
+    )
+    .unwrap();
+    assert_eq!(
+        inspect(&root.join("src"), None).unwrap().root,
+        root.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -217,8 +266,14 @@ fn workspace_auto_modes_exclude_network_explicit_config_and_dry_run() {
     ] {
         assert!(startup_mode(&Cli::try_parse_from(command).unwrap()).is_none());
     }
-    assert_eq!(startup_mode(&Cli::try_parse_from(["codanna", "index"]).unwrap()), Some(StartupMode::Index));
-    assert_eq!(startup_mode(&Cli::try_parse_from(["codanna", "serve"]).unwrap()), Some(StartupMode::Existing));
+    assert_eq!(
+        startup_mode(&Cli::try_parse_from(["codanna", "index"]).unwrap()),
+        Some(StartupMode::Index)
+    );
+    assert_eq!(
+        startup_mode(&Cli::try_parse_from(["codanna", "serve"]).unwrap()),
+        Some(StartupMode::Existing)
+    );
     assert!(auto_setup_enabled(Some("false")).is_ok_and(|enabled| !enabled));
     assert!(auto_setup_enabled(Some("maybe")).is_err());
 }
@@ -237,7 +292,12 @@ fn workspace_auto_symlinks_deduplicate_without_scanning_external_repos() {
     symlink(&root, &alias).unwrap();
     let discovery = inspect(&alias, None).unwrap();
     assert_eq!(discovery.root, root.canonicalize().unwrap());
-    assert!(!discovery.repositories.iter().any(|r| r.path == Path::new("linked")));
+    assert!(
+        !discovery
+            .repositories
+            .iter()
+            .any(|r| r.path == Path::new("linked"))
+    );
 }
 
 #[test]
@@ -248,7 +308,10 @@ fn workspace_auto_unconfigured_nested_git_does_not_join_unlisted_parent() {
     checkout(&child);
     fs::create_dir_all(parent.join("other")).unwrap();
     configuration(&parent, &["other"]);
-    assert_eq!(inspect(&child, None).unwrap().root, child.canonicalize().unwrap());
+    assert_eq!(
+        inspect(&child, None).unwrap().root,
+        child.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -269,5 +332,8 @@ fn workspace_auto_preserves_existing_ignore_rules() {
     checkout(&root);
     fs::write(root.join(".codannaignore"), "secret/\n").unwrap();
     prepare(&registry(&temp), &root, None, StartupMode::Index).unwrap();
-    assert_eq!(fs::read_to_string(root.join(".codannaignore")).unwrap(), "secret/\n");
+    assert_eq!(
+        fs::read_to_string(root.join(".codannaignore")).unwrap(),
+        "secret/\n"
+    );
 }
