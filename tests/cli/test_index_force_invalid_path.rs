@@ -195,7 +195,10 @@ fn force_bare_with_no_existing_roots_refuses_before_clearing_index() {
             "refusal must identify the exact missing configured root:\nstderr:{stderr}"
         );
         if explicit {
-            assert!(stderr.contains("Configured path does not exist"), "{stderr}");
+            assert!(
+                stderr.contains("Configured path does not exist"),
+                "{stderr}"
+            );
             assert!(stderr.contains("nothing to rebuild"), "{stderr}");
         } else {
             assert!(stderr.contains("Failed to read file"), "{stderr}");
