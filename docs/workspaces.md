@@ -1,9 +1,11 @@
 # Local product workspaces
 
 **Status: implementation under review in PR #34.** This branch implements
-workspace registration, explicit process selection, and automatic local discovery.
-The shared MCP router and repository-qualified graph architecture remain incomplete.
-See [the feature design](design/multi-workspace.md) for the larger target.
+workspace registration, explicit process selection, automatic local discovery,
+and an opt-in local read-only multi-workspace MCP router. Shared HTTP serving
+and repository-qualified graph architecture remain incomplete.
+See [the feature design](design/multi-workspace.md) for the larger target and
+[the router guide](workspace-mcp.md) for protocol and worker boundaries.
 
 ## Normal usage
 
@@ -32,29 +34,40 @@ codanna retrieve search "TaskStatus"
 codanna serve
 ```
 
-The same MCP entry can be reused in clients that launch commands from their
-current project directory:
+For one connection that can query several products, use this reusable MCP entry:
 
 ```json
 {
   "mcpServers": {
     "codanna": {
       "command": "codanna",
-      "args": ["serve"]
+      "args": ["workspace", "serve"]
     }
   }
 }
 ```
 
-This reuses one configuration, not one server process. Separate stdio clients
-still start independent servers. Clients that launch from HOME need an explicit
-working directory or workspace selector until MCP roots negotiation is implemented.
-HTTP/HTTPS servers continue to use explicit selection and their existing network
-access policies; independent servers need distinct bind ports.
+The explicit `workspace serve` command opts into local registry-wide read access.
+It accepts per-tool workspace IDs/aliases or project paths and uses supported
+client roots for automatic selection. A launch from HOME can handshake and list
+workspaces without loading models; client roots or explicit tool selectors then
+choose the product. Assign's member roots resolve to its parent workspace.
 
-First indexing remains explicit. Connecting an unindexed `serve` process reports
-that `codanna index` is required rather than starting a long indexing job before
-the MCP handshake. Automatic indexing after connection remains future work.
+For strictly project-bound operation, keep `args: ["serve"]`. That mode remains
+bound through the launch directory or an explicit configuration/selector; it does
+not silently gain cross-workspace access. The new router does not replace this
+mode or its existing supported watching behavior.
+
+Separate stdio launches still own independent processes. The router shares lazy
+workers across requests on its own connection, not implicitly across all client
+processes. HTTP/HTTPS servers continue to use explicit selection and their existing
+network policies; independent servers need distinct bind ports. Shared HTTP
+workspace routing is not implemented yet.
+
+First indexing remains explicit. Connecting does not launch a rebuild. An
+unindexed ordinary `serve` reports setup guidance; `workspace serve` can connect
+without any index and returns guidance when a selected knowledge query needs one.
+Automatic indexing after connection remains future work.
 
 ## Discovery boundaries
 
@@ -100,6 +113,8 @@ inventory, not an indexing plan or persisted repository ownership map. It does
 not register projects, initialize settings, load models, or open indexes.
 
 `doctor` checks configuration and index-directory presence, not index completeness.
+The MCP router also provides `list_workspaces` and `get_workspace` without opening
+every registered index. Their presence is not a graph-isolation or readiness claim.
 
 ## Explicit controls
 
@@ -116,7 +131,8 @@ codanna workspace remove assign-product
 Explicit `--workspace` and `--config` take priority over discovery and cannot be
 combined. Relative paths for selected commands are interpreted from the selected
 root. An explicitly selected child configuration retains its standalone behavior.
-Set `CODANNA_AUTO_SETUP=0` to retain legacy implicit startup.
+Set `CODANNA_AUTO_SETUP=0` to retain legacy implicit startup. The explicitly
+requested `workspace serve` command is a separate mode, not implicit startup.
 
 The automatic path applies to bare nondry indexing, local stdio serving, and
 ordinary `retrieve`, `mcp`, and `dump` commands. It does not bootstrap help,
@@ -127,22 +143,27 @@ Registration uses the existing v1 `projects.json` and IDs. Registry writes use
 process-level locking and atomic replacement. Older binaries do not participate
 in the new lock protocol. Rename and explicit relocation preserve identity;
 relocation requires the original directory to have been moved already. Removal
-unregisters only: it does not delete files or stop independent servers.
+unregisters only: it does not delete files or stop independent servers. The router
+revalidates registrations for new calls; it does not revoke already running calls.
 
 ## Remaining limitations
 
 The new selector still requires local configuration, local index storage, and
 code roots beneath the product. External repository membership, repository IDs,
-repository-partitioned graph resolution, shared worker management, and per-request
-workspace routing are not implemented. Repository discovery alone is not proof
-of graph isolation inside a multi-repository workspace.
+and repository-partitioned graph resolution are not implemented. Repository
+discovery alone is not proof of graph isolation inside a multi-repository workspace.
+
+Local per-request routing and a bounded lazy reader pool are implemented in
+`workspace serve`. Network routing, shared workers across separate client
+processes, subscriptions, and custom mutation routing remain separate work.
+The new mode advertises tools only and rejects unscoped custom reindex requests.
 
 Selected launches use a fixed working directory and exact configuration. They
 remove inherited `CI_*` configuration overrides and inherited recall workspace
-and index bindings. **Automatic launches use that same policy: conversation
-recall is disabled until workspace-specific bindings are implemented.** Explicit
-`--config` keeps the existing configuration and recall behavior. Other provider
-environment settings retain existing behavior.
+and index bindings. **Automatic and router-worker launches use that same policy:
+conversation recall is disabled until workspace-specific bindings are implemented.**
+Explicit `--config` keeps the existing configuration and recall behavior. Other
+provider environment settings retain existing behavior.
 
 Partial selected rebuilds are rejected except for the validated initial full-root
 index of a fresh empty configuration. Index-writer and watcher coordination across
@@ -154,13 +175,16 @@ separate server processes remains a later implementation stage.
 cargo test --lib workspace_auto_ --all-features
 cargo test --test workspace_auto --all-features
 cargo test --test workspace_cli --all-features
+cargo test --test workspace_mcp --all-features
 ```
 
 The automatic-workspace integration suite indexes tiny deterministic fixtures with
 semantic search disabled and tests separate Assign and Codanna queries, nested
 selection, preserved child configuration, read-only diagnostics, and initial setup.
-The subprocess fixtures use temporary home directories and a cleared environment.
-Their hardening-prefixed names include them in the existing Hardening workflow.
-Unit tests exercise root selection, inventory budgets, symlinks, aliases, and
-configuration preservation. Process witnesses currently run on Unix. The PR
-records observed validation results and pending platform qualification.
+The MCP suite adds real protocol/worker tests for client roots, scoped concurrent
+queries, HOME startup, and failure isolation. Subprocess fixtures use temporary
+homes and cleared environments. Hardening-prefixed names include them in the
+existing Hardening workflow. Unit tests exercise root selection, inventory budgets,
+symlinks, aliases, configuration preservation, and scope validation. Process
+witnesses currently run on Unix. The PR records observed validation results and
+pending platform qualification; these commands are not evidence of a passing run.
