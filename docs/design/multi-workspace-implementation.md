@@ -1,7 +1,8 @@
 # Multi-workspace implementation checklist
 
-**Status:** Implementation started; the first CLI/registry slice is under review.
-The shared MCP router and repository-aware storage are not implemented yet.
+**Status:** Registry/CLI selection and automatic local discovery are implemented
+on the review branch. The shared MCP router and repository-aware storage remain
+incomplete. Passing a discovery test does not qualify those later boundaries.
 
 **Canonical contract:** [Product-level multi-workspace support](multi-workspace.md).
 **Implemented commands and limitations:** [Workspace guide](../workspaces.md).
@@ -12,31 +13,50 @@ members into separate user-facing workspaces and then require a workspace group.
 
 ## Current review scope
 
-PR #34 now includes Rust code for metadata-only workspace management, explicit
-`--workspace` CLI/server selection, locked registry transactions, and deterministic
-unit/process tests. This is a first implementation increment, not completion of
-S1-S6. The existing v1 registry and code index formats are retained.
+PR #34 includes metadata-only workspace management, explicit `--workspace`
+selection, locked registry transactions, and automatic local startup. A fresh
+bare `codanna index` in the product root initializes settings, chooses the root
+source, and registers the workspace without manual add/add-dir commands.
 
-Implemented commands include add/list/show/rename/move/remove/doctor. Selected
-commands run with a fixed cwd and exact configuration before legacy initialization
-or provider/model/index loading. Existing `indexed_paths` still defines source
-roots. A nested unconfigured directory discovers its parent; an already configured
-child remains a separate legacy boundary until explicit adoption is implemented.
+Configured source ownership lets commands started in an Assign child select
+Assign, including children with standalone settings. Discovery does not overwrite
+or import those child settings/indexes. Unrelated siblings are not grouped by name.
+The parent product boundary must first be established by indexing that parent.
+Existing nonempty source lists stay authoritative.
 
-Registration does not index anything. Removal does not stop independently running
+`workspace discover` explains this decision without creating state. One `serve`
+MCP definition can be reused by clients that launch from their project directory.
+This is not yet a shared service or MCP roots negotiation. First indexing remains
+explicit; an unindexed server does not perform a lengthy pre-handshake rebuild.
+
+Registration itself remains metadata-only. Unregistering does not stop independent
 servers. Doctor checks configuration and directory presence, not index health.
-Inherited recall is disabled in selected launches pending workspace-bound recall.
-Repository-qualified identities, graph partitioning, a shared worker pool, per-tool
-MCP workspace selection, client roots, and cross-process index writer ownership
-remain pending. The guide documents these limits and the supported commands.
+Inherited recall is disabled in selected and automatic launches pending a real
+workspace binding. Explicit configuration retains its existing behavior.
 
-The first commit adds 23 regression test functions, including six Unix process
-tests. Record exact CI runs and results in the PR; writing a test is not evidence
-that it passed. The stages below remain unchecked until each full exit criterion
-is qualified, even where individual pieces already have implementation.
+The original increment added 23 tests. The automatic increment adds 19 unit tests
+and six Unix process tests, including real tiny two-workspace indexing/query
+fixtures with semantic search disabled. The process tests enforce deadlines and
+preserve existing index/configuration data on refusal. Record exact tested commits
+and CI results in the PR; test definitions alone are not proof of success.
 
+The stages below remain unchecked until each full exit criterion is qualified.
 Keep the PR draft until its intended merge scope is explicit. Nothing in this
 checklist authorizes automatic merge or production deployment.
+
+## Required automatic experience
+
+Standard product layouts must not require manual workspace registration, a list
+of every member repository, manual IDs, or a separate MCP configuration per product.
+Configuration commands remain overrides for exceptional layouts, not prerequisites.
+
+Local root discovery and bootstrap are implemented first. Complete this across
+future repository storage and MCP routing: discover members beneath an established
+product boundary, preserve ignore rules and explicit exclusions, and map client
+roots to that product. Ambiguous unrelated roots require an explicit choice, not
+silent merging. First connection must remain responsive; any future automatic
+indexing belongs after initialization with visible status, cancellation, resource
+limits, and the configured inference policy, not before the handshake.
 
 ## S1. Deterministic discovery and registry lifecycle
 
@@ -72,12 +92,14 @@ registration alone changes no index contents. Product membership comes next.
 Primary areas: configuration, indexing path identity, storage metadata, parsing
 and project resolution, documents, and the repository's recall integration.
 
-- [ ] Add explicit member-repository configuration to workspace settings, with
-  canonical paths, repository IDs, aliases, and validated optional external roots.
-- [ ] Implement repository add/list/remove against that configuration, not a
-  second registry-side source list. Preview legacy `indexed_paths` migration.
+- [ ] Add a repository membership model populated by discovery under the established
+  product root, with canonical paths, repository IDs, aliases, exclusions, and
+  explicit overrides for exceptional/external roots. Manual enumeration must not
+  be required for the normal product-container layout.
+- [ ] Implement repository add/list/remove as overrides against the same membership
+  authority, not a competing source list. Preview legacy `indexed_paths` migration.
 - [ ] Map a member checkout or nested source folder back to its product workspace;
-  disallow ambiguous overlap and duplicate canonical membership across workspaces.
+  disallow ambiguous overlap and duplicate authoritative writable ownership.
 - [ ] Preserve repository ownership in file keys, symbol references, resolver
   lookups, document scopes, and recall mappings. Support workspace-wide docs and
   conversations without inventing a repository owner.
@@ -169,7 +191,10 @@ including product-wide Assign queries, without a new unauthenticated endpoint.
 - [ ] Handle symlinks, unregistered roots, roots changes, reconnects, and clients
   without roots support. Root updates affect future requests, not active ones.
 - [ ] Treat roots and optional `project_path` solely as routing hints within
-  authorized registrations; never index or register arbitrary client paths.
+  authorized scope; never treat an arbitrary remote path as permission to index it.
+- [ ] Provide responsive first-use setup after the handshake where authorized,
+  with explicit progress and resource/inference limits rather than pre-handshake
+  work or repeated manual repository configuration.
 - [ ] Add workspace-labelled errors with exact recovery commands and metadata-only
   doctor output. Show unknown/incomplete indexing honestly.
 - [ ] Update user-facing CLI help, MCP instructions, and README only for behavior
