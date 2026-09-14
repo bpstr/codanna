@@ -5,6 +5,31 @@ Items remain proposals until their implementation and acceptance criteria are
 verified. Completed work should move to the changelog rather than remaining as
 an open roadmap item.
 
+## Product-level multi-workspace support
+
+**Status:** Proposed; design review only, no runtime implementation yet.
+
+A workspace is an independent product or knowledge boundary containing one or
+more repositories. Assign is one workspace containing assign-core, assign-web,
+assign-mobile, openapi-spec, and SDK repositories. The unrelated Codanna
+repository belongs to a second workspace. Workspace groups are not required
+for this model.
+
+Preserve independent workspace storage while adding explicit registry-backed
+selection, repository provenance, workspace-scoped code/docs/recall, and an
+optional shared MCP service. Do not merge unrelated indexes or infer graph
+edges merely because repositories contain matching symbol names.
+
+- [Feature brief and architecture](docs/design/multi-workspace.md)
+- [Phased implementation and verification checklist](docs/design/multi-workspace-implementation.md)
+
+Deliver discovery/registry, repository ownership, runtime isolation, MCP
+routing, client-root convenience, and qualification in that order. This is a
+separate workstream from index portability below; reuse the shared planner and
+compatibility gates where their contracts apply. Registration alone must not
+force a rebuild, while any later provenance/schema migration must explicitly
+state its compatibility and rebuild requirements.
+
 ## Index planning and dry runs
 
 **Status:** Proposed
@@ -112,7 +137,7 @@ in another checkout without copying a live `.codanna/index` directory by hand.
 - Bundle size, export/import duration, peak memory, and compatibility behavior
   are measured on small and production-shaped deterministic fixtures.
 
-## Recommended sequence
+## Recommended sequence for planning and index portability
 
 1. Complete the shared, read-only index planner and make dry-run trustworthy.
 2. Use that planner and the existing metadata gates to define source identity
