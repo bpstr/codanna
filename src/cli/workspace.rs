@@ -21,7 +21,8 @@ fn resolve_root(start: &Path, home: Option<&Path>) -> Result<(PathBuf, &'static 
 }
 
 fn config_path(root: &Path) -> PathBuf {
-    root.join(crate::init::local_dir_name()).join("settings.toml")
+    root.join(crate::init::local_dir_name())
+        .join("settings.toml")
 }
 
 #[derive(Debug, Subcommand)]
@@ -86,7 +87,8 @@ pub fn run(action: &WorkspaceAction) -> Result<i32, IndexError> {
     if matches!(action, WorkspaceAction::Serve) {
         // Do not hold the synchronous stdout lock while serving MCP. This mode
         // explicitly opts into local registry-wide access; ordinary serve remains bound.
-        let cwd = std::env::current_dir().map_err(|error| IndexError::General(error.to_string()))?;
+        let cwd =
+            std::env::current_dir().map_err(|error| IndexError::General(error.to_string()))?;
         let home = dirs::home_dir();
         return tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(mcp::run(&cwd, home.as_deref()))
