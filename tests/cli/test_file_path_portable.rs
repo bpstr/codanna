@@ -57,7 +57,9 @@ fn run_cli(workspace: &Path, args: &[&str]) -> (i32, String, String) {
     // Explicit out-of-tree configurations remain supported. Do not route these
     // codec fixtures through automatic product-membership validation instead.
     if args.first() != Some(&"init") {
-        command.arg("--config").arg(workspace.join(".codanna/settings.toml"));
+        command
+            .arg("--config")
+            .arg(workspace.join(".codanna/settings.toml"));
     }
     let output = command
         .args(args)
