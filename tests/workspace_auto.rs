@@ -104,9 +104,9 @@ fn config(root: &Path, roots: &[&str]) {
 fn hardening_workspace_auto_discovery_has_no_side_effects() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
-    let root = temp.path().join("assign");
-    checkout(&root.join("assign-core"), "core_identity");
-    checkout(&root.join("assign-web"), "web_identity");
+    let root = temp.path().join("workspace-a");
+    checkout(&root.join("repo-a"), "first_identity");
+    checkout(&root.join("repo-b"), "second_identity");
     let result: Value =
         serde_json::from_str(&ok(cli(&home, &root, &["workspace", "discover", "--json"]))).unwrap();
     assert_eq!(result["repositories"].as_array().unwrap().len(), 2);
@@ -116,34 +116,34 @@ fn hardening_workspace_auto_discovery_has_no_side_effects() {
 }
 
 #[test]
-fn hardening_workspace_auto_assign_and_codanna_index_without_registration_commands() {
+fn hardening_workspace_auto_independent_workspaces_index_without_registration_commands() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
-    let assign = temp.path().join("assign");
-    let core = assign.join("assign-core");
-    let web = assign.join("assign-web");
-    let codanna = temp.path().join("codanna");
-    checkout(&core, "product_unique_identity");
-    checkout(&web, "product_unique_identity");
-    checkout(&codanna, "unrelated_unique_identity");
-    config(&assign, &["."]);
-    config(&core, &["src"]);
-    config(&web, &["src"]);
-    config(&codanna, &["."]);
-    let child_config = fs::read(web.join(".codanna/settings.toml")).unwrap();
-    ok(cli(&home, &web, &["index", "--no-progress"]));
+    let primary = temp.path().join("workspace-a");
+    let first = primary.join("repo-a");
+    let second = primary.join("repo-b");
+    let unrelated = temp.path().join("workspace-b");
+    checkout(&first, "primary_unique_identity");
+    checkout(&second, "primary_unique_identity");
+    checkout(&unrelated, "unrelated_unique_identity");
+    config(&primary, &["."]);
+    config(&first, &["src"]);
+    config(&second, &["src"]);
+    config(&unrelated, &["."]);
+    let child_config = fs::read(second.join(".codanna/settings.toml")).unwrap();
+    ok(cli(&home, &second, &["index", "--no-progress"]));
     ok(cli(
         &home,
-        &codanna.join("src"),
+        &unrelated.join("src"),
         &["index", "--no-progress"],
     ));
     let registrations: Value =
-        serde_json::from_str(&ok(cli(&home, &assign, &["workspace", "list", "--json"]))).unwrap();
+        serde_json::from_str(&ok(cli(&home, &primary, &["workspace", "list", "--json"]))).unwrap();
     assert_eq!(registrations["workspaces"].as_array().unwrap().len(), 2);
     let results = ok(cli(
         &home,
-        &web.join("src"),
-        &["retrieve", "search", "product_unique_identity", "--json"],
+        &second.join("src"),
+        &["retrieve", "search", "primary_unique_identity", "--json"],
     ));
     let results: Value = serde_json::from_str(&results).unwrap();
     // retrieve_search returns Envelope<Vec<SymbolContext>>, not an items object.
@@ -153,32 +153,32 @@ fn hardening_workspace_auto_assign_and_codanna_index_without_registration_comman
     assert_eq!(
         items.len(),
         2,
-        "Assign query should include both member repositories: {results}"
+        "Workspace query should include both member repositories: {results}"
     );
     let rendered = results.to_string();
-    assert!(rendered.contains("assign-core"));
-    assert!(rendered.contains("assign-web"));
+    assert!(rendered.contains("repo-a"));
+    assert!(rendered.contains("repo-b"));
     assert!(!rendered.contains("unrelated_unique_identity"));
-    let unrelated = ok(cli(
+    let unrelated_result = ok(cli(
         &home,
-        &codanna,
+        &unrelated,
         &["retrieve", "search", "unrelated_unique_identity", "--json"],
     ));
-    assert!(unrelated.contains("unrelated_unique_identity"));
-    assert!(!unrelated.contains("product_unique_identity"));
+    assert!(unrelated_result.contains("unrelated_unique_identity"));
+    assert!(!unrelated_result.contains("primary_unique_identity"));
     assert_eq!(
-        fs::read(web.join(".codanna/settings.toml")).unwrap(),
+        fs::read(second.join(".codanna/settings.toml")).unwrap(),
         child_config
     );
-    assert!(!web.join(".codanna/index").exists());
-    assert!(!core.join(".codanna/index").exists());
+    assert!(!second.join(".codanna/index").exists());
+    assert!(!first.join(".codanna/index").exists());
 }
 
 #[test]
 fn hardening_workspace_auto_bare_index_fills_only_fresh_empty_source_list() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root, "initialized_project_identity");
     config(&root, &[]);
     ok(cli(&home, &root.join("src"), &["index", "--no-progress"]));
@@ -203,7 +203,7 @@ fn hardening_workspace_auto_bare_index_fills_only_fresh_empty_source_list() {
 fn hardening_workspace_auto_empty_sources_never_broaden_existing_index() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root, "existing_project_identity");
     config(&root, &["src"]);
     ok(cli(&home, &root, &["index", "--no-progress"]));
@@ -228,7 +228,7 @@ fn hardening_workspace_auto_empty_sources_never_broaden_existing_index() {
 fn hardening_workspace_auto_unindexed_serve_does_not_load_models_or_write_state() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
-    let root = temp.path().join("codanna");
+    let root = temp.path().join("workspace-b");
     checkout(&root, "identity");
     let result = cli(&home, &root, &["serve"]);
     assert!(!result.status.success());
@@ -239,15 +239,15 @@ fn hardening_workspace_auto_unindexed_serve_does_not_load_models_or_write_state(
 }
 
 #[test]
-fn hardening_workspace_auto_inspect_from_sibling_does_not_create_product_parent() {
+fn hardening_workspace_auto_inspect_from_sibling_does_not_create_parent_workspace() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
     let parent = temp.path().join("projects");
-    let assign = parent.join("assign");
-    let codanna = parent.join("codanna");
-    checkout(&assign, "assign_identity");
-    checkout(&codanna, "codanna_identity");
-    for root in [&assign, &codanna] {
+    let primary = parent.join("workspace-a");
+    let unrelated = parent.join("workspace-b");
+    checkout(&primary, "first_identity");
+    checkout(&unrelated, "second_identity");
+    for root in [&primary, &unrelated] {
         let result: Value = serde_json::from_str(&ok(cli(
             &home,
             &root.join("src"),

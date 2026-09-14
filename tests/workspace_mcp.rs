@@ -87,29 +87,29 @@ fn configure(root: &Path) {
 struct Fixture {
     _temporary: TempDir,
     home: PathBuf,
-    assign: PathBuf,
-    codanna: PathBuf,
+    primary: PathBuf,
+    unrelated: PathBuf,
 }
 
 impl Fixture {
     fn new() -> Self {
         let temporary = TempDir::new().unwrap();
         let home = temporary.path().join("home");
-        let assign = temporary.path().join("assign");
-        let codanna = temporary.path().join("codanna");
+        let primary = temporary.path().join("workspace-a");
+        let unrelated = temporary.path().join("workspace-b");
         fs::create_dir_all(&home).unwrap();
-        checkout(&assign.join("assign-core"), "product_only_identity");
-        checkout(&assign.join("assign-web"), "product_only_identity");
-        checkout(&codanna, "unrelated_only_identity");
-        configure(&assign);
-        configure(&codanna);
-        run_cli(&home, &assign, &["index", "--no-progress"]);
-        run_cli(&home, &codanna, &["index", "--no-progress"]);
+        checkout(&primary.join("repo-a"), "primary_only_identity");
+        checkout(&primary.join("repo-b"), "primary_only_identity");
+        checkout(&unrelated, "unrelated_only_identity");
+        configure(&primary);
+        configure(&unrelated);
+        run_cli(&home, &primary, &["index", "--no-progress"]);
+        run_cli(&home, &unrelated, &["index", "--no-progress"]);
         Self {
             _temporary: temporary,
             home,
-            assign,
-            codanna,
+            primary,
+            unrelated,
         }
     }
 }
@@ -210,7 +210,7 @@ async fn hardening_workspace_mcp_handshake_and_catalogue_from_home_do_not_create
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hardening_workspace_mcp_one_connection_queries_assign_and_codanna_independently() {
+async fn hardening_workspace_mcp_one_connection_queries_independent_workspaces() {
     let fixture = Fixture::new();
     let client = connect((), &fixture.home, &fixture.home).await;
     let listed = call(&client, "list_workspaces", json!({})).await;
@@ -221,42 +221,42 @@ async fn hardening_workspace_mcp_one_connection_queries_assign_and_codanna_indep
             .len(),
         2
     );
-    let before = call(&client, "get_workspace", json!({"workspace": "assign"})).await;
+    let before = call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await;
     assert_eq!(
         before.structured_content.unwrap()["result"]["worker_loaded"],
         false
     );
-    let (assign, codanna) = tokio::join!(
+    let (primary, unrelated) = tokio::join!(
         call(
             &client,
             "search_context",
-            json!({"workspace": "assign", "query": "product_only_identity"})
+            json!({"workspace": "workspace-a", "query": "primary_only_identity"})
         ),
         call(
             &client,
             "search_context",
-            json!({"workspace": "codanna", "query": "unrelated_only_identity"})
+            json!({"workspace": "workspace-b", "query": "unrelated_only_identity"})
         ),
     );
-    assert_eq!(owner(&assign), "assign");
-    assert_eq!(owner(&codanna), "codanna");
-    assert!(rendered(&assign).contains("assign-core"));
-    assert!(rendered(&assign).contains("assign-web"));
-    assert!(!rendered(&assign).contains("unrelated_only_identity"));
-    assert!(rendered(&codanna).contains("unrelated_only_identity"));
-    assert!(!rendered(&codanna).contains("product_only_identity"));
-    let after = call(&client, "get_workspace", json!({"workspace": "assign"})).await;
+    assert_eq!(owner(&primary), "workspace-a");
+    assert_eq!(owner(&unrelated), "workspace-b");
+    assert!(rendered(&primary).contains("repo-a"));
+    assert!(rendered(&primary).contains("repo-b"));
+    assert!(!rendered(&primary).contains("unrelated_only_identity"));
+    assert!(rendered(&unrelated).contains("unrelated_only_identity"));
+    assert!(!rendered(&unrelated).contains("primary_only_identity"));
+    let after = call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await;
     assert_eq!(
         after.structured_content.unwrap()["result"]["worker_loaded"],
         true
     );
-    let path = call(&client, "search_context", json!({"project_path": fixture.assign.join("assign-web/src"), "query": "product_only_identity"})).await;
-    assert_eq!(owner(&path), "assign");
+    let path = call(&client, "search_context", json!({"project_path": fixture.primary.join("repo-b/src"), "query": "primary_only_identity"})).await;
+    assert_eq!(owner(&path), "workspace-a");
     assert!(
         client
             .call_tool(request(
                 "get_workspace",
-                json!({"workspace": "assign", "project_path": fixture.codanna})
+                json!({"workspace": "workspace-a", "project_path": fixture.unrelated})
             ))
             .await
             .is_err()
@@ -277,18 +277,18 @@ async fn hardening_workspace_mcp_one_connection_queries_assign_and_codanna_indep
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hardening_workspace_mcp_explicit_override_never_changes_the_connection_default() {
     let fixture = Fixture::new();
-    let client = connect((), &fixture.home, &fixture.assign.join("assign-web/src")).await;
+    let client = connect((), &fixture.home, &fixture.primary.join("repo-b/src")).await;
     assert_eq!(
         owner(&call(&client, "get_workspace", json!({})).await),
-        "assign"
+        "workspace-a"
     );
     assert_eq!(
-        owner(&call(&client, "get_workspace", json!({"workspace": "codanna"})).await),
-        "codanna"
+        owner(&call(&client, "get_workspace", json!({"workspace": "workspace-b"})).await),
+        "workspace-b"
     );
     assert_eq!(
         owner(&call(&client, "get_workspace", json!({})).await),
-        "assign"
+        "workspace-a"
     );
     client.cancel().await.unwrap();
 }
@@ -326,12 +326,12 @@ impl ClientHandler for RootsClient {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_products_without_paths_in_config() {
+async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_workspaces_without_paths_in_config() {
     let fixture = Fixture::new();
     for version in ["2025-11-25", "2026-07-28"] {
         let roots = Arc::new(RwLock::new(vec![
-            fixture.assign.join("assign-core"),
-            fixture.assign.join("assign-web"),
+            fixture.primary.join("repo-a"),
+            fixture.primary.join("repo-b"),
         ]));
         let handler = RootsClient {
             roots: roots.clone(),
@@ -340,14 +340,14 @@ async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_products_without_p
         let client = connect(handler, &fixture.home, &fixture.home).await;
         assert_eq!(
             owner(&call(&client, "get_workspace", json!({})).await),
-            "assign"
+            "workspace-a"
         );
-        *roots.write().unwrap() = vec![fixture.codanna.clone()];
+        *roots.write().unwrap() = vec![fixture.unrelated.clone()];
         assert_eq!(
             owner(&call(&client, "get_workspace", json!({})).await),
-            "codanna"
+            "workspace-b"
         );
-        *roots.write().unwrap() = vec![fixture.assign.clone(), fixture.codanna.clone()];
+        *roots.write().unwrap() = vec![fixture.primary.clone(), fixture.unrelated.clone()];
         assert!(
             client
                 .call_tool(request("get_workspace", json!({})))
@@ -355,12 +355,12 @@ async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_products_without_p
                 .is_err()
         );
         assert_eq!(
-            owner(&call(&client, "get_workspace", json!({"workspace": "assign"})).await),
-            "assign"
+            owner(&call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await),
+            "workspace-a"
         );
         let unknown = fixture.home.join("unregistered");
         fs::create_dir_all(unknown.join(".git")).unwrap();
-        *roots.write().unwrap() = vec![fixture.assign.clone(), unknown.clone()];
+        *roots.write().unwrap() = vec![fixture.primary.clone(), unknown.clone()];
         assert!(
             client
                 .call_tool(request("get_workspace", json!({})))
@@ -376,7 +376,7 @@ async fn hardening_workspace_mcp_legacy_and_mrtr_roots_select_products_without_p
 async fn hardening_workspace_mcp_root_continuations_are_bound_and_single_use() {
     let fixture = Fixture::new();
     let handler = RootsClient {
-        roots: Arc::new(RwLock::new(vec![fixture.assign.clone()])),
+        roots: Arc::new(RwLock::new(vec![fixture.primary.clone()])),
         version: ProtocolVersion::V_2026_07_28,
     };
     let client = connect(handler, &fixture.home, &fixture.home).await;
@@ -395,8 +395,8 @@ async fn hardening_workspace_mcp_root_continuations_are_bound_and_single_use() {
     replay.request_state = Some(state);
     assert!(client.call_tool_once(replay).await.is_err());
     assert_eq!(
-        owner(&call(&client, "get_workspace", json!({"workspace": "assign"})).await),
-        "assign"
+        owner(&call(&client, "get_workspace", json!({"workspace": "workspace-a"})).await),
+        "workspace-a"
     );
     client.cancel().await.unwrap();
 }
@@ -408,11 +408,11 @@ async fn hardening_workspace_mcp_broken_or_unregistered_workspace_does_not_poiso
     call(
         &client,
         "search_context",
-        json!({"workspace": "assign", "query": "product_only_identity"}),
+        json!({"workspace": "workspace-a", "query": "primary_only_identity"}),
     )
     .await;
     fs::write(
-        fixture.codanna.join(".codanna/index/index.meta"),
+        fixture.unrelated.join(".codanna/index/index.meta"),
         "corrupt fixture",
     )
     .unwrap();
@@ -420,7 +420,7 @@ async fn hardening_workspace_mcp_broken_or_unregistered_workspace_does_not_poiso
         client
             .call_tool(request(
                 "search_context",
-                json!({"workspace": "codanna", "query": "identity"})
+                json!({"workspace": "workspace-b", "query": "identity"})
             ))
             .await
             .is_err()
@@ -430,24 +430,89 @@ async fn hardening_workspace_mcp_broken_or_unregistered_workspace_does_not_poiso
             &call(
                 &client,
                 "search_context",
-                json!({"workspace": "assign", "query": "product_only_identity"})
+                json!({"workspace": "workspace-a", "query": "primary_only_identity"})
             )
             .await
         ),
-        "assign"
+        "workspace-a"
     );
     let registry = codanna::init::workspaces::WorkspaceRegistry::new(
         fixture.home.join(".codanna/projects.json"),
     );
-    registry.remove("assign").unwrap();
+    registry.remove("workspace-a").unwrap();
     assert!(
         client
             .call_tool(request(
                 "search_context",
-                json!({"workspace": "assign", "query": "product_only_identity"})
+                json!({"workspace": "workspace-a", "query": "primary_only_identity"})
             ))
             .await
             .is_err()
     );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_mcp_arbitrary_renamed_single_repository_workspaces_stay_isolated() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let registry = codanna::init::workspaces::WorkspaceRegistry::new(
+        home.join(".codanna/projects.json"),
+    );
+    let mut workspaces = Vec::new();
+    for index in 0..2 {
+        let directory = format!("checkout-{index}");
+        let root = temp.path().join(&directory);
+        let symbol = format!("isolated_symbol_{index}");
+        checkout(&root, &symbol);
+        configure(&root);
+        run_cli(&home, &root, &["index", "--no-progress"]);
+        let original = registry.get(&directory).unwrap();
+        let alias = format!("renamed_{index}_73");
+        let renamed = registry.rename(original.id.as_str(), &alias).unwrap();
+        assert_eq!(original.id, renamed.id);
+        workspaces.push((renamed, root, symbol, directory));
+    }
+    let client = connect((), &home, &home).await;
+    for (workspace, root, symbol, old_alias) in &workspaces {
+        let result = call(
+            &client,
+            "search_context",
+            json!({"workspace": &workspace.name, "query": symbol}),
+        )
+        .await;
+        assert_eq!(owner(&result), workspace.name);
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["workspace"]["id"],
+            workspace.id.as_str()
+        );
+        assert!(rendered(&result).contains(symbol));
+        for (other, _, other_symbol, _) in &workspaces {
+            if other.id != workspace.id {
+                assert!(!rendered(&result).contains(other_symbol));
+            }
+        }
+        let by_id = call(
+            &client,
+            "get_workspace",
+            json!({"workspace": workspace.id.as_str()}),
+        )
+        .await;
+        assert_eq!(owner(&by_id), workspace.name);
+        let by_path = call(
+            &client,
+            "get_workspace",
+            json!({"project_path": root.join("src")}),
+        )
+        .await;
+        assert_eq!(owner(&by_path), workspace.name);
+        assert!(
+            client
+                .call_tool(request("get_workspace", json!({"workspace": old_alias})))
+                .await
+                .is_err()
+        );
+    }
     client.cancel().await.unwrap();
 }

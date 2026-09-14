@@ -409,13 +409,13 @@ mod tests {
     #[test]
     fn workspace_selector_preserves_positionals_and_terminator() {
         assert_eq!(
-            without_selector(&args(&["--workspace", "assign", "index", "src"])).unwrap(),
+            without_selector(&args(&["--workspace", "workspace-a", "index", "src"])).unwrap(),
             args(&["index", "src"])
         );
         assert_eq!(
             without_selector(&args(&[
                 "index",
-                "--workspace=assign",
+                "--workspace=workspace-a",
                 "--",
                 "--workspace",
                 "literal"

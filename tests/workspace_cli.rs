@@ -103,21 +103,21 @@ fn workspace_cli_empty_list_and_help_are_side_effect_free() {
 }
 
 #[test]
-fn workspace_cli_registers_products_not_unconfigured_child_directories() {
+fn workspace_cli_registers_workspaces_not_unconfigured_child_directories() {
     let fixture = Fixture::new();
-    let assign = fixture.workspace("assign");
-    let codanna = fixture.workspace("codanna");
-    let web = assign.join("assign-web/src");
-    fs::create_dir_all(&web).unwrap();
-    let first = fixture.add(&assign, "assign");
-    let nested = fixture.json(&["workspace", "add", web.to_str().unwrap(), "--json"]);
+    let primary = fixture.workspace("workspace-a");
+    let unrelated = fixture.workspace("workspace-b");
+    let nested_path = primary.join("repo-b/src");
+    fs::create_dir_all(&nested_path).unwrap();
+    let first = fixture.add(&primary, "workspace-a");
+    let nested = fixture.json(&["workspace", "add", nested_path.to_str().unwrap(), "--json"]);
     assert_eq!(first["workspace"]["id"], nested["workspace"]["id"]);
-    fixture.add(&codanna, "codanna");
+    fixture.add(&unrelated, "workspace-b");
     let all = fixture.json(&["workspace", "list", "--json"]);
     assert_eq!(all["workspaces"].as_array().unwrap().len(), 2);
-    assert!(!assign.join(".codanna/index").exists());
-    assert!(!codanna.join(".codanna/index").exists());
-    assert!(!web.join(".codanna").exists());
+    assert!(!primary.join(".codanna/index").exists());
+    assert!(!unrelated.join(".codanna/index").exists());
+    assert!(!nested_path.join(".codanna").exists());
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn workspace_cli_parallel_processes_do_not_lose_registrations() {
     let fixture = Fixture::new();
     let mut children = Vec::new();
     for n in 0..8 {
-        let name = format!("product-{n}");
+        let name = format!("workspace-{n}");
         let root = fixture.workspace(&name);
         children.push(
             fixture
@@ -154,15 +154,15 @@ fn workspace_cli_parallel_processes_do_not_lose_registrations() {
 #[test]
 fn workspace_cli_explicit_selection_uses_target_config_not_cwd_or_environment() {
     let fixture = Fixture::new();
-    let assign = fixture.workspace("assign");
-    let codanna = fixture.workspace("codanna");
-    fixture.add(&assign, "assign");
-    fixture.add(&codanna, "codanna");
+    let primary = fixture.workspace("workspace-a");
+    let unrelated = fixture.workspace("workspace-b");
+    fixture.add(&primary, "workspace-a");
+    fixture.add(&unrelated, "workspace-b");
     let output = fixture
-        .command(&["--workspace", "assign", "config"])
-        .current_dir(&codanna)
-        .env("CI_INDEX_PATH", codanna.join(".codanna/index"))
-        .env("CI_WORKSPACE_ROOT", &codanna)
+        .command(&["--workspace", "workspace-a", "config"])
+        .current_dir(&unrelated)
+        .env("CI_INDEX_PATH", unrelated.join(".codanna/index"))
+        .env("CI_WORKSPACE_ROOT", &unrelated)
         .output()
         .unwrap();
     assert!(
@@ -175,14 +175,14 @@ fn workspace_cli_explicit_selection_uses_target_config_not_cwd_or_environment() 
         toml::from_str(&text.lines().skip(2).collect::<Vec<_>>().join("\n")).unwrap();
     assert_eq!(
         PathBuf::from(table["workspace_root"].as_str().unwrap()),
-        assign
+        primary
     );
     assert_eq!(
         PathBuf::from(table["index_path"].as_str().unwrap()),
-        assign.join(".codanna/index")
+        primary.join(".codanna/index")
     );
-    assert!(!assign.join(".codanna/index").exists());
-    assert!(!codanna.join(".codanna/index").exists());
+    assert!(!primary.join(".codanna/index").exists());
+    assert!(!unrelated.join(".codanna/index").exists());
 }
 
 #[test]
@@ -202,15 +202,15 @@ fn workspace_cli_rejects_unknown_and_conflicting_selectors_before_auto_init() {
 #[test]
 fn workspace_cli_unregistration_keeps_existing_index_bytes() {
     let fixture = Fixture::new();
-    let assign = fixture.workspace("assign");
-    fs::create_dir_all(assign.join(".codanna/index")).unwrap();
-    fs::write(assign.join(".codanna/index/sentinel"), b"not a real index").unwrap();
-    let before = fixture.add(&assign, "assign");
-    let renamed = fixture.json(&["workspace", "rename", "assign", "product", "--json"]);
+    let primary = fixture.workspace("workspace-a");
+    fs::create_dir_all(primary.join(".codanna/index")).unwrap();
+    fs::write(primary.join(".codanna/index/sentinel"), b"not a real index").unwrap();
+    let before = fixture.add(&primary, "workspace-a");
+    let renamed = fixture.json(&["workspace", "rename", "workspace-a", "renamed", "--json"]);
     assert_eq!(before["workspace"]["id"], renamed["workspace"]["id"]);
-    fixture.json(&["workspace", "remove", "product", "--json"]);
+    fixture.json(&["workspace", "remove", "renamed", "--json"]);
     assert_eq!(
-        fs::read(assign.join(".codanna/index/sentinel")).unwrap(),
+        fs::read(primary.join(".codanna/index/sentinel")).unwrap(),
         b"not a real index"
     );
 }
