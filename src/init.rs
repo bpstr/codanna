@@ -345,7 +345,10 @@ impl ProjectRegistry {
 
     fn save_to_path(&self, path: &Path) -> Result<(), IndexError> {
         use std::io::Write;
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent).map_err(|source| IndexError::FileWrite {
             path: parent.to_path_buf(),
             source,
@@ -384,10 +387,12 @@ impl ProjectRegistry {
         _update: bool,
     ) -> Result<String, IndexError> {
         workspaces::with_registry(registry_path, |registry| {
-            let root = project_path.canonicalize().map_err(|source| IndexError::FileRead {
-                path: project_path.to_path_buf(),
-                source,
-            })?;
+            let root = project_path
+                .canonicalize()
+                .map_err(|source| IndexError::FileRead {
+                    path: project_path.to_path_buf(),
+                    source,
+                })?;
             // Reinitialization must not reset a user alias, counters, or identity.
             if let Some(id) = workspaces::id_for_root(registry, &root)? {
                 return Ok(id);
@@ -442,17 +447,22 @@ impl ProjectRegistry {
         project_id: &str,
         new_path: &Path,
     ) -> Result<(), IndexError> {
-        let root = new_path.canonicalize().map_err(|source| IndexError::FileRead {
-            path: new_path.to_path_buf(),
-            source,
-        })?;
+        let root = new_path
+            .canonicalize()
+            .map_err(|source| IndexError::FileRead {
+                path: new_path.to_path_buf(),
+                source,
+            })?;
         workspaces::with_registry(&projects_file(), |registry| {
             if workspaces::id_for_root(registry, &root)?.is_some_and(|id| id != project_id) {
-                return Err(IndexError::General("Path already belongs to another workspace".to_owned()));
+                return Err(IndexError::General(
+                    "Path already belongs to another workspace".to_owned(),
+                ));
             }
-            let project = registry.projects.get_mut(project_id).ok_or_else(|| {
-                IndexError::General(format!("Project {project_id} not found"))
-            })?;
+            let project = registry
+                .projects
+                .get_mut(project_id)
+                .ok_or_else(|| IndexError::General(format!("Project {project_id} not found")))?;
             project.path = root;
             Ok(())
         })?;

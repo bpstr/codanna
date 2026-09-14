@@ -234,7 +234,9 @@ async fn main() {
     // legacy auto-init/config-fallback paths, not merely precede tool dispatch.
     if let Commands::Workspace { action } = &cli.command {
         if cli.config.is_some() || cli.workspace_selector.is_some() {
-            eprintln!("Workspace management takes its own selector; do not combine it with --config or --workspace.");
+            eprintln!(
+                "Workspace management takes its own selector; do not combine it with --config or --workspace."
+            );
             std::process::exit(2);
         }
         let result = codanna::cli::workspace::run(action);
