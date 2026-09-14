@@ -4,6 +4,7 @@
 //! Extracted from main.rs for better modularity.
 
 pub mod args;
+pub mod automatic;
 pub mod commands;
 pub mod workspace;
 

@@ -14,6 +14,13 @@ use std::process::Command;
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceAction {
+    /// Explain automatic root selection and list observed repositories; no writes
+    Discover {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Register an initialized workspace without indexing or rewriting its config
     Add {
         path: PathBuf,
@@ -65,6 +72,21 @@ pub fn run(action: &WorkspaceAction) -> Result<i32, IndexError> {
     let registry = WorkspaceRegistry::default();
     let mut out = io::stdout().lock();
     match action {
+        WorkspaceAction::Discover { path, json } => {
+            let home = dirs::home_dir();
+            let discovery = crate::cli::automatic::inspect(path, home.as_deref())?;
+            if *json {
+                write_json(&mut out, &discovery)?;
+            } else {
+                writeln!(out, "Workspace root: {}\nSelection: {}\nConfigured: {}", discovery.root.display(), discovery.reason, discovery.configured).map_err(output_error)?;
+                for repository in discovery.repositories {
+                    writeln!(out, "Repository: {}", repository.path.display()).map_err(output_error)?;
+                }
+                if discovery.inventory_truncated {
+                    writeln!(out, "Repository inventory truncated by discovery budget; this is not an index plan.").map_err(output_error)?;
+                }
+            }
+        }
         WorkspaceAction::List { json } => {
             let workspaces = registry.list()?;
             if *json {
@@ -192,7 +214,7 @@ impl WorkspaceLaunch {
             }
         }
         let arguments = without_selector(arguments)?;
-        validate_source_arguments(&workspace, &arguments)?;
+        validate_source_arguments(&workspace, &settings, &arguments)?;
         Ok(Self {
             workspace,
             arguments,
@@ -227,6 +249,7 @@ impl WorkspaceLaunch {
 
 fn validate_source_arguments(
     workspace: &Workspace,
+    settings: &crate::Settings,
     arguments: &[OsString],
 ) -> Result<(), IndexError> {
     use crate::cli::{Cli, Commands, DocumentAction};
@@ -236,9 +259,18 @@ fn validate_source_arguments(
     .map_err(|error| IndexError::General(error.to_string()))?;
     let source = match &parsed.command {
         Commands::Index { paths, .. } if !paths.is_empty() => {
-            return Err(IndexError::General(
-                "With --workspace, configure roots using add-dir and run index without paths. Partial workspace rebuilds are not supported yet.".to_owned(),
-            ));
+            // The sole exception is an initial full-root index for a fresh
+            // empty configuration. This is not a partial rebuild of old data.
+            let initial_root = settings.indexing.indexed_paths.is_empty()
+                && paths.len() == 1
+                && workspace.root.join(&paths[0]).canonicalize().ok().as_deref() == Some(workspace.root.as_path())
+                && crate::cli::automatic::is_uninitialized_index(&confined_index_path(&workspace.root, settings)?)?;
+            if !initial_root {
+                return Err(IndexError::General(
+                    "With --workspace, configure roots using add-dir and run index without paths. Partial workspace rebuilds are not supported yet.".to_owned(),
+                ));
+            }
+            None
         }
         Commands::AddDir { path } | Commands::RemoveDir { path } => Some(path),
         Commands::Documents {
