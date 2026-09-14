@@ -4,8 +4,10 @@
 
 use serde_json::Value;
 use std::fs;
+use std::io::{Read, Seek};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn cli(home: &Path, cwd: &Path, args: &[&str]) -> Output {
@@ -24,7 +26,39 @@ fn cli(home: &Path, cwd: &Path, args: &[&str]) -> Output {
             command.env(key, value);
         }
     }
-    command.output().unwrap()
+    // File-backed capture cannot deadlock on full stdout/stderr pipes. A broken
+    // startup must fail this fixture instead of using the whole CI job timeout.
+    let mut stdout = tempfile::tempfile().unwrap();
+    let mut stderr = tempfile::tempfile().unwrap();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone().unwrap())
+        .stderr(stderr.try_clone().unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("Workspace command timed out: {args:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    stdout.rewind().unwrap();
+    stderr.rewind().unwrap();
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    stdout.take(1024 * 1024).read_to_end(&mut stdout_bytes).unwrap();
+    stderr.take(1024 * 1024).read_to_end(&mut stderr_bytes).unwrap();
+    Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    }
 }
 
 fn ok(output: Output) -> String {
@@ -106,7 +140,10 @@ fn hardening_workspace_auto_assign_and_codanna_index_without_registration_comman
         &["retrieve", "search", "product_unique_identity", "--json"],
     ));
     let results: Value = serde_json::from_str(&results).unwrap();
-    let items = results["data"]["items"].as_array().unwrap();
+    // retrieve_search returns Envelope<Vec<SymbolContext>>, not an items object.
+    let items = results["data"]
+        .as_array()
+        .unwrap_or_else(|| panic!("Expected search data array: {results}"));
     assert_eq!(
         items.len(),
         2,
@@ -154,6 +191,28 @@ fn hardening_workspace_auto_bare_index_fills_only_fresh_empty_source_list() {
         ],
     ));
     assert!(query.contains("initialized_project_identity"));
+}
+
+#[test]
+fn hardening_workspace_auto_empty_sources_never_broaden_existing_index() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let root = temp.path().join("codanna");
+    checkout(&root, "existing_project_identity");
+    config(&root, &["src"]);
+    ok(cli(&home, &root, &["index", "--no-progress"]));
+    let index = root.join(".codanna/index");
+    let tantivy_before = fs::read(index.join("tantivy/meta.json")).unwrap();
+    config(&root, &[]);
+    let settings_before = fs::read(root.join(".codanna/settings.toml")).unwrap();
+    let result = cli(&home, &root, &["index", "--force", "--no-progress"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("will not broaden"));
+    assert_eq!(fs::read(index.join("tantivy/meta.json")).unwrap(), tantivy_before);
+    assert_eq!(
+        fs::read(root.join(".codanna/settings.toml")).unwrap(),
+        settings_before
+    );
 }
 
 #[test]
