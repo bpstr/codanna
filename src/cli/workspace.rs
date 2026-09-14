@@ -1,7 +1,7 @@
-//! Workspace administration and an isolated launch adapter for the existing CLI.
+//! Workspace administration and isolated launch adapters for the existing CLI.
 //!
 //! Selection runs before providers, models, configuration fallback, or indexes.
-//! This is not yet the shared, per-request multi-workspace MCP router.
+//! Cross-workspace MCP access is explicit through `workspace serve`.
 
 use crate::IndexError;
 use crate::init::workspaces::{Workspace, WorkspaceRegistry, confined_index_path, read_settings};
@@ -12,8 +12,22 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "automatic/mcp.rs"]
+pub mod mcp;
+
+fn resolve_root(start: &Path, home: Option<&Path>) -> Result<(PathBuf, &'static str), IndexError> {
+    let discovery = crate::cli::automatic::inspect(start, home)?;
+    Ok((discovery.root, discovery.reason))
+}
+
+fn config_path(root: &Path) -> PathBuf {
+    root.join(crate::init::local_dir_name()).join("settings.toml")
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceAction {
+    /// Serve locally registered workspaces through one read-only stdio MCP connection
+    Serve,
     /// Explain automatic root selection and list observed repositories; no writes
     Discover {
         #[arg(default_value = ".")]
@@ -69,9 +83,19 @@ pub enum WorkspaceAction {
 }
 
 pub fn run(action: &WorkspaceAction) -> Result<i32, IndexError> {
+    if matches!(action, WorkspaceAction::Serve) {
+        // Do not hold the synchronous stdout lock while serving MCP. This mode
+        // explicitly opts into local registry-wide access; ordinary serve remains bound.
+        let cwd = std::env::current_dir().map_err(|error| IndexError::General(error.to_string()))?;
+        let home = dirs::home_dir();
+        return tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(mcp::run(&cwd, home.as_deref()))
+        });
+    }
     let registry = WorkspaceRegistry::default();
     let mut out = io::stdout().lock();
     match action {
+        WorkspaceAction::Serve => unreachable!("handled before stdout locking"),
         WorkspaceAction::Discover { path, json } => {
             let home = dirs::home_dir();
             let discovery = crate::cli::automatic::inspect(path, home.as_deref())?;
