@@ -1,162 +1,106 @@
-# Independent local workspaces
+# Independent coding-agent workspaces
 
-**Status:** Under review in PR #34. Automatic setup, registry administration,
-explicit selection, and local read-only MCP routing are implemented on the branch.
-Shared HTTP routing, repository-qualified graph semantics, and workspace-bound
-recall are not complete. See the [design](design/multi-workspace.md) and
-[MCP guide](workspace-mcp.md).
+Implementation is under review in PR #34. Workspaces are arbitrary local coding
+projects with separate indexes and request context; there are no built-in project
+names, customer layouts, or required repository inventories.
 
-## Normal usage
+## Normal setup
 
-A workspace is an independently indexed coding project. Each workspace uses its
-own graph/index and configuration. It can be a single repository, a monorepo, or
-multiple repositories intentionally indexed together. There is no built-in project
-list, prescribed repository layout, or required business/product hierarchy.
-
-Run this in each intended workspace:
-
-```bash
-cd /path/to/your/project
-codanna index
-```
-
-The path above is a placeholder. A fresh bare `index` discovers the boundary,
-creates missing settings/source defaults, and registers the workspace. No manual
-`workspace add`, ID selection, or per-repository `add-dir` list is required for a
-standard layout. Existing source lists and ignore files are preserved.
-
-For an intentionally combined multi-repository workspace, run the first index
-from its containing root. Later queries from covered member directories select
-that established workspace. This grouping is optional; unrelated checkouts keep
-separate indexes and are not combined based on their names or location.
-
-## One reusable MCP entry
+Configure the MCP entry once:
 
 ```json
-{
-  "mcpServers": {
-    "codanna": {
-      "command": "codanna",
-      "args": ["workspace", "serve"]
-    }
-  }
-}
+{"mcpServers":{"codanna":{"command":"codanna","args":["workspace","serve"]}}}
 ```
 
-This opts the local stdio connection into read access to registered workspaces.
-Supported client roots select the workspace, or tools can supply an ID/alias or
-registered project path. HOME launch can handshake and enumerate workspaces
-without opening any index; it does not guess a default project.
+Open a project in the coding agent and use its Codanna tools. The local client
+roots, or the MCP process's launch directory when roots are unsupported, select
+the project. First knowledge use creates missing local settings and registration
+and starts a bounded code-only index. No per-project registration, source list,
+workspace ID, MCP path, or initial CLI indexing command is normally required.
 
-Ordinary `args: ["serve"]` remains bound to the launch directory or explicit
-configuration/selector and retains its supported watching behavior. It does not
-silently gain registry-wide access. Each stdio process has its own worker pool;
-the router is not a shared machine-wide daemon. HTTP/HTTPS servers still require
-explicit setup and retain existing network controls.
+While initial indexing is running, a tool may return `status: indexing` with
+`ready: false`; retry the same scoped query shortly. An empty project remains
+selectable and can initialize when its first files arrive. Setup errors never
+substitute results from another workspace. See [MCP behavior and limits](workspace-mcp.md).
 
-First indexing remains explicit. An unindexed ordinary server returns guidance;
-the router can connect without any index and reports guidance when a knowledge
-query needs one. Connecting does not trigger a rebuild or paid inference batch.
-Semantic queries retain the selected workspace's configured provider behavior.
+One configuration does not mean a single machine-wide process: separate stdio
+clients have separate router pools. Their indexes remain independent, and new
+bootstrap writers for the same root coordinate through an OS-backed lock.
+Shared HTTP service ownership and general CLI/watcher coordination remain
+separate features.
 
-## Discovery and preservation
+## Root selection
 
-Discovery uses configured-source ownership, the nearest Git/worktree checkout,
-recognized manifests, or an explicitly opened repository container. Starting in
-an unknown child never scans siblings to infer which projects belong together.
+An independently opened checkout or nearer configuration is not captured by an
+ancestor merely because that ancestor indexes `.`. A plain non-Git local client
+root is also valid; an ancestor's bare Codanna configuration cannot widen that
+session. Symlink-equivalent roots canonicalize to the same location. Git worktrees
+retain independent checkout/index locations.
 
-An established parent may own configured descendants even when they retain older
-standalone settings. Discovery does not overwrite/import child settings or index
-files, and old standalone registrations remain. Explicitly selecting a child
-configuration retains its standalone behavior.
+A monorepo or deliberately combined source root remains supported when that root
+is actually opened. Opening a child checkout does not implicitly opt into the
+combined parent. Multiple unrelated roots are ambiguous and require a deliberate
+selection, rather than guessing a shared product from names or directory ancestry.
 
-HOME/filesystem roots are not automatic choices. Malformed applicable configs
-fail instead of selecting another workspace. A model-cache-only `.codanna`
-directory is not a project. Symlink-equivalent roots deduplicate; separate clones
-and worktrees keep separate local storage. Aliases derive from folder names and
-are disambiguated; existing aliases are preserved.
+A client starting the process in HOME must supply its actual project roots.
+A long-running server cannot learn changes in another process's cwd by inspecting
+its own cwd; clients must publish root changes or relaunch in their new project.
+Invalid/unknown client context never falls back to the last queried workspace.
 
-A fresh workspace uses `.` and initial cache/dependency exclusions only when no
-settings/ignore rules already exist. An empty source list can receive a root
-default only with absent/empty index storage. Populated indexes are not silently
-broadened or cleared.
-
-## Inspect and override
+## Inspection and optional overrides
 
 ```bash
 codanna workspace discover --json
 codanna workspace list --json
+codanna workspace show <workspace-id-or-alias> --json
+codanna workspace doctor <workspace-id-or-alias> --json
 ```
 
-`discover` explains the root, selection reason, configuration presence, and bounded
-repository inventory without writes, model loading, or index creation. It reports
-truncation, skips caches/dependencies and directory symlinks, and is not an index
-plan or persisted repository-identity map.
+Discovery is explicitly read-only and includes a bounded diagnostic repository
+inventory. Ordinary query routing does not run this inventory. Doctor describes
+configuration and index-directory presence, not proof of a complete healthy index.
 
-Use an ID returned by `list` for optional management or explicit selection:
+Manual commands remain useful for recovery and unusual layouts:
 
 ```bash
-codanna workspace show <workspace-id> --json
-codanna workspace doctor <workspace-id> --json
-codanna --workspace <workspace-id> index
-codanna --workspace <workspace-id> retrieve search "authentication"
-codanna workspace rename <workspace-id> <new-alias>
-codanna workspace move <workspace-id> /path/to/moved/project
-codanna workspace remove <workspace-id>
+codanna index
+codanna workspace add <initialized-project-path> --name <alias>
+codanna --workspace <workspace-id-or-alias> config
+codanna --workspace <workspace-id-or-alias> index
+codanna workspace rename <workspace-id-or-alias> <new-alias>
+codanna workspace move <workspace-id-or-alias> <new-path>
+codanna workspace remove <workspace-id-or-alias>
 ```
 
-Angle-bracket values are placeholders to replace, not shell commands to paste
-literally. `doctor` checks configuration and directory presence, not completeness.
-Manual `workspace add /path/to/project --name <alias>` is available for initialized
-projects but is not needed for normal automatic setup.
+Explicit `--workspace` and `--config` cannot be combined. Relative source arguments
+for an explicitly selected command are interpreted inside that workspace.
+Registration and rename do not rebuild; unregister does not delete local data or
+stop independent server processes. Relocation requires the original directory to
+have been moved already and preserves identity rather than adopting a live copy.
 
-`--workspace` and `--config` are mutually exclusive and override discovery.
-Selected-command relative paths resolve from the selected root. Set
-`CODANNA_AUTO_SETUP=0` to opt out of implicit automatic startup; the explicitly
-requested `workspace serve` remains a separate mode.
+The registry retains the existing v1 `projects.json` format and IDs, with locked
+transactions, atomic replacement, and stale-snapshot protection. Older binaries
+do not participate in the new lock protocol.
 
-Automatic startup applies to bare non-dry indexing, ordinary local serving,
-`retrieve`, `mcp`, and `dump`. Help, utilities, explicit-path indexing, and dry
-runs retain their separate paths. This feature does not redesign legacy dry runs.
+## Compatibility and remaining limits
 
-The existing v1 registry/IDs are preserved. Registry updates use process locks,
-atomic replacement, and stale-snapshot protection. Older binaries do not take
-these new locks. Rename/validated relocation preserve identity; relocation requires
-the original directory to have moved already. Removal unregisters only and leaves
-source/configuration/index files intact. It blocks new router calls but does not
-revoke in-flight requests or terminate independently launched servers.
+Ordinary `codanna serve` retains its existing explicitly indexed, workspace-bound
+mode and supported watch behavior. `CODANNA_AUTO_SETUP=0` opts out of implicit CLI
+discovery; the deliberately invoked `workspace serve` is a separate mode.
+Network serving still requires explicit configuration and existing access controls.
 
-## Remaining limitations
+Automatic first indexing is local/code-only: new settings disable semantic search;
+existing settings are preserved, but the initial indexing job does not perform
+embedding calls. Existing embeddings and configured semantic providers are used
+only by semantic operations. Large or incomplete indexes receive explicit recovery
+guidance rather than a silent force rebuild. See the MCP guide for budgets.
 
-Current automatic/selected workspaces require local index storage and source
-roots beneath the workspace. External membership, persisted repository IDs,
-generation-qualified references, and repository-partitioned graph resolution
-remain unfinished. Discovering multiple repositories is not proof that all
-cross-repository graph edges are correct.
+The router validates configuration, local index paths, and loaded code provenance.
+It does not provide repository-partitioned relationships inside a deliberately
+combined workspace, generation-qualified IDs, external member adoption, or a
+machine-wide daemon. Inherited recall bindings remain disabled pending explicit
+workspace recall ownership. Scoped subscriptions and mutations are not exposed.
 
-The router advertises read-only tools, not resource subscriptions, scoped watcher
-notifications, or custom mutations. Shared HTTP routing and cross-process writer/
-watch ownership remain separate completion gates.
-
-Selected launches pin cwd/config and remove inherited `CI_*` overlays and recall
-bindings. **Automatic and router-worker launches disable conversation recall
-until proper workspace-specific binding exists.** Explicit `--config` retains
-legacy recall behavior. Other provider environment behavior is unchanged.
-
-Partial selected rebuilds are rejected except for validated initial full-root
-indexing of fresh empty storage. No installed binary is changed by this PR.
-
-## Verification
-
-```bash
-cargo test --lib workspace_auto_ --all-features
-cargo test --test workspace_auto --all-features
-cargo test --test workspace_cli --all-features
-cargo test --test workspace_mcp --all-features
-```
-
-Fixtures use synthetic temporary workspaces, cleared credentials, disabled
-embeddings, and isolated homes. They cover unrelated checkouts, optional member
-roots, renamed aliases, real local indexing/MCP calls, preservation, ambiguous
-roots, and failures. Consult the PR for actual tested commits/results; a test's
-presence is not evidence of complete platform or release qualification.
+All examples and regression fixtures are synthetic. See the [architecture](design/multi-workspace.md)
+and [delivery checklist](design/multi-workspace-implementation.md) for the remaining
+release gates; commit-specific CI results in the PR determine what is qualified.
