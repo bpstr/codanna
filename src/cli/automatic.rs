@@ -377,11 +377,13 @@ fn create_configuration(root: &Path) -> Result<(), IndexError> {
         return Err(failure("Local .codanna state escaped the workspace"));
     }
     create_ignore_file(root)?;
-    let mut settings = Settings::default();
-    settings.index_path = PathBuf::from(crate::init::local_dir_name()).join("index");
-    settings.indexing.indexed_paths = vec![PathBuf::from(".")];
     // Config-file location determines the root; avoid machine-specific paths.
-    settings.workspace_root = None;
+    let mut settings = Settings {
+        index_path: PathBuf::from(crate::init::local_dir_name()).join("index"),
+        workspace_root: None,
+        ..Settings::default()
+    };
+    settings.indexing.indexed_paths = vec![PathBuf::from(".")];
     let text = toml::to_string_pretty(&settings).map_err(|e| failure(e.to_string()))?;
     let mut file = tempfile::NamedTempFile::new_in(&state).map_err(|e| read_error(&state, e))?;
     file.write_all(text.as_bytes())
