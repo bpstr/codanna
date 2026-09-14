@@ -5,5 +5,6 @@
 
 pub mod args;
 pub mod commands;
+pub mod workspace;
 
 pub use args::{Cli, Commands, DocumentAction, PluginAction, RetrieveQuery};

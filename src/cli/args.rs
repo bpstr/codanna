@@ -55,6 +55,7 @@ fn create_custom_help() -> String {
     } else {
         help.push_str(&format!("{}\n", style("Commands:").cyan().bold()));
     }
+    help.push_str("  workspace     Register, select, and inspect product workspaces\n");
     help.push_str("  init          Set up .codanna directory\n");
     help.push_str("  index         Build searchable index from codebase\n");
     help.push_str("  add-dir       Add a directory to be indexed\n");
@@ -82,6 +83,7 @@ fn create_custom_help() -> String {
         help.push_str(&format!("{}\n", style("Options:").cyan().bold()));
     }
     help.push_str("  -c, --config <CONFIG>  Path to custom settings.toml file\n");
+    help.push_str("      --workspace <NAME> Select a registered workspace by alias or ID\n");
     help.push_str("      --info             Show detailed loading information\n");
     help.push_str("  -h, --help             Print help\n");
     help.push_str("  -V, --version          Print version\n\n");
@@ -113,6 +115,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
+    /// Select a registered workspace before loading configuration or indexes
+    #[arg(long = "workspace", global = true, conflicts_with = "config")]
+    pub workspace_selector: Option<String>,
+
     /// Show detailed loading information
     #[arg(long, global = true)]
     pub info: bool,
@@ -124,6 +130,12 @@ pub struct Cli {
 /// Available CLI commands
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Manage independent product workspaces without loading their indexes
+    Workspace {
+        #[command(subcommand)]
+        action: crate::cli::workspace::WorkspaceAction,
+    },
+
     /// Generate shell completion scripts
     #[command(
         about = "Generate shell completion scripts",
@@ -370,7 +382,7 @@ pub enum Commands {
     #[command(
         about = "Index and search document collections",
         long_about = "Index markdown and text documents for semantic search.\n\nDocuments are chunked, embedded, and stored separately from code symbols.",
-        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents search \"error handling\" --collection docs\n  codanna documents list\n  codanna documents stats docs"
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents list\n  codanna documents stats docs"
     )]
     Documents {
         #[command(subcommand)]
@@ -459,14 +471,14 @@ pub enum PluginAction {
 
     /// Update an installed plugin
     #[command(
-        about = "Update a plugin to a newer version",
+        about = "Update an installed plugin",
         after_help = "Examples:\n  codanna plugin update plugin-name\n  codanna plugin update plugin-name --ref v2.0"
     )]
     Update {
         /// Plugin name to update
         plugin_name: String,
 
-        /// Git reference to update to (branch, tag, or commit SHA)
+        /// Git reference (branch, tag, or commit SHA)
         #[arg(long)]
         r#ref: Option<String>,
 

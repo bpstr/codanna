@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+pub mod workspaces;
+
 // Configurable directory names for testing
 // Change these to production values when ready
 #[cfg(test)]
@@ -275,6 +277,9 @@ pub struct ProjectRegistry {
     projects: HashMap<String, ProjectInfo>,
     /// Optional default project UUID
     default_project: Option<String>,
+    /// In-memory optimistic concurrency token; the v1 disk schema is unchanged.
+    #[serde(skip)]
+    snapshot_digest: Option<String>,
 }
 
 impl ProjectRegistry {
@@ -284,6 +289,7 @@ impl ProjectRegistry {
             version: 1,
             projects: HashMap::new(),
             default_project: None,
+            snapshot_digest: None,
         }
     }
 
@@ -303,7 +309,7 @@ impl ProjectRegistry {
                 });
             }
         };
-        let registry: Self = serde_json::from_str(&content).map_err(|error| {
+        let mut registry: Self = serde_json::from_str(&content).map_err(|error| {
             IndexError::General(format!(
                 "Failed to parse project registry {}: {error}. Preserve the file and restore a valid backup.", path.display()
             ))
@@ -315,17 +321,31 @@ impl ProjectRegistry {
                 path.display()
             )));
         }
+        use sha2::{Digest, Sha256};
+        registry.snapshot_digest = Some(hex::encode(Sha256::digest(content.as_bytes())));
         Ok(registry)
     }
 
-    /// Save a complete registry atomically without truncating the old file.
+    /// Save a snapshot only if no other process has changed its source revision.
+    /// Reload after a save before saving the same snapshot again.
     pub fn save(&self) -> Result<(), IndexError> {
-        self.save_to_path(&projects_file())
+        self.save_snapshot_to_path(&projects_file())
+    }
+
+    fn save_snapshot_to_path(&self, path: &Path) -> Result<(), IndexError> {
+        let _lock = workspaces::registry_lock(path)?;
+        let latest = Self::load_from_path(path)?;
+        if latest.snapshot_digest != self.snapshot_digest {
+            return Err(IndexError::General(
+                "Project registry changed since it was loaded. Reload before saving; no data was overwritten.".to_owned(),
+            ));
+        }
+        self.save_to_path(path)
     }
 
     fn save_to_path(&self, path: &Path) -> Result<(), IndexError> {
         use std::io::Write;
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent).map_err(|source| IndexError::FileWrite {
             path: parent.to_path_buf(),
             source,
@@ -338,6 +358,8 @@ impl ProjectRegistry {
             temporary.write_all(&content)?;
             temporary.as_file().sync_all()?;
             temporary.persist(path).map_err(|error| error.error)?;
+            #[cfg(unix)]
+            std::fs::File::open(parent)?.sync_all()?;
             Ok(())
         };
         write().map_err(|source| IndexError::FileWrite {
@@ -359,20 +381,21 @@ impl ProjectRegistry {
     fn register_at(
         registry_path: &Path,
         project_path: &Path,
-        update: bool,
+        _update: bool,
     ) -> Result<String, IndexError> {
-        // Loading must succeed before constructing or saving any replacement.
-        let mut registry = Self::load_from_path(registry_path)?;
-        let info = Self::create_project_info(project_path);
-        let existing = if update {
-            registry.find_project_by_path(&info.path).map(|(id, _)| id)
-        } else {
-            None
-        };
-        let id = existing.unwrap_or_else(|| ProjectId::new().to_string());
-        registry.add_project(&id, info);
-        registry.save_to_path(registry_path)?;
-        Ok(id)
+        workspaces::with_registry(registry_path, |registry| {
+            let root = project_path.canonicalize().map_err(|source| IndexError::FileRead {
+                path: project_path.to_path_buf(),
+                source,
+            })?;
+            // Reinitialization must not reset a user alias, counters, or identity.
+            if let Some(id) = workspaces::id_for_root(registry, &root)? {
+                return Ok(id);
+            }
+            let id = workspaces::fresh_id(registry);
+            registry.add_project(&id, Self::create_project_info(&root));
+            Ok(id)
+        })
     }
 
     /// Create project info from path (helper function)
@@ -403,22 +426,6 @@ impl ProjectRegistry {
         self.projects.insert(project_id.to_string(), project_info);
     }
 
-    /// Find a project by its path
-    fn find_project_by_path(&self, path: &Path) -> Option<(String, &ProjectInfo)> {
-        // Canonicalize the search path for comparison
-        let search_path = path.canonicalize().ok()?;
-
-        self.projects.iter().find_map(|(id, info)| {
-            // Compare canonicalized paths to handle symlinks and relative paths
-            if let Ok(project_path) = info.path.canonicalize() {
-                if project_path == search_path {
-                    return Some((id.clone(), info));
-                }
-            }
-            None
-        })
-    }
-
     /// Find a project by its UUID
     pub fn find_project_by_id(&self, project_id: &str) -> Option<&ProjectInfo> {
         self.projects.get(project_id)
@@ -435,20 +442,22 @@ impl ProjectRegistry {
         project_id: &str,
         new_path: &Path,
     ) -> Result<(), IndexError> {
-        let project = self.projects.get_mut(project_id).ok_or_else(|| {
-            IndexError::General(format!(
-                "Project {project_id} not found\nSuggestion: Run 'codanna init' in the project directory"
-            ))
+        let root = new_path.canonicalize().map_err(|source| IndexError::FileRead {
+            path: new_path.to_path_buf(),
+            source,
         })?;
-
-        project.path = new_path.to_path_buf();
-        project.name = new_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unnamed")
-            .to_string();
-
-        self.save()
+        workspaces::with_registry(&projects_file(), |registry| {
+            if workspaces::id_for_root(registry, &root)?.is_some_and(|id| id != project_id) {
+                return Err(IndexError::General("Path already belongs to another workspace".to_owned()));
+            }
+            let project = registry.projects.get_mut(project_id).ok_or_else(|| {
+                IndexError::General(format!("Project {project_id} not found"))
+            })?;
+            project.path = root;
+            Ok(())
+        })?;
+        *self = Self::load()?;
+        Ok(())
     }
 }
 

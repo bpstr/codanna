@@ -230,6 +230,22 @@ async fn main() {
         return;
     }
 
+    // Workspace management is metadata-only. Selection must precede even the
+    // legacy auto-init/config-fallback paths, not merely precede tool dispatch.
+    if let Commands::Workspace { action } = &cli.command {
+        if cli.config.is_some() || cli.workspace_selector.is_some() {
+            eprintln!("Workspace management takes its own selector; do not combine it with --config or --workspace.");
+            std::process::exit(2);
+        }
+        let result = codanna::cli::workspace::run(action);
+        exit_workspace_command(result);
+    }
+    if let Some(selector) = &cli.workspace_selector {
+        let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+        let result = codanna::cli::workspace::launch(selector, &arguments);
+        exit_workspace_command(result);
+    }
+
     codanna::embedding_runtime::configure_embedding_runtime();
 
     // For index command, auto-initialize if needed (but not when using --config)
@@ -970,7 +986,19 @@ async fn main() {
             codanna::cli::commands::profile::run(action);
         }
 
-        Commands::Completions { .. } => unreachable!("handled before configuration loading"),
+        Commands::Completions { .. } | Commands::Workspace { .. } => {
+            unreachable!("handled before configuration loading")
+        }
+    }
+}
+
+fn exit_workspace_command(result: Result<i32, codanna::IndexError>) -> ! {
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("Workspace error: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
