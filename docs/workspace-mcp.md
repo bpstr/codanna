@@ -1,136 +1,114 @@
-# Local multi-workspace MCP
+# Isolated local MCP workspaces
 
-**Status:** The local read-only router is under review in PR #34. This is not a
-shared HTTP daemon or a completed repository-provenance implementation. See
-[workspace setup](workspaces.md) and the [architecture](design/multi-workspace.md).
-
-## Reusable setup
-
-Index each intended coding-agent workspace with `codanna index` in its root.
-Configuration/source defaults and registration are automatic for standard fresh
-layouts. Existing source lists and ignore files remain authoritative. A workspace
-can be a repository, monorepo, or intentionally combined repository container;
-there is no fixed inventory, required product layout, or recognized project name.
+Implementation is under review in PR #34. See the PR for the exact tested commit
+and CI outcome. The normal entry is one reusable configuration:
 
 ```json
-{
-  "mcpServers": {
-    "codanna": {
-      "command": "codanna",
-      "args": ["workspace", "serve"]
-    }
-  }
-}
+{"mcpServers":{"codanna":{"command":"codanna","args":["workspace","serve"]}}}
 ```
 
-This grants the local stdio connection read access to registered workspaces.
-Each workspace keeps a separate graph/index and runtime context. Ordinary
-`codanna serve` remains project-bound. The new mode does not open a network port,
-replace existing network access controls, or share workers between independently
-launched client processes.
+Open a project in the client and query it. No workspace registration command,
+per-project path in MCP configuration, initial indexing command, or repository
+inventory is required for supported local layouts. Names are runtime data.
 
-## Scope selection
+## Selection and first use
 
-Tools accept either `workspace` (a registry ID/alias) or `project_path` (an absolute
-local path), never both. These fields are removed before strict backend argument
-validation. There are no built-in selectors; obtain IDs from `list_workspaces`.
+Supported client roots take precedence over the subprocess launch directory.
+Without roots support, the launch cwd supplies the project context. A server
+launched from HOME with no roots can connect and list tools but cannot invent a
+project context. An independent project must never fall back to another graph.
+A running process cannot observe later cwd changes in a different process;
+clients must send root updates or launch the MCP process in the correct project.
 
-```text
-list_workspaces()
-search_context(query="authentication")
-get_workspace(workspace="<id-returned-by-list_workspaces>")
-search_context(project_path="/path/to/your/project", query="authentication")
-```
+Nearest independent checkouts/configurations win. A containing index with source
+`.` does not adopt an independently opened child. A plain non-Git client root is
+valid, including an initially empty directory; an unrelated ancestor's settings
+cannot widen it. An intentionally combined root remains usable when that root
+is actually opened or explicitly selected. Multiple unrelated client roots are
+ambiguous: no files are created until a single scope is selected.
 
-The ID and path above are placeholders. When no selector is supplied, supported
-client roots select the workspace. Several roots already belonging to the same
-workspace are unambiguous; roots spanning unrelated workspaces require selection.
-Unknown roots are not discarded to select a different known graph. Without roots
-support, the launch directory is used. HOME launch can handshake/list workspaces
-and use explicit selectors without creating state or guessing a default.
+An unscoped tool call may prepare settings and registration for its validated
+local session root. The first knowledge query schedules initial code-only
+indexing and can return `result.status = "indexing"`, `result.ready = false`.
+Retry the same query shortly. Empty roots return `empty` and are checked again
+on subsequent use, so adding the first source file does not require setup commands.
+Initialization and tools/list themselves do not index or load models.
 
-Roots are requested during a tool call, not initialization. Legacy clients use
-bounded roots RPC; newer negotiated clients use MRTR input requests. Continuation
-handles are random, short-lived, single-use, and bound to the original tool and
-arguments. Root changes affect subsequent requests. A per-call override does not
-change the next call's default, and there is no process-global current workspace.
+Automatic indexing disables embeddings for that indexing job, preserves existing
+settings, and never force-rebuilds nonempty data. New automatic settings disable
+semantic search until deliberately configured. It uses a private staging index,
+a per-workspace OS bootstrap lock, at most two indexing threads, a 50,000-file /
+512 MiB discovery ceiling, and a five-minute job deadline. Failed or oversized
+jobs return recovery guidance; the old index is not replaced. Explicit `codanna
+index` remains available for larger projects and recovery. Bootstrap locking is
+not a claim that every legacy CLI writer/watch path has been coordinated.
 
-Only local `file://` roots are accepted. Paths/roots cannot register workspaces,
-create settings, start indexing, follow remote hosts, or authorize arbitrary
-indexes. A roots-capable client that cannot answer receives selection guidance
-rather than fallback into the launch directory's unrelated graph.
+`workspace` (ID/alias) and `project_path` are mutually exclusive per-request
+overrides. A tool-argument path may select an already registered workspace but
+cannot bootstrap an arbitrary filesystem location. Overrides never change the
+next call's default. HOME, filesystem roots, and broad system directories are
+not automatic project choices. No network listener is introduced.
 
-## Ownership and references
+## Runtime and performance
 
-Every routed result has a workspace text header and structured ownership. The
-workspace ID/name come from the selected registration, never a hard-coded label.
-The `result` field contains original backend structured content when available;
-readable backend content is retained.
+Queries never run the diagnostic repository inventory. Root selection walks only
+applicable ancestors. Root responses are cached only when the client promises
+root-change notifications; a notification invalidates future requests. Other
+clients are queried each time. MRTR continuation tokens are single-use, expire,
+and are bound to the original arguments and root generation.
 
-Keep the returned workspace ID on symbol-ID follow-ups. Local IDs are not globally
-unique. Generation-qualified references remain unfinished; look up IDs again
-after a full rebuild rather than assuming an old ID still refers to the same symbol.
+Admission starts before discovery and diagnostics: sixteen requests per router,
+with four blocking filesystem jobs. Blocking closures retain their own permits
+after their callers cancel. Filesystem refresh has a separate deadline; a timeout
+cannot forcibly interrupt a running kernel filesystem operation.
 
-`get_workspace` reports configuration/directory diagnostics and whether a worker
-can be observed as loaded. It does not establish index/embedding completeness or
-repository isolation. Its nonblocking loaded check may report false during a
-concurrent operation; it is not authoritative process accounting.
+One shared load per workspace serves concurrent callers. The lifecycle lock is
+not held across tool RPCs. Each reader permits four concurrent requests. Bad
+backend parameters retain their original MCP error code and do not restart a
+healthy reader. Query cancellation targets the individual backend request rather
+than closing a peer used by other calls.
 
-## Workers and limits
+Warm readers reuse metadata snapshots for one second. Refresh checks file
+metadata; configuration is reparsed and a reader replaced when the corresponding
+snapshot changes. This is bounded refresh consistency, not a transactional view
+of concurrent external writes. Explicit selectors still resolve through the
+registry on each request, so removed registrations cannot silently remain defaults.
 
-Handshake, tool enumeration, and workspace enumeration open no index/model. A
-knowledge query lazily starts the running Codanna executable with that workspace's
-validated config/cwd. Code and documents use its stores. Inherited recall bindings
-are disabled until workspace-specific recall is implemented.
+Readers use strict lite facade loading. Lexical search/statistics do not initialize
+semantic models. Existing semantic data loads on the first semantic operation;
+documents load on first document/context use. No load error creates a replacement
+empty index. Recall remains disabled until workspace-specific bindings exist.
 
-The pool has four cached slots and sixteen admitted workspace queries. Different
-workspaces can run independently; a worker serializes its own queries. Active and
-queued calls pin slots. Unpinned least-recently-used entries can be evicted at
-capacity, and entries idle for five minutes are pruned on later pool activity.
-There is no idle timer or strict machine-wide process/memory guarantee; transport
-teardown during eviction is asynchronous.
+The router owns at most four live reader processes. A process permit remains held
+until child exit is observed, including during eviction. Initial index jobs have
+a separate one-job-per-router limit. Slots are pinned during queries/startup;
+idle slots are reclaimed on subsequent activity. Shutdown cancels jobs and waits
+for child cleanup. Separate stdio clients still have separate router pools: this
+is not a machine-wide shared daemon or an authenticated multi-workspace HTTP server.
 
-Queue and query budgets are thirty seconds each, with ninety seconds for cold
-startup. Cancellation/timeouts close the affected serialized reader. Failures
-have a short retry backoff; calls are not automatically replayed. Connection
-shutdown closes its worker transports.
+## Results, compatibility, and limits
 
-Each ordinary call revalidates registration, settings, and index metadata.
-Configuration/code-manifest changes invalidate the cached reader. Unregistration
-blocks new calls but does not revoke in-flight work or stop independent servers.
-This is not a transactional snapshot against simultaneous external writers.
+Every tool result carries a visible and structured workspace identity. Keep that
+identity on symbol-ID follow-ups. Raw IDs are not globally unique and generation-
+qualified references remain future work. Repository-partitioned resolution inside
+an intentionally combined workspace is not provided merely by this router.
 
-A broken workspace returns a scoped error without disabling other workspaces.
-Indexing remains explicit. MCP connection never triggers a force rebuild, first
-indexing, or paid inference batch. Semantic queries still use the selected
-workspace's configured provider; read-only does not mean inference-free.
-
-## Unsupported surfaces and remaining work
-
-The router advertises tools only. Resources, subscriptions, file-change events,
-custom reindex requests, and other mutations are not forwarded to a default
-worker. Use the existing bound-server mode for supported watching and local CLI
-commands for indexing.
-
-Remaining gates include repository-qualified persisted identities and graph
-resolution for multi-repository workspaces, generation-qualified references,
-workspace-bound recall, shared authenticated HTTP, cross-process writer/watch
-coordination, scoped subscriptions, external membership, automatic first indexing
-after handshake, platform qualification, and measured performance budgets.
-
-The router reuses actual generated tool schemas, not a second hard-coded list.
-Separate workspace selection does not by itself prove all unfinished boundaries.
+Ordinary `codanna serve`, explicit configuration, and manual index commands retain
+their separate modes. The router exposes tools, not unscoped mutations, resources,
+watch subscriptions, or a new HTTP endpoint. First-use cache creation is reflected
+in tool annotations; the new mode is not advertised as strictly read-only.
 
 ## Verification
 
 ```bash
 cargo test --test workspace_mcp --all-features
-cargo test --lib workspace_mcp_ --all-features
+cargo test --test workspace_auto --all-features
+cargo test --test workspace_cli --all-features
+cargo test --lib workspace_ --all-features
 ```
 
-Real protocol/worker fixtures use synthetic temporary sources and homes, cleared
-credentials, disabled semantic search, and deadlines. Coverage includes concurrent
-workspace queries, optional member roots, arbitrary renamed aliases, HOME startup
-without writes, overrides, legacy/MRTR roots, ambiguity, continuation tampering/
-replay, and failure/unregistration isolation. No fixture indexes user projects or
-spends paid inference. Actual run results and pending qualification belong in the PR.
+The MCP suite includes fresh non-Git projects with identical symbol names and no
+settings/indexing calls; separate cwd-based sessions; a broadly indexed parent;
+an empty project receiving its first file; invalid-argument recovery; and root
+cache invalidation. Fixtures clear credentials and disable inference. Test code
+alone is not a passing result; consult the commit-specific CI evidence in the PR.
