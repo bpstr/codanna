@@ -659,3 +659,68 @@ async fn hardening_workspace_mcp_lexical_tools_do_not_call_configured_embedding_
     stop.cancel();
     endpoint.await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_mcp_fresh_roots_switch_without_manual_setup() {
+    let fixture = Fixture::fresh();
+    let handler = roots_client(vec![fixture.a.clone()], "2025-11-25", true);
+    let roots = handler.roots.clone();
+    let client = connect(handler, &fixture.home, &fixture.home).await;
+    let a = ready(&client, json!({"query":"shared_symbol"})).await;
+    assert_only(&a, "ONLY_PROJECT_A", "ONLY_PROJECT_B");
+    assert!(!fixture.b.join(".codanna").exists());
+
+    *roots.write().unwrap() = vec![fixture.b.clone()];
+    let notification: ClientNotification =
+        serde_json::from_value(json!({"method":"notifications/roots/list_changed"})).unwrap();
+    client.send_notification(notification).await.unwrap();
+    let b = ready(&client, json!({"query":"shared_symbol"})).await;
+    assert_only(&b, "ONLY_PROJECT_B", "ONLY_PROJECT_A");
+    assert_ne!(
+        a.structured_content.unwrap()["workspace"]["id"],
+        b.structured_content.unwrap()["workspace"]["id"]
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_mcp_new_document_store_invalidates_cached_absence() {
+    let fixture = Fixture::indexed();
+    let config = fixture.a.join(".codanna/settings.toml");
+    let mut settings: codanna::Settings =
+        toml::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    settings.documents.enabled = true;
+    fs::write(&config, toml::to_string_pretty(&settings).unwrap()).unwrap();
+    let client = connect((), &fixture.home, &fixture.a).await;
+    ready(&client, json!({"query":"shared_symbol"})).await;
+
+    // First query cached the missing store. Introduce an out-of-scope store;
+    // refresh must revalidate it before any model initialization or search.
+    let documents = fixture.a.join(".codanna/index/documents");
+    fs::create_dir_all(documents.join("tantivy")).unwrap();
+    fs::write(documents.join("tantivy/meta.json"), "{}").unwrap();
+    let foreign = fixture.b.join("private.md");
+    let state = json!({"file_states": {foreign.to_str().unwrap(): {}}});
+    fs::write(documents.join("state.json"), state.to_string()).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Err(rmcp::service::ServiceError::McpError(error)) = client
+                .call_tool(request("search_context", json!({"query":"shared_symbol"})))
+                .await
+            {
+                assert!(error.message.contains("workspace"), "{error:?}");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("new document state must invalidate a previously missing store");
+
+    // An auxiliary-index refusal must not poison independent code-only tools.
+    let code = call(&client, "find_symbol", json!({"name":"shared_symbol"})).await;
+    assert_only(&code, "ONLY_PROJECT_A", "ONLY_PROJECT_B");
+    assert!(!fixture.home.join(".codanna/models").exists());
+    assert!(!fixture.home.join(".cache").exists());
+    client.cancel().await.unwrap();
+}

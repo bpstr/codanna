@@ -56,6 +56,7 @@ struct Snapshot {
     managed: bool,
     ignore: Option<Stamp>,
     git_ignore: Option<Stamp>,
+    documents: super::documents::Revision,
 }
 fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapshot, ErrorData> {
     let config = stamp(&workspace.config_path)?;
@@ -111,6 +112,7 @@ fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapsh
         config,
         metadata: stamp(&index.join("index.meta"))?,
         tantivy: stamp(&index.join("tantivy/meta.json"))?,
+        documents: super::documents::Revision::capture(&index),
         index,
     })
 }
@@ -382,7 +384,8 @@ async fn load(
             && reader.snapshot.index == current.index
             && reader.snapshot.config == current.config
             && reader.snapshot.ignore == current.ignore
-            && reader.snapshot.git_ignore == current.git_ignore;
+            && reader.snapshot.git_ignore == current.git_ignore
+            && reader.snapshot.documents == current.documents;
         (reader.snapshot == current || (same_context && current.managed && reader.snapshot.managed))
             && !reader.peer.is_transport_closed()
     }) {
