@@ -1,383 +1,417 @@
 diff --git a/src/cli/workspace/mcp.rs b/src/cli/workspace/mcp.rs
-index ae941bb..b96eb6b 100644
+index b96eb6b..e7fed72 100644
 --- a/src/cli/workspace/mcp.rs
 +++ b/src/cli/workspace/mcp.rs
 @@ -1,6 +1,7 @@
  //! Local workspace MCP: automatic session setup, independent indexes, lazy readers.
  mod bootstrap;
  mod budget;
-+mod live;
++mod documents;
+ mod live;
  pub(crate) mod reader;
  mod scope;
- mod workers;
-diff --git a/src/cli/workspace/mcp/bootstrap.rs b/src/cli/workspace/mcp/bootstrap.rs
-index 9ce10e4..1fd48e7 100644
---- a/src/cli/workspace/mcp/bootstrap.rs
-+++ b/src/cli/workspace/mcp/bootstrap.rs
-@@ -1,6 +1,6 @@
- //! Bounded, code-only first indexing. Build privately and publish only a complete
- //! generation. Existing nonempty indexes are never cleared or silently rebuilt.
--mod discovery;
-+pub(super) mod discovery;
- 
- use super::budget::Budget;
- use crate::init::workspaces::{Workspace, confined_index_path, read_settings};
-@@ -26,6 +26,7 @@ pub(super) enum Status {
+diff --git a/src/cli/workspace/mcp/live.rs b/src/cli/workspace/mcp/live.rs
+index 8270be1..69a426b 100644
+--- a/src/cli/workspace/mcp/live.rs
++++ b/src/cli/workspace/mcp/live.rs
+@@ -79,6 +79,7 @@ impl Drop for LiveWorkspace {
+ struct ContextStamp {
+     config: (u64, SystemTime),
+     ignore: Option<(u64, SystemTime)>,
++    git_ignore: Option<(u64, SystemTime)>,
  }
- struct Build {
-     _lock: File,
-+    _write_lease: Arc<crate::storage::write_lease::CodeWriteLease>,
-     staging: tempfile::TempDir,
-     config: PathBuf,
-     destination: PathBuf,
-@@ -219,6 +220,11 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
-             "Existing index is incomplete. Automatic setup will not replace it; run codanna index for recovery.",
-         ));
-     }
-+    let Some(write_lease) = crate::storage::write_lease::CodeWriteLease::try_acquire(&destination)
-+        .map_err(super::internal)?
-+    else {
-+        return Ok(Plan::Complete(Status::Busy));
-+    };
-     let state = workspace.root.join(crate::init::local_dir_name());
-     let lock_path = state.join("bootstrap.lock");
-     if fs::symlink_metadata(&lock_path).is_ok_and(|m| m.is_symlink()) {
-@@ -275,6 +281,7 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
-     .map_err(super::internal)?;
-     Ok(Plan::Build(Build {
-         _lock: lock,
-+        _write_lease: write_lease,
-         staging,
-         config,
-         destination,
-diff --git a/src/cli/workspace/mcp/bootstrap/discovery.rs b/src/cli/workspace/mcp/bootstrap/discovery.rs
-index c20494b..facdaa5 100644
---- a/src/cli/workspace/mcp/bootstrap/discovery.rs
-+++ b/src/cli/workspace/mcp/bootstrap/discovery.rs
-@@ -9,7 +9,7 @@ use std::path::PathBuf;
- use std::time::{Duration, Instant};
- use tokio_util::sync::CancellationToken;
+ fn context_stamp(root: &Path) -> Result<ContextStamp, IndexError> {
+     fn stamp(path: &Path) -> Result<Option<(u64, SystemTime)>, IndexError> {
+@@ -95,6 +96,7 @@ fn context_stamp(root: &Path) -> Result<ContextStamp, IndexError> {
+         config: stamp(&crate::cli::automatic::config_path(root))?
+             .ok_or_else(|| IndexError::General("Workspace configuration disappeared".into()))?,
+         ignore: stamp(&root.join(".codannaignore"))?,
++        git_ignore: stamp(&root.join(".gitignore"))?,
+     })
+ }
  
--pub(super) fn has_sources(
-+pub(in crate::cli::workspace::mcp) fn has_sources(
-     settings: &Settings,
-     roots: &[PathBuf],
-     ct: &CancellationToken,
-diff --git a/src/cli/workspace/mcp/bootstrap/tests.rs b/src/cli/workspace/mcp/bootstrap/tests.rs
-index 00f782a..3c2ec84 100644
---- a/src/cli/workspace/mcp/bootstrap/tests.rs
-+++ b/src/cli/workspace/mcp/bootstrap/tests.rs
-@@ -53,6 +53,8 @@ fn prepared_build(temp: &tempfile::TempDir, files: u32) -> Build {
-         .save(&staging.path().join("index"))
-         .unwrap();
-     Build {
-+        _write_lease: crate::storage::write_lease::CodeWriteLease::acquire(&state.join("index"))
-+            .unwrap(),
-         _lock: lock,
-         config: staging.path().join("settings.toml"),
-         staging,
 diff --git a/src/cli/workspace/mcp/reader.rs b/src/cli/workspace/mcp/reader.rs
-index b95bd83..2c8e819 100644
+index 2c8e819..fcb224e 100644
 --- a/src/cli/workspace/mcp/reader.rs
 +++ b/src/cli/workspace/mcp/reader.rs
-@@ -67,6 +67,7 @@ struct Reader {
-     settings: Arc<Settings>,
-     semantic: Arc<Lazy<()>>,
-     documents: Arc<Lazy<Documents>>,
-+    live: Arc<super::live::LiveWorkspace>,
- }
- impl ServerHandler for Reader {
-     fn get_info(&self) -> ServerInfo {
-@@ -86,6 +87,33 @@ impl ServerHandler for Reader {
-         request: CallToolRequestParams,
-         context: RequestContext<RoleServer>,
-     ) -> Result<CallToolResponse, ErrorData> {
-+        let state = self.live.state();
-+        if !state.ready {
-+            let mut result = CallToolResult::success(vec![ContentBlock::text(
-+                state.detail.clone().unwrap_or_else(|| {
-+                    "Workspace code freshness is initializing; retry shortly.".into()
-+                }),
-+            )]);
-+            result.structured_content =
-+                Some(serde_json::json!({"status":state.status,"ready":false}));
-+            return Ok(result.into());
-+        }
-+        if request.name == "get_index_info" {
-+            let parameters = serde_json::from_value::<crate::mcp::requests::GetIndexInfoRequest>(
-+                serde_json::json!(request.arguments.unwrap_or_default()),
-+            )
-+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
-+            let mut result = self
-+                .code
-+                .get_index_info(rmcp::handler::server::wrapper::Parameters(parameters))
-+                .await?;
-+            result.content.push(ContentBlock::text(format!(
-+                "Automatic code freshness: {}",
-+                state.status
-+            )));
-+            result.structured_content = Some(serde_json::json!({"freshness":state}));
-+            return Ok(result.into());
-+        }
-         if matches!(
-             request.name.as_ref(),
-             "semantic_search_docs" | "semantic_search_with_context"
-@@ -173,21 +201,25 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
-         Ok::<_, IndexError>(facade)
-     })
-     .await??;
-+    let code = CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope);
-+    let live = super::live::LiveWorkspace::start(code.facade.clone(), settings.clone());
-     let reader = Reader {
--        code: CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope),
-+        code,
-+        live: live.clone(),
-         settings,
-         semantic: Arc::new(Lazy::default()),
-         documents: Arc::new(Lazy::default()),
-     };
--    let running = reader
--        .serve(rmcp::transport::stdio())
--        .await
--        .map_err(|error| IndexError::General(error.to_string()))?;
--    running
--        .waiting()
--        .await
--        .map_err(|error| IndexError::General(error.to_string()))?;
--    Ok(0)
-+    let result = match reader.serve(rmcp::transport::stdio()).await {
-+        Ok(running) => running
-+            .waiting()
-+            .await
-+            .map(|_| 0)
-+            .map_err(|error| IndexError::General(error.to_string())),
-+        Err(error) => Err(IndexError::General(error.to_string())),
-+    };
-+    live.shutdown().await;
-+    result
- }
- 
- #[cfg(test)]
+@@ -145,11 +145,9 @@ impl ServerHandler for Reader {
+             let documents = self
+                 .documents
+                 .get(async move {
+-                    crate::runtime::blocking(move || {
+-                        crate::documents::load_from_settings(&settings)
+-                    })
+-                    .await
+-                    .map_err(|error| error.to_string())
++                    crate::runtime::blocking(move || super::documents::load(&settings))
++                        .await
++                        .map_err(|error| error.to_string())?
+                 })
+                 .await
+                 .map_err(super::internal)?;
 diff --git a/src/cli/workspace/mcp/workers.rs b/src/cli/workspace/mcp/workers.rs
-index 93c4e64..8ca5028 100644
+index 8ca5028..d9ee20a 100644
 --- a/src/cli/workspace/mcp/workers.rs
 +++ b/src/cli/workspace/mcp/workers.rs
-@@ -53,6 +53,8 @@ struct Snapshot {
-     config: Stamp,
-     metadata: Stamp,
+@@ -55,6 +55,7 @@ struct Snapshot {
      tantivy: Stamp,
-+    managed: bool,
-+    ignore: Option<Stamp>,
+     managed: bool,
+     ignore: Option<Stamp>,
++    git_ignore: Option<Stamp>,
  }
  fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapshot, ErrorData> {
      let config = stamp(&workspace.config_path)?;
-@@ -80,7 +82,23 @@ fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapsh
-             confined_index_path(&workspace.root, &settings).map_err(super::internal)?
-         }
+@@ -96,9 +97,16 @@ fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapsh
+     } else {
+         None
      };
-+    let managed = match previous.filter(|old| old.root == workspace.root && old.config == config) {
-+        Some(old) => old.managed && !index.join("semantic/metadata.json").exists(),
-+        None => {
-+            let mut settings = read_settings(&workspace.root).map_err(super::internal)?;
-+            settings.index_path = index.clone();
-+            super::live::eligible(&settings)
-+        }
-+    };
-+    let ignore_path = workspace.root.join(".codannaignore");
-+    let ignore = if ignore_path.try_exists().map_err(super::internal)? {
-+        Some(stamp(&ignore_path)?)
++    let git_ignore_path = workspace.root.join(".gitignore");
++    let git_ignore = if git_ignore_path.try_exists().map_err(super::internal)? {
++        Some(stamp(&git_ignore_path)?)
 +    } else {
 +        None
 +    };
      Ok(Snapshot {
-+        managed,
-+        ignore,
+         managed,
+         ignore,
++        git_ignore,
          root: workspace.root.clone(),
          config,
          metadata: stamp(&index.join("index.meta"))?,
-@@ -351,10 +369,14 @@ async fn load(
-     let current = budget
-         .run(&stop, move |_| snapshot(&selected, old_snapshot.as_ref()))
-         .await?;
--    if let Some(reader) = previous
--        .as_ref()
--        .filter(|reader| reader.snapshot == current && !reader.peer.is_transport_closed())
--    {
-+    if let Some(reader) = previous.as_ref().filter(|reader| {
-+        let same_context = reader.snapshot.root == current.root
-+            && reader.snapshot.index == current.index
-+            && reader.snapshot.config == current.config
-+            && reader.snapshot.ignore == current.ignore;
-+        (reader.snapshot == current || (same_context && current.managed && reader.snapshot.managed))
-+            && !reader.peer.is_transport_closed()
-+    }) {
-         return Ok(Event::Ready(reader.clone()));
-     }
-     drop(previous);
-@@ -419,10 +441,15 @@ async fn load(
-         let _permit = permit;
-         tokio::select! { _ = close.cancelled() => {}, _ = stop.cancelled() => {}, _ = child.wait() => {} }
-         let _ = service.close_with_timeout(Duration::from_secs(1)).await;
--        if child.try_wait().ok().flatten().is_none() {
-+        // Give a native writer time to drain its in-flight mutation after stdio
-+        // closes. Physical capacity stays owned until observed process exit.
-+        if tokio::time::timeout(Duration::from_secs(10), child.wait())
-+            .await
-+            .is_err()
-+        {
-             let _ = child.start_kill();
-+            let _ = child.wait().await;
-         }
--        let _ = child.wait().await;
-     });
-     let mut tasks = tasks.lock();
-     tasks.retain(|task| !task.is_finished());
-     tasks.push(task);
+@@ -373,7 +381,8 @@ async fn load(
+         let same_context = reader.snapshot.root == current.root
+             && reader.snapshot.index == current.index
+             && reader.snapshot.config == current.config
+-            && reader.snapshot.ignore == current.ignore;
++            && reader.snapshot.ignore == current.ignore
++            && reader.snapshot.git_ignore == current.git_ignore;
+         (reader.snapshot == current || (same_context && current.managed && reader.snapshot.managed))
+             && !reader.peer.is_transport_closed()
+     }) {
 diff --git a/src/cli/workspace/mcp/workers/tests.rs b/src/cli/workspace/mcp/workers/tests.rs
-index d3d1460..2b488d6 100644
+index 2b488d6..305cf26 100644
 --- a/src/cli/workspace/mcp/workers/tests.rs
 +++ b/src/cli/workspace/mcp/workers/tests.rs
-@@ -84,6 +84,8 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
-             config: stamp.clone(),
-             metadata: stamp.clone(),
+@@ -86,6 +86,7 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
              tantivy: stamp,
-+            managed: false,
-+            ignore: None,
+             managed: false,
+             ignore: None,
++            git_ignore: None,
          },
      });
      let (_sender, receiver) = watch::channel(Event::Ready(reader));
+diff --git a/src/documents/store.rs b/src/documents/store.rs
+index 45e523a..65305cb 100644
+--- a/src/documents/store.rs
++++ b/src/documents/store.rs
+@@ -344,6 +344,9 @@ pub struct DocumentStore {
+ 
+     /// Tantivy heap size in bytes.
+     heap_size: usize,
++
++    /// Optional immutable local source boundary, shared by query snapshots.
++    workspace_root: Option<Arc<Path>>,
+ }
+ 
+ impl std::fmt::Debug for DocumentStore {
+@@ -419,9 +422,22 @@ impl DocumentStore {
+             embedding_generator: None,
+             dimension,
+             heap_size: 50_000_000, // 50MB default
++            workspace_root: None,
+         })
+     }
+ 
++    /// Bind an already opened store to one canonical workspace. Validate existing
++    /// provenance once; returned hits are checked again after external commits.
++    pub(crate) fn restrict_workspace(&mut self, root: &Path) -> StoreResult<()> {
++        let root = root.canonicalize()?;
++        for path in self.file_states.keys() {
++            crate::indexing::facade::IndexFacade::contained_source(&root, path)
++                .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
++        }
++        self.workspace_root = Some(Arc::from(root));
++        Ok(())
++    }
++
+     /// Enable embedding generation for semantic search.
+     pub fn with_embeddings(mut self, generator: Box<dyn EmbeddingGenerator>) -> StoreResult<Self> {
+         // Initialize vector storage
+@@ -759,6 +775,7 @@ impl DocumentStore {
+             embedding_generator: self.embedding_generator.clone(),
+             dimension: self.dimension,
+             heap_size: self.heap_size,
++            workspace_root: self.workspace_root.clone(),
+         })
+     }
+ 
+@@ -1378,6 +1395,16 @@ impl DocumentStore {
+                     .map(PathBuf::from)
+                     .unwrap_or_default();
+ 
++                if let Some(root) = &self.workspace_root {
++                    if source_path.as_os_str().is_empty() {
++                        return Err(DocumentStoreError::Index(
++                            "Document result has no source provenance".into(),
++                        ));
++                    }
++                    crate::indexing::facade::IndexFacade::contained_source(root, &source_path)
++                        .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
++                }
++
+                 let heading_json = doc
+                     .get_first(self.schema.heading_context)
+                     .and_then(|v| v.as_str())
+@@ -1917,3 +1944,50 @@ mod tests {
+         );
+     }
+ }
++
++#[cfg(test)]
++mod workspace_tests {
++    use super::*;
++
++    #[test]
++    fn hardening_workspace_document_snapshots_reject_foreign_hits_after_binding() {
++        let temp = tempfile::tempdir().unwrap();
++        let root = temp.path().join("one");
++        let foreign = temp.path().join("two");
++        std::fs::create_dir(&root).unwrap();
++        std::fs::create_dir(&foreign).unwrap();
++        std::fs::write(root.join("guide.md"), "workspace_topic ".repeat(30)).unwrap();
++        std::fs::write(
++            foreign.join("guide.md"),
++            "PRIVATE_WORKSPACE_TOPIC ".repeat(30),
++        )
++        .unwrap();
++        let config = |path: &Path| CollectionConfig {
++            paths: vec![path.to_path_buf()],
++            ..CollectionConfig::default()
++        };
++        let mut writer =
++            DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
++        writer
++            .index_collection("local", &config(&root), &ChunkingConfig::default())
++            .unwrap();
++        writer.restrict_workspace(&root).unwrap();
++        let mut snapshot = writer.query_snapshot();
++        // Simulate a later external writer that does not observe this reader's
++        // in-memory scope. A shallow query snapshot must retain its boundary.
++        writer
++            .index_collection("foreign", &config(&foreign), &ChunkingConfig::default())
++            .unwrap();
++        assert!(
++            snapshot
++                .search(SearchQuery {
++                    text: "PRIVATE_WORKSPACE_TOPIC".into(),
++                    ..SearchQuery::default()
++                })
++                .is_err()
++        );
++        let mut reopened =
++            DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
++        assert!(reopened.restrict_workspace(&root).is_err());
++    }
++}
 diff --git a/src/main.rs b/src/main.rs
-index dabf059..7f6bbbe 100644
+index 7f6bbbe..db735af 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -369,6 +369,22 @@ async fn main() {
-     // Update the config with the resolved index_path so SimpleIndexer uses the correct path
-     config.index_path = index_path.clone();
+@@ -331,29 +331,6 @@ async fn main() {
+             | Commands::Completions { .. }
+     );
  
-+    let writes_code = matches!(&cli.command, Commands::Index { dry_run: false, .. })
-+        || matches!(&cli.command, Commands::Mcp { watch: true, .. })
-+        || matches!(&cli.command, Commands::Serve { watch, http, https, .. }
-+            if *watch || ((*http || *https || config.server.mode == "http") && config.file_watch.enabled));
-+    let _code_write_lease = if writes_code {
-+        Some(
-+            codanna::storage::write_lease::CodeWriteLease::acquire(&index_path).unwrap_or_else(
-+                |error| {
-+                    eprintln!("{error}");
-+                    std::process::exit(1);
-+                },
-+            ),
-+        )
-+    } else {
-+        None
-+    };
+-    // Initialize project resolution providers (only if needed)
+-    // This ensures caches are built before indexing starts
+-    if needs_providers {
+-        let provider_registry = create_provider_registry();
+-        if let Err(e) = initialize_providers(&provider_registry, &config) {
+-            // Only fatal for commands that need providers (like index)
+-            if matches!(cli.command, Commands::Index { .. }) {
+-                eprintln!("\n{e}");
+-                let suggestions = e.recovery_suggestions();
+-                if !suggestions.is_empty() {
+-                    eprintln!("\nSuggestions:");
+-                    for suggestion in suggestions {
+-                        eprintln!("  - {suggestion}");
+-                    }
+-                }
+-                std::process::exit(1);
+-            } else {
+-                // For other commands, just warn
+-                eprintln!("Warning: Provider initialization failed: {e}");
+-            }
+-        }
+-    }
+-
+     // Apply config overrides from CLI args
+     if let Commands::Index {
+         threads: Some(t), ..
+@@ -385,6 +362,29 @@ async fn main() {
+     } else {
+         None
+     };
++    // Initialize project resolution providers (only if needed)
++    // This ensures caches are built before indexing starts
++    if needs_providers {
++        let provider_registry = create_provider_registry();
++        if let Err(e) = initialize_providers(&provider_registry, &config) {
++            // Only fatal for commands that need providers (like index)
++            if matches!(cli.command, Commands::Index { .. }) {
++                eprintln!("\n{e}");
++                let suggestions = e.recovery_suggestions();
++                if !suggestions.is_empty() {
++                    eprintln!("\nSuggestions:");
++                    for suggestion in suggestions {
++                        eprintln!("  - {suggestion}");
++                    }
++                }
++                std::process::exit(1);
++            } else {
++                // For other commands, just warn
++                eprintln!("Warning: Provider initialization failed: {e}");
++            }
++        }
++    }
++
      let persistence = IndexPersistence::new(index_path.clone());
  
      // Determine if we need full trait resolver initialization
-@@ -707,7 +723,11 @@ async fn main() {
- 
-     let read_only_serve = matches!(&cli.command, Commands::Serve { .. });
-     if let Some(ref mut idx) = indexer {
--        if !read_only_serve && persistence.exists() && !is_force_index && !index_command_fresh_index
-+        if writes_code
-+            && !read_only_serve
-+            && persistence.exists()
-+            && !is_force_index
-+            && !index_command_fresh_index
-         {
-             // Load stored indexed_paths from metadata
-             match IndexMetadata::load(&config.index_path) {
 diff --git a/src/mcp/http_server.rs b/src/mcp/http_server.rs
-index c080bc5..ccd1f8a 100644
+index ccd1f8a..3c31e67 100644
 --- a/src/mcp/http_server.rs
 +++ b/src/mcp/http_server.rs
-@@ -18,6 +18,14 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
-     let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
-     let validated_bind = crate::mcp::auth::validate_bind(&bind, false)?;
+@@ -49,6 +49,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
  
-+    let _code_write_lease = if watch || config.file_watch.enabled {
-+        Some(crate::storage::write_lease::CodeWriteLease::acquire(
-+            &config.index_path,
-+        )?)
-+    } else {
-+        None
-+    };
-+
-     // Initialize logging with config
-     crate::logging::init_with_config(&config.logging);
+     // Create cancellation token for coordinated shutdown
+     let ct = CancellationToken::new();
++    let _cancel_on_drop = ct.clone().drop_guard();
  
+     // Start index watcher if watch mode is enabled
+     if watch {
+@@ -147,16 +148,13 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
+                     return Err(error.into());
+                 }
+                 let watcher_ct = ct.clone();
++                let watcher_lease = _code_write_lease.clone();
+                 tokio::spawn(async move {
+-                    tokio::select! {
+-                        result = unified_watcher.watch() => {
+-                            if let Err(e) = result {
+-                                tracing::error!("[watcher] error: {e}");
+-                            }
+-                        }
+-                        _ = watcher_ct.cancelled() => {
+-                            crate::log_event!("watcher", "stopped");
+-                        }
++                    // Retain ownership through the actual mutation, including
++                    // cancellation/error paths in the enclosing server future.
++                    let _lease = watcher_lease;
++                    if let Err(error) = unified_watcher.watch_until(watcher_ct).await {
++                        tracing::error!("[watcher] error: {error}");
+                     }
+                 });
+                 crate::log_event!(
 diff --git a/src/mcp/https_server.rs b/src/mcp/https_server.rs
-index 78c792b..ca7df24 100644
+index ca7df24..2705459 100644
 --- a/src/mcp/https_server.rs
 +++ b/src/mcp/https_server.rs
-@@ -20,6 +20,14 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) ->
-     let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
-     let validated_bind = crate::mcp::auth::validate_bind(&bind, true)?;
+@@ -51,6 +51,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) ->
  
-+    let _code_write_lease = if watch || config.file_watch.enabled {
-+        Some(crate::storage::write_lease::CodeWriteLease::acquire(
-+            &config.index_path,
-+        )?)
-+    } else {
-+        None
-+    };
-+
-     // Initialize logging with config
-     crate::logging::init_with_config(&config.logging);
+     // Create cancellation token for graceful shutdown
+     let ct = CancellationToken::new();
++    let _cancel_on_drop = ct.clone().drop_guard();
  
-diff --git a/src/mcp/server.rs b/src/mcp/server.rs
-index da67b6d..aec21f9 100644
---- a/src/mcp/server.rs
-+++ b/src/mcp/server.rs
-@@ -321,6 +321,8 @@ impl CodeIntelligenceServer {
-                 })?),
-             };
-         let (reindexed, symbols) = crate::runtime::mutate(&self.facade, move |indexer| {
-+            let _lease = crate::storage::write_lease::CodeWriteLease::acquire(indexer.index_base())
-+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-             let paths = authorized_reindex_paths(indexer.settings(), requested.as_deref())?;
-             let sources = crate::indexing::walker::FileWalker::new(Arc::clone(indexer.settings()))
-                 .snapshot(&paths, 100_000, 10_000, 128 * 1024 * 1024)
-diff --git a/src/storage/mod.rs b/src/storage/mod.rs
-index b6dd23a..b9bcf8e 100644
---- a/src/storage/mod.rs
-+++ b/src/storage/mod.rs
-@@ -3,6 +3,7 @@ pub mod metadata;
- pub mod metadata_keys;
- pub mod persistence;
- pub mod tantivy;
-+pub mod write_lease;
- pub use error::{StorageError, StorageResult};
- pub use metadata::{DataSource, EMISSION_SEMANTICS_VERSION, IndexMetadata};
- pub use metadata_keys::MetadataKey;
+     // Load document store once (shared between MCP server and watcher)
+     let document_store_arc = crate::documents::load_from_settings(&config);
+@@ -118,16 +119,13 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) ->
+                     return Err(error.into());
+                 }
+                 let watcher_ct = ct.clone();
++                let watcher_lease = _code_write_lease.clone();
+                 tokio::spawn(async move {
+-                    tokio::select! {
+-                        result = unified_watcher.watch() => {
+-                            if let Err(e) = result {
+-                                tracing::error!("[watcher] error: {e}");
+-                            }
+-                        }
+-                        _ = watcher_ct.cancelled() => {
+-                            crate::log_event!("watcher", "stopped");
+-                        }
++                    // Retain ownership through the actual mutation, including
++                    // cancellation/error paths in the enclosing server future.
++                    let _lease = watcher_lease;
++                    if let Err(error) = unified_watcher.watch_until(watcher_ct).await {
++                        tracing::error!("[watcher] error: {error}");
+                     }
+                 });
+                 crate::log_event!(
 diff --git a/src/watcher/unified.rs b/src/watcher/unified.rs
-index dbd0e6d..0c590b8 100644
+index 0c590b8..8b8b7cc 100644
 --- a/src/watcher/unified.rs
 +++ b/src/watcher/unified.rs
-@@ -119,7 +119,17 @@ impl UnifiedWatcher {
- 
-     /// Run the event loop, preparing first for callers that do not admit a
-     /// transport separately. Servers explicitly await `prepare` before handshake.
--    pub async fn watch(mut self) -> Result<(), WatchError> {
-+    pub async fn watch(self) -> Result<(), WatchError> {
-+        self.watch_until(tokio_util::sync::CancellationToken::new())
-+            .await
-+    }
-+
-+    /// Cooperative shutdown: finish the current mutation before returning. The
-+    /// caller may safely retain an OS writer lease until this future completes.
-+    pub async fn watch_until(
-+        mut self,
-+        stop: tokio_util::sync::CancellationToken,
-+    ) -> Result<(), WatchError> {
-         self.prepare().await?;
- 
-         // Subscribe to broadcaster for IndexReloaded events
-@@ -139,6 +149,8 @@ impl UnifiedWatcher {
+@@ -148,8 +148,9 @@ impl UnifiedWatcher {
+         drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
  
          loop {
++            // Keep fair selection: an always-ready event queue must not starve
++            // debounce drains, overflow reconciliation, or cancellation.
              tokio::select! {
-+                biased;
-+                _ = stop.cancelled() => return Ok(()),
+-                biased;
+                 _ = stop.cancelled() => return Ok(()),
                  // Handle incoming file events
                  Some(res) = self.event_rx.recv() => {
-                     match res {
+diff --git a/tests/workspace_live.rs b/tests/workspace_live.rs
+index 036fba9..19c8b3f 100644
+--- a/tests/workspace_live.rs
++++ b/tests/workspace_live.rs
+@@ -59,7 +59,9 @@ async fn wait_for(client: &Client, query: &str, expected: &str, forbidden: &str)
+                 .as_ref()
+                 .is_some_and(|value| value["result"]["ready"] == false)
+             {
+-                assert!(!text.contains("unavailable"), "{text}");
++                if text.contains("unavailable") {
++                    assert!(text.contains("changed"), "{text}");
++                }
+             } else if text.contains(expected) && !text.contains(forbidden) {
+                 assert_ne!(result.is_error, Some(true));
+                 break text;
+@@ -180,3 +182,37 @@ async fn hardening_workspace_live_elects_one_writer_and_takes_over_after_disconn
+     wait_for(&follower, "watched_symbol", "AFTER_TAKEOVER", "INITIAL").await;
+     follower.cancel().await.unwrap();
+ }
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn hardening_workspace_live_root_ignore_changes_reconcile_without_reconnect() {
++    let temp = tempfile::tempdir().unwrap();
++    let home = temp.path().join("home");
++    let root = temp.path().join("project");
++    fs::create_dir(&home).unwrap();
++    fs::create_dir(&root).unwrap();
++    source(&root, "VISIBLE_SOURCE");
++    let client = connect(&home, &root).await;
++    wait_for(&client, "watched_symbol", "VISIBLE_SOURCE", "FOREIGN").await;
++    // Both Git policy and Codanna-specific policy can narrow an existing graph.
++    for name in [".gitignore", ".codannaignore"] {
++        let path = root.join(name);
++        let original = fs::read_to_string(&path).unwrap_or_default();
++        fs::write(&path, format!("{original}\nlib.rs\n")).unwrap();
++        wait_for(
++            &client,
++            "watched_symbol",
++            "No matching code symbols",
++            "VISIBLE_SOURCE",
++        )
++        .await;
++        fs::write(&path, &original).unwrap();
++        wait_for(
++            &client,
++            "watched_symbol",
++            "VISIBLE_SOURCE",
++            "No matching code symbols",
++        )
++        .await;
++    }
++    client.cancel().await.unwrap();
++}
