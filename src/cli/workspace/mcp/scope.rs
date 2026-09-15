@@ -49,9 +49,14 @@ impl ScopeResolver {
             generation: AtomicU64::new(0),
         }
     }
-    pub(super) async fn invalidate_roots(&self) {
+    /// Called in receive order, before the SDK can dispatch another request.
+    /// Revision checks invalidate both cached roots and pending continuations;
+    /// clearing the cache asynchronously would reintroduce the routing race.
+    pub(super) fn invalidate_roots(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
-        *self.roots.lock().await = None;
+    }
+    pub(super) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
     #[allow(deprecated)] // The old RPC is used only for older protocol versions.
     pub(super) async fn resolve(
@@ -98,7 +103,7 @@ impl ScopeResolver {
             .and_then(|caps| caps.get("listChanged"))
             .and_then(Value::as_bool)
             == Some(true);
-        let generation = self.generation.load(Ordering::Acquire);
+        let generation = self.generation();
         if let Some(token) = &request.request_state {
             if token.len() != 64 {
                 return Err(invalid("Unknown workspace continuation"));
@@ -130,7 +135,7 @@ impl ScopeResolver {
                     .get(ROOT_INPUT)
                     .ok_or_else(|| invalid("Missing roots response"))?,
             )?;
-            if cacheable && generation == self.generation.load(Ordering::Acquire) {
+            if cacheable && generation == self.generation() {
                 *self.roots.lock().await = Some((generation, paths.clone()));
             }
             return self.paths(paths, arguments, context, true).await;
@@ -183,7 +188,7 @@ impl ScopeResolver {
             result = tokio::time::timeout(Duration::from_secs(3), context.peer.list_roots()) => result.map_err(|_| invalid("Client roots timed out"))?.map_err(|_| invalid("Client roots unavailable; supply workspace explicitly"))?,
         };
         let paths = root_paths(&serde_json::to_value(roots).map_err(super::internal)?)?;
-        if generation != self.generation.load(Ordering::Acquire) {
+        if generation != self.generation() {
             return Err(invalid("Client roots changed during selection; retry"));
         }
         if cacheable {

@@ -724,3 +724,117 @@ async fn hardening_workspace_mcp_new_document_store_invalidates_cached_absence()
     assert!(!fixture.home.join(".cache").exists());
     client.cancel().await.unwrap();
 }
+
+/// A notification is not an acknowledgement. The very next implicit query must
+/// use the new roots even when a second client is querying another context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_mcp_queued_root_changes_preserve_session_isolation() {
+    for version in ["2025-11-25", "2026-07-28"] {
+        let fixture = Fixture::fresh();
+        let changing = roots_client(vec![fixture.a.clone()], version, true);
+        let roots = changing.roots.clone();
+        let calls = changing.calls.clone();
+        let steady = roots_client(vec![fixture.b.clone()], version, true);
+        let steady_calls = steady.calls.clone();
+        let (first, second) = tokio::join!(
+            connect(changing, &fixture.home, &fixture.home),
+            connect(steady, &fixture.home, &fixture.home)
+        );
+        let (a, b) = tokio::join!(
+            ready(&first, json!({"query":"shared_symbol"})),
+            ready(&second, json!({"query":"shared_symbol"}))
+        );
+        assert_only(&a, "ONLY_PROJECT_A", "ONLY_PROJECT_B");
+        assert_only(&b, "ONLY_PROJECT_B", "ONLY_PROJECT_A");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(steady_calls.load(Ordering::SeqCst), 1);
+
+        for switch in 0..8 {
+            let (path, expected, forbidden) = if switch % 2 == 0 {
+                (&fixture.b, "ONLY_PROJECT_B", "ONLY_PROJECT_A")
+            } else {
+                (&fixture.a, "ONLY_PROJECT_A", "ONLY_PROJECT_B")
+            };
+            *roots.write().unwrap() = vec![path.clone()];
+            let notification: ClientNotification =
+                serde_json::from_value(json!({"method":"notifications/roots/list_changed"}))
+                    .unwrap();
+            first.send_notification(notification).await.unwrap();
+            // No sleep, acknowledgement call, or retry of a wrong-workspace
+            // response. `ready` waits only for explicitly incomplete indexing.
+            let (selected, independent) = tokio::join!(
+                ready(&first, json!({"query":"shared_symbol"})),
+                ready(&second, json!({"query":"shared_symbol"}))
+            );
+            assert_only(&selected, expected, forbidden);
+            assert_only(&independent, "ONLY_PROJECT_B", "ONLY_PROJECT_A");
+            assert_eq!(calls.load(Ordering::SeqCst), switch + 2);
+            assert_eq!(steady_calls.load(Ordering::SeqCst), 1);
+        }
+        tokio::time::timeout(Duration::from_secs(15), first.cancel())
+            .await
+            .expect("first session shutdown deadline")
+            .unwrap();
+        let independent = ready(&second, json!({"query":"shared_symbol"})).await;
+        assert_only(&independent, "ONLY_PROJECT_B", "ONLY_PROJECT_A");
+        tokio::time::timeout(Duration::from_secs(15), second.cancel())
+            .await
+            .expect("second session shutdown deadline")
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_mcp_root_change_rejects_queued_old_continuation() {
+    let fixture = Fixture::fresh();
+    let handler = roots_client(vec![fixture.a.clone()], "2026-07-28", true);
+    let roots = handler.roots.clone();
+    let client = connect(handler, &fixture.home, &fixture.home).await;
+    let response = tokio::time::timeout(
+        Duration::from_secs(20),
+        client.call_tool_once(request("get_workspace", json!({}))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let state = match response {
+        CallToolResponse::InputRequired(result) => result.request_state.unwrap(),
+        other => panic!("expected roots request: {other:?}"),
+    };
+    *roots.write().unwrap() = vec![fixture.b.clone()];
+    let notification: ClientNotification =
+        serde_json::from_value(json!({"method":"notifications/roots/list_changed"})).unwrap();
+    client.send_notification(notification).await.unwrap();
+    let mut stale = request("get_workspace", json!({}));
+    stale.request_state = Some(state);
+    stale.input_responses = Some(
+        serde_json::from_value(json!({
+            "codanna-workspace-roots": {"roots": [{
+                "uri": reqwest::Url::from_file_path(&fixture.a).unwrap().to_string()
+            }]}
+        }))
+        .unwrap(),
+    );
+    let error = tokio::time::timeout(Duration::from_secs(20), client.call_tool_once(stale))
+        .await
+        .unwrap()
+        .unwrap_err();
+    match error {
+        rmcp::service::ServiceError::McpError(error) => {
+            assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+            assert!(error.message.contains("roots changed"), "{error:?}");
+        }
+        other => panic!("expected stale-scope error: {other:?}"),
+    }
+    assert!(!fixture.a.join(".codanna").exists());
+    assert!(!fixture.b.join(".codanna").exists());
+    assert_eq!(
+        owner(&call(&client, "get_workspace", json!({})).await),
+        "projectb"
+    );
+    assert!(!fixture.a.join(".codanna").exists());
+    tokio::time::timeout(Duration::from_secs(15), client.cancel())
+        .await
+        .expect("session shutdown deadline")
+        .unwrap();
+}
