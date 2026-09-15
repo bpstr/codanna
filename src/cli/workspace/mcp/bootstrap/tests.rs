@@ -108,3 +108,24 @@ fn hardening_workspace_bootstrap_overflow_and_cancellation_preserve_existing_sto
         );
     }
 }
+
+#[test]
+fn hardening_workspace_bootstrap_contended_lock_is_not_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("bootstrap.lock");
+    let open = || {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap()
+    };
+    let first = open();
+    let second = open();
+    assert!(try_bootstrap_lock(&first).unwrap());
+    assert!(!try_bootstrap_lock(&second).unwrap());
+    drop(first);
+    assert!(try_bootstrap_lock(&second).unwrap());
+}
