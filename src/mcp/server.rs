@@ -55,6 +55,8 @@ pub fn format_relative_time(timestamp: u64) -> String {
 pub struct CodeIntelligenceServer {
     pub facade: Arc<RwLock<IndexFacade>>,
     pub document_store: Option<Arc<RwLock<DocumentStore>>>,
+    /// Immutable local recall binding. Network servers never derive this implicitly.
+    pub(super) recall_scope: Option<Arc<str>>,
     tool_router: ToolRouter<Self>,
     pub(super) peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
     pub(super) notification_session: Arc<super::notifications::NotificationSession>,
@@ -66,6 +68,7 @@ impl CodeIntelligenceServer {
         Self {
             facade: Arc::new(RwLock::new(facade)),
             document_store: None,
+            recall_scope: None,
             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
             peer: Arc::new(Mutex::new(None)),
             notification_session: Arc::new(super::notifications::NotificationSession::default()),
@@ -78,6 +81,7 @@ impl CodeIntelligenceServer {
         Self {
             facade,
             document_store: None,
+            recall_scope: None,
             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
             peer: Arc::new(Mutex::new(None)),
             notification_session: Arc::new(super::notifications::NotificationSession::default()),
@@ -90,11 +94,19 @@ impl CodeIntelligenceServer {
         Self {
             facade,
             document_store: None,
+            recall_scope: None,
             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
             peer: Arc::new(Mutex::new(None)),
             notification_session: Arc::new(super::notifications::NotificationSession::default()),
             broadcaster: None,
         }
+    }
+
+    /// Bind explicitly imported local history to this server's validated workspace.
+    /// Clones preserve the binding; no process environment or current scope changes.
+    pub(crate) fn with_recall_scope(mut self, scope: String) -> Self {
+        self.recall_scope = Some(scope.into());
+        self
     }
 
     /// Wire the watch-lane broadcaster; enables `subscriptions/listen`.

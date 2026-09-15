@@ -5,18 +5,21 @@
 use parking_lot::Mutex;
 use rmcp::RoleServer;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-use rmcp::transport::{Transport, WorkerTransport};
-use rmcp::transport::worker::Worker;
 use rmcp::transport::streamable_http_server::session::{
     ServerSseMessage, SessionId, SessionManager,
-    local::{LocalSessionHandle, LocalSessionManagerError, LocalSessionWorker, SessionConfig, SessionError, create_local_session},
+    local::{
+        LocalSessionHandle, LocalSessionManagerError, LocalSessionWorker, SessionConfig,
+        SessionError, create_local_session,
+    },
 };
+use rmcp::transport::worker::Worker;
+use rmcp::transport::{Transport, WorkerTransport};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 
@@ -44,7 +47,11 @@ impl Stream for SessionStream {
         };
         let result = receiver.poll_recv(cx);
         if result.is_pending() {
-            if state.waker.as_ref().is_none_or(|waker| !waker.will_wake(cx.waker())) {
+            if state
+                .waker
+                .as_ref()
+                .is_none_or(|waker| !waker.will_wake(cx.waker()))
+            {
                 state.waker = Some(cx.waker().clone());
             }
         } else {
@@ -65,7 +72,10 @@ struct Entry {
     capacity: Arc<Semaphore>,
 }
 impl Entry {
-    async fn run<T>(&self, operation: impl Future<Output = Result<T, SessionError>>) -> Result<T, Error> {
+    async fn run<T>(
+        &self,
+        operation: impl Future<Output = Result<T, SessionError>>,
+    ) -> Result<T, Error> {
         tokio::select! {
             biased;
             _ = self.cancel.cancelled() => Err(SessionError::SessionServiceTerminated.into()),
@@ -77,13 +87,21 @@ impl Entry {
             SessionError::Io(std::io::Error::other("session stream limit reached")).into()
         })
     }
-    fn stream(&self, receiver: mpsc::Receiver<ServerSseMessage>, permit: OwnedSemaphorePermit) -> Result<SessionStream, Error> {
+    fn stream(
+        &self,
+        receiver: mpsc::Receiver<ServerSseMessage>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<SessionStream, Error> {
         let mut streams = self.streams.lock();
         streams.retain(|stream| stream.strong_count() > 0);
         if self.cancel.is_cancelled() {
             return Err(SessionError::SessionServiceTerminated.into());
         }
-        let shared = Arc::new(Mutex::new(StreamState { receiver: Some(receiver), waker: None, permit: Some(permit) }));
+        let shared = Arc::new(Mutex::new(StreamState {
+            receiver: Some(receiver),
+            waker: None,
+            permit: Some(permit),
+        }));
         streams.push(Arc::downgrade(&shared));
         Ok(SessionStream(shared))
     }
@@ -93,16 +111,24 @@ impl Entry {
         for stream in streams.into_iter().filter_map(|stream| stream.upgrade()) {
             let (receiver, permit, waker) = {
                 let mut state = stream.lock();
-                (state.receiver.take(), state.permit.take(), state.waker.take())
+                (
+                    state.receiver.take(),
+                    state.permit.take(),
+                    state.waker.take(),
+                )
             };
             drop(receiver);
             drop(permit);
-            if let Some(waker) = waker { waker.wake(); }
+            if let Some(waker) = waker {
+                waker.wake();
+            }
         }
     }
 }
 impl Drop for Entry {
-    fn drop(&mut self) { self.close(); }
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 /// Interrupt the handler-side wait as well as the HTTP-side wait. The pinned SDK
@@ -114,11 +140,16 @@ pub(crate) struct SessionTransport {
 }
 impl Transport<RoleServer> for SessionTransport {
     type Error = <WorkerTransport<LocalSessionWorker> as Transport<RoleServer>>::Error;
-    fn send(&mut self, message: ServerJsonRpcMessage) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+    fn send(
+        &mut self,
+        message: ServerJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let send = self.inner.as_mut().map(|inner| inner.send(message));
         let cancel = self.entry.cancel.clone();
         async move {
-            let Some(send) = send else { return Err(LocalSessionWorker::err_closed()); };
+            let Some(send) = send else {
+                return Err(LocalSessionWorker::err_closed());
+            };
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => Err(LocalSessionWorker::err_closed()),
@@ -141,7 +172,9 @@ impl Transport<RoleServer> for SessionTransport {
     }
 }
 impl Drop for SessionTransport {
-    fn drop(&mut self) { self.entry.close(); }
+    fn drop(&mut self) {
+        self.entry.close();
+    }
 }
 
 #[derive(Default)]
@@ -151,13 +184,19 @@ pub(crate) struct LocalSessions {
 }
 impl LocalSessions {
     fn entry(&self, id: &SessionId) -> Result<Arc<Entry>, Error> {
-        self.sessions.lock().get(id).filter(|entry| !entry.cancel.is_cancelled())
-            .cloned().ok_or_else(|| Error::SessionNotFound(id.clone()))
+        self.sessions
+            .lock()
+            .get(id)
+            .filter(|entry| !entry.cancel.is_cancelled())
+            .cloned()
+            .ok_or_else(|| Error::SessionNotFound(id.clone()))
     }
 }
 impl Drop for LocalSessions {
     fn drop(&mut self) {
-        for (_, entry) in self.sessions.get_mut().drain() { entry.close(); }
+        for (_, entry) in self.sessions.get_mut().drain() {
+            entry.close();
+        }
     }
 }
 impl SessionManager for LocalSessions {
@@ -172,52 +211,92 @@ impl SessionManager for LocalSessions {
         }
         let id: SessionId = loop {
             let id = hex::encode(rand::random::<[u8; 32]>()).into();
-            if !sessions.contains_key(&id) { break id; }
+            if !sessions.contains_key(&id) {
+                break id;
+            }
         };
         let (handle, worker) = create_local_session(id.clone(), self.config.clone());
         let cancel = CancellationToken::new();
         let transport = WorkerTransport::spawn_with_ct(worker, cancel.clone());
-        let entry = Arc::new(Entry { handle, cancel, streams: Mutex::new(Vec::new()), capacity: Arc::new(Semaphore::new(MAX_STREAMS)) });
+        let entry = Arc::new(Entry {
+            handle,
+            cancel,
+            streams: Mutex::new(Vec::new()),
+            capacity: Arc::new(Semaphore::new(MAX_STREAMS)),
+        });
         sessions.insert(id.clone(), entry.clone());
-        Ok((id, SessionTransport { inner: Some(transport), entry }))
+        Ok((
+            id,
+            SessionTransport {
+                inner: Some(transport),
+                entry,
+            },
+        ))
     }
     async fn has_session(&self, id: &SessionId) -> Result<bool, Error> {
         Ok(self.entry(id).is_ok())
     }
     async fn close_session(&self, id: &SessionId) -> Result<(), Error> {
         let entry = { self.sessions.lock().remove(id) };
-        if let Some(entry) = entry { entry.close(); }
+        if let Some(entry) = entry {
+            entry.close();
+        }
         Ok(())
     }
-    async fn initialize_session(&self, id: &SessionId, message: ClientJsonRpcMessage) -> Result<ServerJsonRpcMessage, Error> {
+    async fn initialize_session(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> Result<ServerJsonRpcMessage, Error> {
         let entry = self.entry(id)?;
         entry.run(entry.handle.initialize(message)).await
     }
-    async fn accept_message(&self, id: &SessionId, message: ClientJsonRpcMessage) -> Result<(), Error> {
+    async fn accept_message(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> Result<(), Error> {
         let entry = self.entry(id)?;
         entry.run(entry.handle.push_message(message, None)).await
     }
-    async fn create_stream(&self, id: &SessionId, message: ClientJsonRpcMessage) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
+    async fn create_stream(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
         let entry = self.entry(id)?;
         let permit = entry.reserve()?;
-        let receiver = entry.run(entry.handle.establish_request_wise_channel()).await?;
+        let receiver = entry
+            .run(entry.handle.establish_request_wise_channel())
+            .await?;
         let request_id = receiver.http_request_id;
         // Register ownership before sending. DELETE can now close the receiver
         // while this request waits for a saturated session event queue.
         let stream = entry.stream(receiver.inner, permit)?;
-        entry.run(entry.handle.push_message(message, request_id)).await?;
+        entry
+            .run(entry.handle.push_message(message, request_id))
+            .await?;
         Ok(stream)
     }
-    async fn create_standalone_stream(&self, id: &SessionId) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
+    async fn create_standalone_stream(
+        &self,
+        id: &SessionId,
+    ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
         let entry = self.entry(id)?;
         let permit = entry.reserve()?;
         let receiver = entry.run(entry.handle.establish_common_channel()).await?;
         entry.stream(receiver.inner, permit)
     }
-    async fn resume(&self, id: &SessionId, last_event_id: String) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
+    async fn resume(
+        &self,
+        id: &SessionId,
+        last_event_id: String,
+    ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Error> {
         let entry = self.entry(id)?;
         let permit = entry.reserve()?;
-        let receiver = entry.run(entry.handle.resume(last_event_id.parse()?)).await?;
+        let receiver = entry
+            .run(entry.handle.resume(last_event_id.parse()?))
+            .await?;
         entry.stream(receiver.inner, permit)
     }
 }
@@ -237,19 +316,39 @@ mod tests {
                 "protocolVersion":"2025-11-25", "capabilities":{},
                 "clientInfo":{"name":"blocked-fixture","version":"1"}
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let mut pending = Box::pin(manager.initialize_session(&a, message));
         std::future::poll_fn(|cx| {
             assert!(pending.as_mut().poll(cx).is_pending());
             Poll::Ready(())
-        }).await;
-        let (b, mut transport_b) = tokio::time::timeout(Duration::from_secs(1), manager.create_session()).await.unwrap().unwrap();
-        tokio::time::timeout(Duration::from_secs(1), manager.close_session(&b)).await.unwrap().unwrap();
+        })
+        .await;
+        let (b, mut transport_b) =
+            tokio::time::timeout(Duration::from_secs(1), manager.create_session())
+                .await
+                .unwrap()
+                .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), manager.close_session(&b))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(manager.has_session(&a).await.unwrap());
         manager.close_session(&a).await.unwrap();
-        assert!(tokio::time::timeout(Duration::from_secs(1), pending).await.unwrap().is_err());
-        tokio::time::timeout(Duration::from_secs(1), transport_a.close()).await.unwrap().unwrap();
-        tokio::time::timeout(Duration::from_secs(1), transport_b.close()).await.unwrap().unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), pending)
+                .await
+                .unwrap()
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(1), transport_a.close())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), transport_b.close())
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -259,16 +358,35 @@ mod tests {
         let entry = manager.entry(&a).unwrap();
         let (sender, receiver) = mpsc::channel(1);
         let mut stream = entry.stream(receiver, entry.reserve().unwrap()).unwrap();
-        sender.send(ServerSseMessage::retry(Duration::from_secs(1))).await.unwrap();
+        sender
+            .send(ServerSseMessage::retry(Duration::from_secs(1)))
+            .await
+            .unwrap();
         let mut blocked = Box::pin(sender.send(ServerSseMessage::retry(Duration::from_secs(1))));
         std::future::poll_fn(|cx| {
             assert!(blocked.as_mut().poll(cx).is_pending());
             Poll::Ready(())
-        }).await;
-        tokio::time::timeout(Duration::from_secs(1), manager.close_session(&a)).await.unwrap().unwrap();
-        assert!(tokio::time::timeout(Duration::from_secs(1), blocked).await.unwrap().is_err());
-        assert!(std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await.is_none());
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(1), manager.close_session(&a))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), blocked)
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(
+            std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx))
+                .await
+                .is_none()
+        );
         assert!(!manager.has_session(&a).await.unwrap());
-        tokio::time::timeout(Duration::from_secs(1), transport.close()).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
