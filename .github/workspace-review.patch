@@ -1,0 +1,351 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index d506ebc..f44951e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -847,6 +847,7 @@ dependencies = [
+  "thiserror 2.0.20",
+  "thread-id",
+  "tokio",
++ "tokio-stream",
+  "tokio-util",
+  "toml 1.1.4+spec-1.1.0",
+  "tower",
+diff --git a/Cargo.toml b/Cargo.toml
+index 58a5446..38d768f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -93,6 +93,7 @@ tower = { version = "0.5.3", optional = true }
+ tower-http = { version = "0.7.0", features = ["cors"], optional = true }
+ serde_urlencoded = "0.7"
+ tokio-util = "0.7.19"
++tokio-stream = { version = "0.1.18", optional = true }
+ axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
+ rustls = { version = "0.23.43", default-features = false, features = ["ring"], optional = true }
+ rcgen = { version = "0.14.9", optional = true }
+@@ -125,7 +126,7 @@ thread-id = "5.1.0"
+ 
+ [features]
+ default = ["http-server"]
+-http-server = ["axum", "tower", "tower-http"]
++http-server = ["axum", "tower", "tower-http", "dep:tokio-stream"]
+ https-server = ["http-server", "axum-server", "rustls", "rcgen"]
+ # Optional local embedding acceleration. The active target decides which ORT
+ # execution provider is compiled: CoreML on Apple, CUDA on Linux/Windows.
+diff --git a/src/bin/codanna-recall/tests.rs b/src/bin/codanna-recall/tests.rs
+index 095127e..a2aa6f2 100644
+--- a/src/bin/codanna-recall/tests.rs
++++ b/src/bin/codanna-recall/tests.rs
+@@ -100,18 +100,18 @@ fn shared_recall_prefers_users_and_finds_assistant_only_terms() {
+         ]),
+     )
+     .unwrap();
+-    store.import("assign", Provider::Codex, &c).unwrap();
+-    store.import("assign", Provider::Claude, &a).unwrap();
+-    let hits = store.search("assign", "status bar", 8, None, None).unwrap();
++    store.import("example-workspace", Provider::Codex, &c).unwrap();
++    store.import("example-workspace", Provider::Claude, &a).unwrap();
++    let hits = store.search("example-workspace", "status bar", 8, None, None).unwrap();
+     assert_eq!(hits["total_matches"], 2);
+     assert_eq!(hits["results"][0]["message"]["role"], "user");
+     let id = hits["results"][1]["message"]["id"].as_str().unwrap();
+     assert_eq!(
+-        store.read("assign", id).unwrap()["message"]["text"],
++        store.read("example-workspace", id).unwrap()["message"]["text"],
+         "status bar layout"
+     );
+     let answers = store
+-        .search("assign", "status bar", 8, Some("assistant"), None)
++        .search("example-workspace", "status bar", 8, Some("assistant"), None)
+         .unwrap();
+     assert_eq!(answers["total_matches"], 1);
+     assert_eq!(answers["results"][0]["message"]["provider"], "claude");
+@@ -147,32 +147,32 @@ fn unchanged_import_replacement_failure_and_forget() {
+     let file = temp.path().join("log.jsonl");
+     let original = jsonl(&[codex("user", "old status bar")]);
+     fs::write(&file, &original).unwrap();
+-    let imported = store.import("assign", Provider::Codex, &file).unwrap();
++    let imported = store.import("example-workspace", Provider::Codex, &file).unwrap();
+     assert_eq!(
+-        store.import("assign", Provider::Codex, &file).unwrap()["unchanged"],
++        store.import("example-workspace", Provider::Codex, &file).unwrap()["unchanged"],
+         true
+     );
+     fs::write(&file, format!("{original}broken\n")).unwrap();
+-    assert!(store.import("assign", Provider::Codex, &file).is_err());
++    assert!(store.import("example-workspace", Provider::Codex, &file).is_err());
+     assert_eq!(
+-        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
++        reader.search("example-workspace", "old", 8, None, None).unwrap()["total_matches"],
+         1
+     );
+     fs::write(&file, jsonl(&[codex("user", "new stable layout")])).unwrap();
+-    store.import("assign", Provider::Codex, &file).unwrap();
++    store.import("example-workspace", Provider::Codex, &file).unwrap();
+     assert_eq!(
+-        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
++        reader.search("example-workspace", "old", 8, None, None).unwrap()["total_matches"],
+         0
+     );
+     assert_eq!(
+-        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
++        reader.search("example-workspace", "stable", 8, None, None).unwrap()["total_matches"],
+         1
+     );
+     store
+-        .forget("assign", imported["source_id"].as_str().unwrap())
++        .forget("example-workspace", imported["source_id"].as_str().unwrap())
+         .unwrap();
+     assert_eq!(
+-        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
++        reader.search("example-workspace", "stable", 8, None, None).unwrap()["total_matches"],
+         0
+     );
+     assert!(file.exists());
+@@ -185,13 +185,13 @@ fn query_bounds_unknown_fields_and_unicode_preview() {
+     let file = temp.path().join("log.jsonl");
+     let text = format!("status {}", "ő界🙂".repeat(600));
+     fs::write(&file, jsonl(&[claude("user", &text)])).unwrap();
+-    store.import("assign", Provider::Claude, &file).unwrap();
+-    assert!(store.search("assign", "status", 0, None, None).is_err());
+-    assert!(store.search("assign", "status", 21, None, None).is_err());
+-    assert!(store.search("assign", "", 8, None, None).is_err());
++    store.import("example-workspace", Provider::Claude, &file).unwrap();
++    assert!(store.search("example-workspace", "status", 0, None, None).is_err());
++    assert!(store.search("example-workspace", "status", 21, None, None).is_err());
++    assert!(store.search("example-workspace", "", 8, None, None).is_err());
+     assert!(
+         store
+-            .search("assign", "status", 8, Some("system"), None)
++            .search("example-workspace", "status", 8, Some("system"), None)
+             .is_err()
+     );
+     assert!(
+@@ -200,10 +200,10 @@ fn query_bounds_unknown_fields_and_unicode_preview() {
+         }))
+         .is_err()
+     );
+-    let hit = store.search("assign", "status", 8, None, None).unwrap();
++    let hit = store.search("example-workspace", "status", 8, None, None).unwrap();
+     assert_eq!(hit["results"][0]["preview_truncated"], true);
+     let id = hit["results"][0]["message"]["id"].as_str().unwrap();
+-    assert_eq!(store.read("assign", id).unwrap()["message"]["text"], text);
++    assert_eq!(store.read("example-workspace", id).unwrap()["message"]["text"], text);
+ }
+ 
+ #[test]
+diff --git a/src/cli/workspace/mcp/reader.rs b/src/cli/workspace/mcp/reader.rs
+index 5f29855..b95bd83 100644
+--- a/src/cli/workspace/mcp/reader.rs
++++ b/src/cli/workspace/mcp/reader.rs
+@@ -162,6 +162,7 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
+     if metadata.emission_version != Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION) {
+         return Err(IndexError::General("Index semantics changed. Run codanna index in this workspace; reads will not rebuild it.".into()));
+     }
++    let recall_scope = crate::mcp::tools::recall::scope_for_root(&root);
+     let settings = Arc::new(settings);
+     let owned = settings.clone();
+     let facade = crate::runtime::blocking(move || {
+@@ -173,7 +174,7 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
+     })
+     .await??;
+     let reader = Reader {
+-        code: CodeIntelligenceServer::new(facade),
++        code: CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope),
+         settings,
+         semantic: Arc::new(Lazy::default()),
+         documents: Arc::new(Lazy::default()),
+diff --git a/src/mcp/mod.rs b/src/mcp/mod.rs
+index 65f52db..efa7af0 100644
+--- a/src/mcp/mod.rs
++++ b/src/mcp/mod.rs
+@@ -24,6 +24,8 @@ pub mod http_server;
+ pub mod https_server;
+ #[cfg(feature = "http-server")]
+ pub(crate) mod network;
++#[cfg(feature = "http-server")]
++pub(crate) mod sessions;
+ pub mod notifications;
+ pub mod requests;
+ pub mod server;
+diff --git a/src/mcp/network.rs b/src/mcp/network.rs
+index 23a66a7..1f1b396 100644
+--- a/src/mcp/network.rs
++++ b/src/mcp/network.rs
+@@ -7,19 +7,20 @@ use crate::{Settings, documents::DocumentStore, indexing::facade::IndexFacade};
+ use axum::Router;
+ use rmcp::transport::streamable_http_server::{
+     StreamableHttpServerConfig, StreamableHttpService,
+-    session::{SessionManager, local::LocalSessionManager},
++    session::SessionManager,
+ };
+ use std::{
+     sync::Arc,
+     time::{Duration, Instant},
+ };
+ use tokio::sync::RwLock;
++use super::sessions::LocalSessions;
+ use tokio_util::sync::CancellationToken;
+ 
+ pub(crate) struct NetworkService {
+     pub router: Router,
+     #[cfg(all(test, feature = "https-server"))]
+-    manager: Arc<LocalSessionManager>,
++    manager: Arc<LocalSessions>,
+ }
+ 
+ impl NetworkService {
+@@ -31,7 +32,7 @@ impl NetworkService {
+         cancellation: CancellationToken,
+         auth: NetworkAuth,
+     ) -> Self {
+-        let manager = Arc::new(LocalSessionManager::default());
++        let manager = Arc::new(LocalSessions::default());
+         let mut transport = StreamableHttpServerConfig::default()
+             .with_cancellation_token(cancellation.child_token())
+             .with_sse_keep_alive(Some(Duration::from_secs(15)))
+@@ -89,7 +90,7 @@ impl NetworkService {
+ 
+ async fn reap_sessions(
+     auth: &NetworkAuth,
+-    manager: &LocalSessionManager,
++    manager: &LocalSessions,
+     now: Instant,
+ ) -> anyhow::Result<()> {
+     let mut failures = 0;
+@@ -253,7 +254,7 @@ mod tests {
+         client: Client,
+         events: Arc<NotificationBroadcaster>,
+         closed: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>,
+-        manager: Arc<LocalSessionManager>,
++        manager: Arc<LocalSessions>,
+         auth: NetworkAuth,
+         stop: CancellationToken,
+         task: tokio::task::JoinHandle<()>,
+diff --git a/src/mcp/server.rs b/src/mcp/server.rs
+index b8fd517..da67b6d 100644
+--- a/src/mcp/server.rs
++++ b/src/mcp/server.rs
+@@ -55,6 +55,8 @@ pub fn format_relative_time(timestamp: u64) -> String {
+ pub struct CodeIntelligenceServer {
+     pub facade: Arc<RwLock<IndexFacade>>,
+     pub document_store: Option<Arc<RwLock<DocumentStore>>>,
++    /// Immutable local recall binding. Network servers never derive this implicitly.
++    pub(super) recall_scope: Option<Arc<str>>,
+     tool_router: ToolRouter<Self>,
+     pub(super) peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
+     pub(super) notification_session: Arc<super::notifications::NotificationSession>,
+@@ -66,6 +68,7 @@ impl CodeIntelligenceServer {
+         Self {
+             facade: Arc::new(RwLock::new(facade)),
+             document_store: None,
++            recall_scope: None,
+             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
+             peer: Arc::new(Mutex::new(None)),
+             notification_session: Arc::new(super::notifications::NotificationSession::default()),
+@@ -78,6 +81,7 @@ impl CodeIntelligenceServer {
+         Self {
+             facade,
+             document_store: None,
++            recall_scope: None,
+             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
+             peer: Arc::new(Mutex::new(None)),
+             notification_session: Arc::new(super::notifications::NotificationSession::default()),
+@@ -90,6 +94,7 @@ impl CodeIntelligenceServer {
+         Self {
+             facade,
+             document_store: None,
++            recall_scope: None,
+             tool_router: Self::symbols_router() + Self::search_router() + Self::context_router(),
+             peer: Arc::new(Mutex::new(None)),
+             notification_session: Arc::new(super::notifications::NotificationSession::default()),
+@@ -97,6 +102,13 @@ impl CodeIntelligenceServer {
+         }
+     }
+ 
++    /// Bind explicitly imported local history to this server's validated workspace.
++    /// Clones preserve the binding; no process environment or current scope changes.
++    pub(crate) fn with_recall_scope(mut self, scope: String) -> Self {
++        self.recall_scope = Some(scope.into());
++        self
++    }
++
+     /// Wire the watch-lane broadcaster; enables `subscriptions/listen`.
+     pub fn with_broadcaster(
+         mut self,
+diff --git a/src/mcp/tools/context.rs b/src/mcp/tools/context.rs
+index 7b8b022..fb20d45 100644
+--- a/src/mcp/tools/context.rs
++++ b/src/mcp/tools/context.rs
+@@ -122,15 +122,12 @@ impl CodeIntelligenceServer {
+             output.push_str("Document search is not configured for this workspace.\n\n");
+         }
+ 
+-        // Snapshot the same canonical root used by code. Never hold the facade
+-        // guard across the independently bounded recall subprocess request.
+-        let root = self.facade.read().await.settings().workspace_root.clone();
+         output.push_str("## Conversations\n");
+         output.push_str(
+             &super::recall::conversation_context(
+                 query,
+                 request.conversation_limit as usize,
+-                root.as_deref(),
++                self.recall_scope.as_deref(),
+             )
+             .await,
+         );
+diff --git a/src/mcp/tools/recall.rs b/src/mcp/tools/recall.rs
+index 250ab29..7695109 100644
+--- a/src/mcp/tools/recall.rs
++++ b/src/mcp/tools/recall.rs
+@@ -48,15 +48,16 @@ pub fn scope_for_root(root: &Path) -> String {
+     format!("project-v1:{}", hex::encode(hash.finalize()))
+ }
+ 
+-pub(super) async fn conversation_context(query: &str, limit: usize, root: Option<&Path>) -> String {
+-    // Automatic/selected/router launches strip inherited workspace overrides.
+-    // Explicit legacy --config launches may still opt into a named namespace.
+-    let workspace = match std::env::var("CODANNA_RECALL_WORKSPACE") {
+-        Ok(value) if !value.trim().is_empty() => value,
+-        _ => match root {
+-            Some(root) => scope_for_root(root),
+-            None => return "Conversation recall unavailable: no workspace context.\n".into(),
+-        },
++/// Explicit local bindings take precedence over legacy environment opt-ins.
++/// Merely configuring a workspace root on an HTTP server never enables recall.
++fn select_scope(bound: Option<&str>, legacy: Option<&str>) -> Option<String> {
++    bound.or(legacy).filter(|scope| !scope.trim().is_empty()).map(str::to_owned)
++}
++
++pub(super) async fn conversation_context(query: &str, limit: usize, bound: Option<&str>) -> String {
++    let legacy = std::env::var("CODANNA_RECALL_WORKSPACE").ok();
++    let Some(workspace) = select_scope(bound, legacy.as_deref()) else {
++        return "Conversation recall is disabled for this server.\n".into();
+     };
+     let binary = recall_binary();
+     let mut command = Command::new(binary);
+@@ -72,10 +73,9 @@ pub(super) async fn conversation_context(query: &str, limit: usize, root: Option
+         .arg("--limit")
+         .arg(limit.to_string());
+     match capture(command).await {
+-        Ok((status, bytes, detail)) if !status.success() => {
++        Ok((status, _, detail)) if !status.success() => {
+             let detail = std::str::from_utf8(&detail).unwrap_or("recall command failed");
+             let detail = detail.lines().next().unwrap_or("recall command failed");
+-            let _ = bytes;
+             format!("Conversation recall unavailable: {detail}\n")
+         }
+         Ok((_, bytes, _)) => match serde_json::from_slice::<Value>(&bytes) {
+@@ -194,6 +194,13 @@ fn recall_binary() -> PathBuf {
+ mod tests {
+     use super::*;
+     #[test]
++    fn hardening_workspace_recall_requires_explicit_binding_or_legacy_opt_in() {
++        assert_eq!(select_scope(None, None), None);
++        assert_eq!(select_scope(Some("local"), Some("foreign")), Some("local".into()));
++        assert_eq!(select_scope(None, Some("legacy")), Some("legacy".into()));
++        assert_eq!(select_scope(None, Some(" ")), None);
++    }
++    #[test]
+     fn hardening_workspace_recall_scopes_distinguish_equal_basenames() {
+         let temp = tempfile::tempdir().unwrap();
+         let a = temp.path().join("one/project");
