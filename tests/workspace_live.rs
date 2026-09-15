@@ -148,6 +148,11 @@ async fn hardening_workspace_live_elects_one_writer_and_takes_over_after_disconn
         ),
         "{a_role}/{b_role}"
     );
+    // Followers must see commits while the elected writer is still alive,
+    // not only after taking ownership and doing their own catch-up scan.
+    source(&root, "SHARED_UPDATE");
+    wait_for(&a, "watched_symbol", "SHARED_UPDATE", "INITIAL").await;
+    wait_for(&b, "watched_symbol", "SHARED_UPDATE", "INITIAL").await;
     let metadata = fs::read(root.join(".codanna/index/index.meta")).unwrap();
     let refused = tokio::time::timeout(
         Duration::from_secs(15),
@@ -179,7 +184,13 @@ async fn hardening_workspace_live_elects_one_writer_and_takes_over_after_disconn
     .await
     .unwrap();
     source(&root, "AFTER_TAKEOVER");
-    wait_for(&follower, "watched_symbol", "AFTER_TAKEOVER", "INITIAL").await;
+    wait_for(
+        &follower,
+        "watched_symbol",
+        "AFTER_TAKEOVER",
+        "SHARED_UPDATE",
+    )
+    .await;
     follower.cancel().await.unwrap();
 }
 

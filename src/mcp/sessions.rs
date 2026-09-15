@@ -352,6 +352,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hardening_workspace_session_stream_capacity_is_local_and_released_on_drop() {
+        let manager = LocalSessions::default();
+        let (a, mut transport_a) = manager.create_session().await.unwrap();
+        let (b, mut transport_b) = manager.create_session().await.unwrap();
+        let entry = manager.entry(&a).unwrap();
+        let mut streams = Vec::with_capacity(MAX_STREAMS);
+        for _ in 0..MAX_STREAMS {
+            let (_sender, receiver) = mpsc::channel(1);
+            streams.push(entry.stream(receiver, entry.reserve().unwrap()).unwrap());
+        }
+        assert!(entry.reserve().is_err());
+        // A saturated session must not consume another session's capacity.
+        drop(manager.entry(&b).unwrap().reserve().unwrap());
+        drop(streams.pop());
+        drop(
+            entry
+                .reserve()
+                .expect("dropping a stream releases its permit"),
+        );
+        manager.close_session(&a).await.unwrap();
+        assert_eq!(entry.capacity.available_permits(), MAX_STREAMS);
+        assert!(manager.has_session(&b).await.unwrap());
+        transport_a.close().await.unwrap();
+        transport_b.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn hardening_workspace_session_delete_releases_unpolled_full_stream() {
         let manager = LocalSessions::default();
         let (a, mut transport) = manager.create_session().await.unwrap();

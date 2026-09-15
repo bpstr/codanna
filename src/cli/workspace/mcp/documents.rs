@@ -5,11 +5,67 @@ use crate::indexing::facade::IndexFacade;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 type Documents = Option<Arc<RwLock<crate::documents::DocumentStore>>>;
+
+/// Cheap invalidation for the reader's lazy document store, including a cached
+/// absence. Code-only queries must remain available if auxiliary storage is
+/// missing or unreadable; `load` performs the strict checks before document use.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Revision([EntryStamp; 4]);
+
+#[derive(Clone, PartialEq, Eq)]
+enum EntryStamp {
+    Missing,
+    Present {
+        length: u64,
+        modified: std::time::SystemTime,
+        identity: (u64, u64),
+    },
+    Unavailable(std::io::ErrorKind),
+}
+impl EntryStamp {
+    fn read(path: &Path) -> Self {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::Missing,
+            Err(error) => return Self::Unavailable(error.kind()),
+        };
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(error) => return Self::Unavailable(error.kind()),
+        };
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let identity = (0, 0);
+        Self::Present {
+            length: metadata.len(),
+            modified,
+            identity,
+        }
+    }
+}
+impl Revision {
+    /// Four metadata reads, independent of collection and source-file counts.
+    /// A commit/state publication invalidates old vectors, collection metadata,
+    /// and negative lazy-cache results without hashing or walking documents.
+    pub(super) fn capture(index: &Path) -> Self {
+        let base = index.join("documents");
+        Self([
+            EntryStamp::read(&base),
+            EntryStamp::read(&base.join("state.json")),
+            EntryStamp::read(&base.join("tantivy/meta.json")),
+            EntryStamp::read(&base.join("clusters.json")),
+        ])
+    }
+}
 
 #[derive(Deserialize)]
 struct SourceState {
@@ -134,6 +190,39 @@ mod tests {
         )
         .unwrap();
         assert!(prepare(&settings).unwrap().is_some());
+    }
+
+    #[test]
+    fn hardening_workspace_document_revision_observes_creation_changes_and_removal() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = temp.path().join("index");
+        let absent = Revision::capture(&index);
+        assert!(
+            !index.exists(),
+            "metadata inspection must not create storage"
+        );
+        assert!(absent == Revision::capture(&index));
+
+        let documents = index.join("documents");
+        std::fs::create_dir_all(documents.join("tantivy")).unwrap();
+        std::fs::write(documents.join("state.json"), "{}").unwrap();
+        std::fs::write(documents.join("tantivy/meta.json"), "{}").unwrap();
+        let first = Revision::capture(&index);
+        assert!(
+            absent != first,
+            "a cached missing store must be invalidated"
+        );
+        assert!(first == Revision::capture(&index));
+
+        // Change length as well as mtime; this fixture does not depend on the
+        // filesystem clock's resolution or a sleep.
+        std::fs::write(documents.join("state.json"), "{\"file_states\":{}}").unwrap();
+        let changed = Revision::capture(&index);
+        assert!(first != changed);
+        std::fs::write(documents.join("clusters.json"), "{}").unwrap();
+        assert!(changed != Revision::capture(&index));
+        std::fs::remove_dir_all(&documents).unwrap();
+        assert!(absent == Revision::capture(&index));
     }
 
     #[cfg(unix)]

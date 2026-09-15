@@ -79,6 +79,7 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
         queries: Semaphore::new(4),
         close: CancellationToken::new(),
         snapshot: Snapshot {
+            documents: super::super::documents::Revision::capture(&workspace.root),
             root: workspace.root.clone(),
             index: workspace.root.clone(),
             config: stamp.clone(),
