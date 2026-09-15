@@ -2,10 +2,10 @@
 //! commands, or model setup. Every client gets the same project-agnostic entry.
 #![cfg(unix)]
 
+use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::TokioChildProcess;
-use rmcp::ServiceExt;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -38,8 +38,12 @@ async fn connect(home: &Path, project: &Path) -> RunningService<RoleClient, ()> 
 }
 
 async fn search(client: &RunningService<RoleClient, ()>) -> CallToolResult {
-    let request = CallToolRequestParams::new("search_context")
-        .with_arguments(json!({"query": "bootstrap_target"}).as_object().unwrap().clone());
+    let request = CallToolRequestParams::new("search_context").with_arguments(
+        json!({"query": "bootstrap_target"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     let result = tokio::time::timeout(Duration::from_secs(15), client.call_tool(request))
         .await
         .expect("query deadline")
@@ -78,7 +82,10 @@ async fn hardening_workspace_bootstrap_non_source_files_do_not_freeze_empty_grap
             if status == "empty" {
                 break;
             }
-            assert_eq!(status, "indexing", "not-yet-indexable code is not ready: {result:?}");
+            assert_eq!(
+                status, "indexing",
+                "not-yet-indexable code is not ready: {result:?}"
+            );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     })
@@ -91,7 +98,11 @@ async fn hardening_workspace_bootstrap_non_source_files_do_not_freeze_empty_grap
     )
     .unwrap();
     let result = wait_for_ready(&client).await;
-    assert!(serde_json::to_string(&result).unwrap().contains("FIRST_REAL_SOURCE"));
+    assert!(
+        serde_json::to_string(&result)
+            .unwrap()
+            .contains("FIRST_REAL_SOURCE")
+    );
     assert!(project.join(".codanna/index/index.meta").is_file());
     assert!(!home.join(".codanna/models").exists());
     client.cancel().await.unwrap();
@@ -124,7 +135,10 @@ async fn hardening_workspace_bootstrap_empty_config_and_ignore_rules_remain_auth
     let text = serde_json::to_string(&result).unwrap();
     assert!(text.contains("INCLUDED_SOURCE"), "{text}");
     assert!(!text.contains("EXCLUDED_SOURCE"), "{text}");
-    assert_eq!(fs::read(project.join(".codanna/settings.toml")).unwrap(), config);
+    assert_eq!(
+        fs::read(project.join(".codanna/settings.toml")).unwrap(),
+        config
+    );
     assert_eq!(fs::read(project.join(".codannaignore")).unwrap(), ignores);
     client.cancel().await.unwrap();
 }

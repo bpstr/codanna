@@ -118,7 +118,9 @@ fn read_config_bytes(path: &Path) -> Result<Vec<u8>, ErrorData> {
 
 fn validate_generation(metadata: &IndexMetadata) -> Result<Status, ErrorData> {
     if metadata.emission_version != Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION) {
-        return Err(super::internal("Initial index has incompatible emission semantics"));
+        return Err(super::internal(
+            "Initial index has incompatible emission semantics",
+        ));
     }
     if metadata.file_count > MAX_FILES {
         return Err(super::internal(
@@ -138,7 +140,9 @@ fn validate_generation(metadata: &IndexMetadata) -> Result<Status, ErrorData> {
 
 fn publish(build: Build, ct: &CancellationToken) -> Result<Status, ErrorData> {
     if ct.is_cancelled() {
-        return Err(super::internal("Workspace bootstrap cancelled before publication"));
+        return Err(super::internal(
+            "Workspace bootstrap cancelled before publication",
+        ));
     }
     if read_config_bytes(&build.source_config)? != build.source_config_bytes {
         return Err(super::internal(
@@ -152,7 +156,9 @@ fn publish(build: Build, ct: &CancellationToken) -> Result<Status, ErrorData> {
         return Ok(status);
     }
     if !staged.join("tantivy/meta.json").is_file() {
-        return Err(super::internal("Initial index has no committed code generation"));
+        return Err(super::internal(
+            "Initial index has no committed code generation",
+        ));
     }
     // A concurrent explicit writer wins. Never replace its nonempty output.
     if build.destination.exists()
@@ -177,7 +183,10 @@ fn publish(build: Build, ct: &CancellationToken) -> Result<Status, ErrorData> {
     fs::rename(&staged, &build.destination).map_err(super::internal)?;
     #[cfg(unix)]
     File::open(
-        build.destination.parent().ok_or_else(|| super::internal("Index has no parent"))?,
+        build
+            .destination
+            .parent()
+            .ok_or_else(|| super::internal("Index has no parent"))?,
     )
     .and_then(|file| file.sync_all())
     .map_err(super::internal)?;
@@ -188,7 +197,9 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     let source_config_bytes = read_config_bytes(&workspace.config_path)?;
     let mut settings = read_settings(&workspace.root).map_err(super::internal)?;
     if read_config_bytes(&workspace.config_path)? != source_config_bytes {
-        return Err(super::internal("Workspace configuration changed during setup; retry"));
+        return Err(super::internal(
+            "Workspace configuration changed during setup; retry",
+        ));
     }
     let destination = confined_index_path(&workspace.root, &settings).map_err(super::internal)?;
     if destination.join("index.meta").is_file() {
@@ -222,9 +233,15 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     }
     let mut roots = Vec::new();
     for source in &settings.indexing.indexed_paths {
-        let path = workspace.root.join(source).canonicalize().map_err(super::internal)?;
+        let path = workspace
+            .root
+            .join(source)
+            .canonicalize()
+            .map_err(super::internal)?;
         if !path.starts_with(&workspace.root) {
-            return Err(super::internal("Automatic indexing cannot include external source roots"));
+            return Err(super::internal(
+                "Automatic indexing cannot include external source roots",
+            ));
         }
         roots.push(path);
     }
@@ -277,8 +294,11 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     settings.semantic_search.enabled = false;
     settings.file_watch.enabled = false;
     let config = staging.path().join("settings.toml");
-    fs::write(&config, toml::to_string_pretty(&settings).map_err(super::internal)?)
-        .map_err(super::internal)?;
+    fs::write(
+        &config,
+        toml::to_string_pretty(&settings).map_err(super::internal)?,
+    )
+    .map_err(super::internal)?;
     Ok(Plan::Build(Build {
         _lock: lock,
         staging,
