@@ -1,0 +1,17 @@
+name: Retrieval fixture contracts
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fixture-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check fixture manifest without models
+        run: python3 contributing/retrieval/run.py --check
+      - name: Test evaluator contracts without Codanna or embeddings
+        run: python3 -m unittest discover -s contributing/retrieval -p 'test_run.py'
