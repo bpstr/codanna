@@ -1,5 +1,7 @@
 //! Bounded, code-only first indexing. Build privately and publish only a complete
 //! generation. Existing nonempty indexes are never cleared or silently rebuilt.
+mod discovery;
+
 use super::budget::Budget;
 use crate::init::workspaces::{Workspace, confined_index_path, read_settings};
 use crate::storage::IndexMetadata;
@@ -9,7 +11,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -248,39 +250,7 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     if roots.is_empty() {
         roots.push(workspace.root.clone());
     }
-    let mut walker = ignore::WalkBuilder::new(&roots[0]);
-    for root in roots.iter().skip(1) {
-        walker.add(root);
-    }
-    walker
-        .follow_links(false)
-        .parents(false)
-        .git_global(false)
-        .require_git(false)
-        .add_custom_ignore_filename(".codannaignore");
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut files = 0u32;
-    let mut entries = 0usize;
-    let mut bytes = 0u64;
-    for entry in walker.build() {
-        entries += 1;
-        if ct.is_cancelled() || Instant::now() >= deadline || entries > 100_000 {
-            return Err(super::internal(
-                "Initial source discovery exceeded its budget; use explicit codanna index for this workspace",
-            ));
-        }
-        let entry = entry.map_err(super::internal)?;
-        if entry.file_type().is_some_and(|kind| kind.is_file()) {
-            files += 1;
-            bytes = bytes.saturating_add(entry.metadata().map_err(super::internal)?.len());
-            if files > MAX_FILES || bytes > 512 * 1024 * 1024 {
-                return Err(super::internal(
-                    "Workspace exceeds automatic indexing limits (50,000 files / 512 MiB); use explicit codanna index",
-                ));
-            }
-        }
-    }
-    if files == 0 {
+    if !discovery::has_sources(&settings, &roots, ct)? {
         return Ok(Plan::Complete(Status::Empty));
     }
     let staging = tempfile::Builder::new()
