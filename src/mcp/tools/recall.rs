@@ -48,15 +48,19 @@ pub fn scope_for_root(root: &Path) -> String {
     format!("project-v1:{}", hex::encode(hash.finalize()))
 }
 
-pub(super) async fn conversation_context(query: &str, limit: usize, root: Option<&Path>) -> String {
-    // Automatic/selected/router launches strip inherited workspace overrides.
-    // Explicit legacy --config launches may still opt into a named namespace.
-    let workspace = match std::env::var("CODANNA_RECALL_WORKSPACE") {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => match root {
-            Some(root) => scope_for_root(root),
-            None => return "Conversation recall unavailable: no workspace context.\n".into(),
-        },
+/// Explicit local bindings take precedence over legacy environment opt-ins.
+/// Merely configuring a workspace root on an HTTP server never enables recall.
+fn select_scope(bound: Option<&str>, legacy: Option<&str>) -> Option<String> {
+    bound
+        .or(legacy)
+        .filter(|scope| !scope.trim().is_empty())
+        .map(str::to_owned)
+}
+
+pub(super) async fn conversation_context(query: &str, limit: usize, bound: Option<&str>) -> String {
+    let legacy = std::env::var("CODANNA_RECALL_WORKSPACE").ok();
+    let Some(workspace) = select_scope(bound, legacy.as_deref()) else {
+        return "Conversation recall is disabled for this server.\n".into();
     };
     let binary = recall_binary();
     let mut command = Command::new(binary);
@@ -72,10 +76,9 @@ pub(super) async fn conversation_context(query: &str, limit: usize, root: Option
         .arg("--limit")
         .arg(limit.to_string());
     match capture(command).await {
-        Ok((status, bytes, detail)) if !status.success() => {
+        Ok((status, _, detail)) if !status.success() => {
             let detail = std::str::from_utf8(&detail).unwrap_or("recall command failed");
             let detail = detail.lines().next().unwrap_or("recall command failed");
-            let _ = bytes;
             format!("Conversation recall unavailable: {detail}\n")
         }
         Ok((_, bytes, _)) => match serde_json::from_slice::<Value>(&bytes) {
@@ -193,6 +196,16 @@ fn recall_binary() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hardening_workspace_recall_requires_explicit_binding_or_legacy_opt_in() {
+        assert_eq!(select_scope(None, None), None);
+        assert_eq!(
+            select_scope(Some("local"), Some("foreign")),
+            Some("local".into())
+        );
+        assert_eq!(select_scope(None, Some("legacy")), Some("legacy".into()));
+        assert_eq!(select_scope(None, Some(" ")), None);
+    }
     #[test]
     fn hardening_workspace_recall_scopes_distinguish_equal_basenames() {
         let temp = tempfile::tempdir().unwrap();

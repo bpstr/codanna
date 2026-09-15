@@ -122,15 +122,12 @@ impl CodeIntelligenceServer {
             output.push_str("Document search is not configured for this workspace.\n\n");
         }
 
-        // Snapshot the same canonical root used by code. Never hold the facade
-        // guard across the independently bounded recall subprocess request.
-        let root = self.facade.read().await.settings().workspace_root.clone();
         output.push_str("## Conversations\n");
         output.push_str(
             &super::recall::conversation_context(
                 query,
                 request.conversation_limit as usize,
-                root.as_deref(),
+                self.recall_scope.as_deref(),
             )
             .await,
         );

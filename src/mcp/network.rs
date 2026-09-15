@@ -2,12 +2,12 @@
 //! Session identity belongs to a freshly constructed server, never a clone shared
 //! across clients. Idle authorization expiry also closes the rmcp transport.
 
+use super::sessions::LocalSessions;
 use super::{CodeIntelligenceServer, auth::NetworkAuth, notifications::NotificationBroadcaster};
 use crate::{Settings, documents::DocumentStore, indexing::facade::IndexFacade};
 use axum::Router;
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-    session::{SessionManager, local::LocalSessionManager},
+    StreamableHttpServerConfig, StreamableHttpService, session::SessionManager,
 };
 use std::{
     sync::Arc,
@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct NetworkService {
     pub router: Router,
     #[cfg(all(test, feature = "https-server"))]
-    manager: Arc<LocalSessionManager>,
+    manager: Arc<LocalSessions>,
 }
 
 impl NetworkService {
@@ -31,7 +31,7 @@ impl NetworkService {
         cancellation: CancellationToken,
         auth: NetworkAuth,
     ) -> Self {
-        let manager = Arc::new(LocalSessionManager::default());
+        let manager = Arc::new(LocalSessions::default());
         let mut transport = StreamableHttpServerConfig::default()
             .with_cancellation_token(cancellation.child_token())
             .with_sse_keep_alive(Some(Duration::from_secs(15)))
@@ -89,7 +89,7 @@ impl NetworkService {
 
 async fn reap_sessions(
     auth: &NetworkAuth,
-    manager: &LocalSessionManager,
+    manager: &LocalSessions,
     now: Instant,
 ) -> anyhow::Result<()> {
     let mut failures = 0;
@@ -253,7 +253,7 @@ mod tests {
         client: Client,
         events: Arc<NotificationBroadcaster>,
         closed: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>,
-        manager: Arc<LocalSessionManager>,
+        manager: Arc<LocalSessions>,
         auth: NetworkAuth,
         stop: CancellationToken,
         task: tokio::task::JoinHandle<()>,

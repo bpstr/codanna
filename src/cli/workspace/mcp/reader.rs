@@ -162,6 +162,7 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
     if metadata.emission_version != Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION) {
         return Err(IndexError::General("Index semantics changed. Run codanna index in this workspace; reads will not rebuild it.".into()));
     }
+    let recall_scope = crate::mcp::tools::recall::scope_for_root(&root);
     let settings = Arc::new(settings);
     let owned = settings.clone();
     let facade = crate::runtime::blocking(move || {
@@ -173,7 +174,7 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
     })
     .await??;
     let reader = Reader {
-        code: CodeIntelligenceServer::new(facade),
+        code: CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope),
         settings,
         semantic: Arc::new(Lazy::default()),
         documents: Arc::new(Lazy::default()),
