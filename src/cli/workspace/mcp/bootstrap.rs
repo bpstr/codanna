@@ -195,6 +195,12 @@ fn publish(build: Build, ct: &CancellationToken) -> Result<Status, ErrorData> {
     Ok(Status::Ready)
 }
 
+fn try_bootstrap_lock(lock: &File) -> Result<bool, ErrorData> {
+    // Use the repository's existing fs4 dependency, not File::try_lock (1.89+).
+    // fs4 0.13 returns Ok(false) for contention; it is not lock ownership.
+    fs4::fs_std::FileExt::try_lock_exclusive(lock).map_err(super::internal)
+}
+
 fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData> {
     let source_config_bytes = read_config_bytes(&workspace.config_path)?;
     let mut settings = read_settings(&workspace.root).map_err(super::internal)?;
@@ -225,10 +231,8 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
         .truncate(false)
         .open(&lock_path)
         .map_err(super::internal)?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(Plan::Complete(Status::Busy)),
-        Err(error) => return Err(super::internal(error)),
+    if !try_bootstrap_lock(&lock)? {
+        return Ok(Plan::Complete(Status::Busy));
     }
     if destination.join("index.meta").is_file() {
         return Ok(Plan::Complete(Status::Ready));
