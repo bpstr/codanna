@@ -59,7 +59,9 @@ async fn wait_for(client: &Client, query: &str, expected: &str, forbidden: &str)
                 .as_ref()
                 .is_some_and(|value| value["result"]["ready"] == false)
             {
-                assert!(!text.contains("unavailable"), "{text}");
+                if text.contains("unavailable") {
+                    assert!(text.contains("changed"), "{text}");
+                }
             } else if text.contains(expected) && !text.contains(forbidden) {
                 assert_ne!(result.is_error, Some(true));
                 break text;
@@ -179,4 +181,38 @@ async fn hardening_workspace_live_elects_one_writer_and_takes_over_after_disconn
     source(&root, "AFTER_TAKEOVER");
     wait_for(&follower, "watched_symbol", "AFTER_TAKEOVER", "INITIAL").await;
     follower.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hardening_workspace_live_root_ignore_changes_reconcile_without_reconnect() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&root).unwrap();
+    source(&root, "VISIBLE_SOURCE");
+    let client = connect(&home, &root).await;
+    wait_for(&client, "watched_symbol", "VISIBLE_SOURCE", "FOREIGN").await;
+    // Both Git policy and Codanna-specific policy can narrow an existing graph.
+    for name in [".gitignore", ".codannaignore"] {
+        let path = root.join(name);
+        let original = fs::read_to_string(&path).unwrap_or_default();
+        fs::write(&path, format!("{original}\nlib.rs\n")).unwrap();
+        wait_for(
+            &client,
+            "watched_symbol",
+            "No matching code symbols",
+            "VISIBLE_SOURCE",
+        )
+        .await;
+        fs::write(&path, &original).unwrap();
+        wait_for(
+            &client,
+            "watched_symbol",
+            "VISIBLE_SOURCE",
+            "No matching code symbols",
+        )
+        .await;
+    }
+    client.cancel().await.unwrap();
 }

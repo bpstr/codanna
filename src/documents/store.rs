@@ -347,6 +347,9 @@ pub struct DocumentStore {
 
     /// Tantivy heap size in bytes.
     heap_size: usize,
+
+    /// Optional immutable local source boundary, shared by query snapshots.
+    workspace_root: Option<Arc<Path>>,
 }
 
 impl std::fmt::Debug for DocumentStore {
@@ -423,7 +426,20 @@ impl DocumentStore {
             embedding_cache: None,
             dimension,
             heap_size: 50_000_000, // 50MB default
+            workspace_root: None,
         })
+    }
+
+    /// Bind an already opened store to one canonical workspace. Validate existing
+    /// provenance once; returned hits are checked again after external commits.
+    pub(crate) fn restrict_workspace(&mut self, root: &Path) -> StoreResult<()> {
+        let root = root.canonicalize()?;
+        for path in self.file_states.keys() {
+            crate::indexing::facade::IndexFacade::contained_source(&root, path)
+                .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+        }
+        self.workspace_root = Some(Arc::from(root));
+        Ok(())
     }
 
     /// Enable embedding generation for semantic search.
@@ -770,6 +786,7 @@ impl DocumentStore {
             embedding_cache: None,
             dimension: self.dimension,
             heap_size: self.heap_size,
+            workspace_root: self.workspace_root.clone(),
         })
     }
 
@@ -1486,6 +1503,16 @@ impl DocumentStore {
                     .map(PathBuf::from)
                     .unwrap_or_default();
 
+                if let Some(root) = &self.workspace_root {
+                    if source_path.as_os_str().is_empty() {
+                        return Err(DocumentStoreError::Index(
+                            "Document result has no source provenance".into(),
+                        ));
+                    }
+                    crate::indexing::facade::IndexFacade::contained_source(root, &source_path)
+                        .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+                }
+
                 let heading_json = doc
                     .get_first(self.schema.heading_context)
                     .and_then(|v| v.as_str())
@@ -2152,5 +2179,52 @@ mod tests {
             reopened.collection_stats("beta").unwrap().chunk_count,
             before
         );
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn hardening_workspace_document_snapshots_reject_foreign_hits_after_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("one");
+        let foreign = temp.path().join("two");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(root.join("guide.md"), "workspace_topic ".repeat(30)).unwrap();
+        std::fs::write(
+            foreign.join("guide.md"),
+            "PRIVATE_WORKSPACE_TOPIC ".repeat(30),
+        )
+        .unwrap();
+        let config = |path: &Path| CollectionConfig {
+            paths: vec![path.to_path_buf()],
+            ..CollectionConfig::default()
+        };
+        let mut writer =
+            DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
+        writer
+            .index_collection("local", &config(&root), &ChunkingConfig::default())
+            .unwrap();
+        writer.restrict_workspace(&root).unwrap();
+        let mut snapshot = writer.query_snapshot();
+        // Simulate a later external writer that does not observe this reader's
+        // in-memory scope. A shallow query snapshot must retain its boundary.
+        writer
+            .index_collection("foreign", &config(&foreign), &ChunkingConfig::default())
+            .unwrap();
+        assert!(
+            snapshot
+                .search(SearchQuery {
+                    text: "PRIVATE_WORKSPACE_TOPIC".into(),
+                    ..SearchQuery::default()
+                })
+                .is_err()
+        );
+        let mut reopened =
+            DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
+        assert!(reopened.restrict_workspace(&root).is_err());
     }
 }

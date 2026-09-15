@@ -55,6 +55,7 @@ struct Snapshot {
     tantivy: Stamp,
     managed: bool,
     ignore: Option<Stamp>,
+    git_ignore: Option<Stamp>,
 }
 fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapshot, ErrorData> {
     let config = stamp(&workspace.config_path)?;
@@ -96,9 +97,16 @@ fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapsh
     } else {
         None
     };
+    let git_ignore_path = workspace.root.join(".gitignore");
+    let git_ignore = if git_ignore_path.try_exists().map_err(super::internal)? {
+        Some(stamp(&git_ignore_path)?)
+    } else {
+        None
+    };
     Ok(Snapshot {
         managed,
         ignore,
+        git_ignore,
         root: workspace.root.clone(),
         config,
         metadata: stamp(&index.join("index.meta"))?,
@@ -373,7 +381,8 @@ async fn load(
         let same_context = reader.snapshot.root == current.root
             && reader.snapshot.index == current.index
             && reader.snapshot.config == current.config
-            && reader.snapshot.ignore == current.ignore;
+            && reader.snapshot.ignore == current.ignore
+            && reader.snapshot.git_ignore == current.git_ignore;
         (reader.snapshot == current || (same_context && current.managed && reader.snapshot.managed))
             && !reader.peer.is_transport_closed()
     }) {

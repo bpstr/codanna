@@ -148,8 +148,9 @@ impl UnifiedWatcher {
         drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
+            // Keep fair selection: an always-ready event queue must not starve
+            // debounce drains, overflow reconciliation, or cancellation.
             tokio::select! {
-                biased;
                 _ = stop.cancelled() => return Ok(()),
                 // Handle incoming file events
                 Some(res) = self.event_rx.recv() => {
