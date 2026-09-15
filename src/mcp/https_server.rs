@@ -20,6 +20,14 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
     let validated_bind = crate::mcp::auth::validate_bind(&bind, true)?;
 
+    let _code_write_lease = if watch || config.file_watch.enabled {
+        Some(crate::storage::write_lease::CodeWriteLease::acquire(
+            &config.index_path,
+        )?)
+    } else {
+        None
+    };
+
     // Initialize logging with config
     crate::logging::init_with_config(&config.logging);
 

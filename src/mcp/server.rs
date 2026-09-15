@@ -321,6 +321,8 @@ impl CodeIntelligenceServer {
                 })?),
             };
         let (reindexed, symbols) = crate::runtime::mutate(&self.facade, move |indexer| {
+            let _lease = crate::storage::write_lease::CodeWriteLease::acquire(indexer.index_base())
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
             let paths = authorized_reindex_paths(indexer.settings(), requested.as_deref())?;
             let sources = crate::indexing::walker::FileWalker::new(Arc::clone(indexer.settings()))
                 .snapshot(&paths, 100_000, 10_000, 128 * 1024 * 1024)

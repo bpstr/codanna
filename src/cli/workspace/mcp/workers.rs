@@ -53,6 +53,8 @@ struct Snapshot {
     config: Stamp,
     metadata: Stamp,
     tantivy: Stamp,
+    managed: bool,
+    ignore: Option<Stamp>,
 }
 fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapshot, ErrorData> {
     let config = stamp(&workspace.config_path)?;
@@ -80,7 +82,23 @@ fn snapshot(workspace: &Workspace, previous: Option<&Snapshot>) -> Result<Snapsh
             confined_index_path(&workspace.root, &settings).map_err(super::internal)?
         }
     };
+    let managed = match previous.filter(|old| old.root == workspace.root && old.config == config) {
+        Some(old) => old.managed && !index.join("semantic/metadata.json").exists(),
+        None => {
+            let mut settings = read_settings(&workspace.root).map_err(super::internal)?;
+            settings.index_path = index.clone();
+            super::live::eligible(&settings)
+        }
+    };
+    let ignore_path = workspace.root.join(".codannaignore");
+    let ignore = if ignore_path.try_exists().map_err(super::internal)? {
+        Some(stamp(&ignore_path)?)
+    } else {
+        None
+    };
     Ok(Snapshot {
+        managed,
+        ignore,
         root: workspace.root.clone(),
         config,
         metadata: stamp(&index.join("index.meta"))?,
@@ -351,10 +369,14 @@ async fn load(
     let current = budget
         .run(&stop, move |_| snapshot(&selected, old_snapshot.as_ref()))
         .await?;
-    if let Some(reader) = previous
-        .as_ref()
-        .filter(|reader| reader.snapshot == current && !reader.peer.is_transport_closed())
-    {
+    if let Some(reader) = previous.as_ref().filter(|reader| {
+        let same_context = reader.snapshot.root == current.root
+            && reader.snapshot.index == current.index
+            && reader.snapshot.config == current.config
+            && reader.snapshot.ignore == current.ignore;
+        (reader.snapshot == current || (same_context && current.managed && reader.snapshot.managed))
+            && !reader.peer.is_transport_closed()
+    }) {
         return Ok(Event::Ready(reader.clone()));
     }
     drop(previous);
@@ -419,10 +441,15 @@ async fn load(
         let _permit = permit;
         tokio::select! { _ = close.cancelled() => {}, _ = stop.cancelled() => {}, _ = child.wait() => {} }
         let _ = service.close_with_timeout(Duration::from_secs(1)).await;
-        if child.try_wait().ok().flatten().is_none() {
+        // Give a native writer time to drain its in-flight mutation after stdio
+        // closes. Physical capacity stays owned until observed process exit.
+        if tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .is_err()
+        {
             let _ = child.start_kill();
+            let _ = child.wait().await;
         }
-        let _ = child.wait().await;
     });
     let mut tasks = tasks.lock();
     tasks.retain(|task| !task.is_finished());

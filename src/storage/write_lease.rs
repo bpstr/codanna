@@ -18,29 +18,47 @@ impl CodeWriteLease {
     pub fn try_acquire(index: &Path) -> IndexResult<Option<Arc<Self>>> {
         let absolute = match index.canonicalize() {
             Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::path::absolute(index)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::path::absolute(index)?
+            }
             Err(error) => return Err(error.into()),
         };
-        let parent = absolute.parent().ok_or_else(|| error("Code index has no parent"))?;
+        let parent = absolute
+            .parent()
+            .ok_or_else(|| error("Code index has no parent"))?;
         fs::create_dir_all(parent)?;
         let parent = parent.canonicalize()?;
         let mut name = OsString::from(".");
-        name.push(absolute.file_name().ok_or_else(|| error("Code index has no name"))?);
+        name.push(
+            absolute
+                .file_name()
+                .ok_or_else(|| error("Code index has no name"))?,
+        );
         name.push(".codanna-writer.lock");
         let path = parent.join(name);
         static HELD: OnceLock<Mutex<HashMap<PathBuf, Weak<CodeWriteLease>>>> = OnceLock::new();
-        let mut held = HELD.get_or_init(Mutex::default).lock().map_err(|_| IndexError::MutexPoisoned)?;
+        let mut held = HELD
+            .get_or_init(Mutex::default)
+            .lock()
+            .map_err(|_| IndexError::MutexPoisoned)?;
         held.retain(|_, lease| lease.strong_count() > 0);
         if let Some(lease) = held.get(&path).and_then(Weak::upgrade) {
             return Ok(Some(lease));
         }
         match fs::symlink_metadata(&path) {
-            Ok(meta) if !meta.is_file() => return Err(error("Code writer lock must be a regular file")),
-            Ok(_) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Ok(meta) if !meta.is_file() => {
+                return Err(error("Code writer lock must be a regular file"));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
         let named = fs::symlink_metadata(&path)?;
         let opened = file.metadata()?;
         if !named.is_file() || !opened.is_file() {
@@ -50,7 +68,9 @@ impl CodeWriteLease {
         {
             use std::os::unix::fs::MetadataExt;
             if named.dev() != opened.dev() || named.ino() != opened.ino() {
-                return Err(error("Code writer lock changed identity during acquisition"));
+                return Err(error(
+                    "Code writer lock changed identity during acquisition",
+                ));
             }
         }
         if !FileExt::try_lock_exclusive(&file)? {
@@ -67,7 +87,9 @@ impl CodeWriteLease {
         ))
     }
 }
-fn error(message: &str) -> IndexError { IndexError::General(message.into()) }
+fn error(message: &str) -> IndexError {
+    IndexError::General(message.into())
+}
 
 #[cfg(test)]
 mod tests {
@@ -82,7 +104,11 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         fs::remove_dir(&index).unwrap();
         fs::create_dir(&index).unwrap();
-        let file = OpenOptions::new().read(true).write(true).open(temp.path().join(".index.codanna-writer.lock")).unwrap();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp.path().join(".index.codanna-writer.lock"))
+            .unwrap();
         assert!(!FileExt::try_lock_exclusive(&file).unwrap());
         drop(first);
         assert!(!FileExt::try_lock_exclusive(&file).unwrap());

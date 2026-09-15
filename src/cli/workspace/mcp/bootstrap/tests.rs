@@ -53,6 +53,8 @@ fn prepared_build(temp: &tempfile::TempDir, files: u32) -> Build {
         .save(&staging.path().join("index"))
         .unwrap();
     Build {
+        _write_lease: crate::storage::write_lease::CodeWriteLease::acquire(&state.join("index"))
+            .unwrap(),
         _lock: lock,
         config: staging.path().join("settings.toml"),
         staging,
