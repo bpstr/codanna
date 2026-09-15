@@ -30,18 +30,35 @@ ambiguous: no files are created until a single scope is selected.
 An unscoped tool call may prepare settings and registration for its validated
 local session root. The first knowledge query schedules initial code-only
 indexing and can return `result.status = "indexing"`, `result.ready = false`.
-Retry the same query shortly. Empty roots return `empty` and are checked again
-on subsequent use, so adding the first source file does not require setup commands.
-Initialization and tools/list themselves do not index or load models.
+Retry the same query shortly. Initialization and tools/list themselves do not
+index or load models.
+
+Empty roots and folders containing only unsupported files return `empty`. They
+are checked again on subsequent use, so adding the first enabled source file does
+not require setup commands. Discovery consults the existing language registry
+and language-pack detector without creating parsers or models. A notes-only
+folder does not repeatedly spawn an indexer, and a zero-file staging generation
+is not published as a ready index. A genuinely indexed file with zero symbols
+is still a valid file, not an empty project.
 
 Automatic indexing disables embeddings for that indexing job, preserves existing
 settings, and never force-rebuilds nonempty data. New automatic settings disable
 semantic search until deliberately configured. It uses a private staging index,
 a per-workspace OS bootstrap lock, at most two indexing threads, a 50,000-file /
-512 MiB discovery ceiling, and a five-minute job deadline. Failed or oversized
-jobs return recovery guidance; the old index is not replaced. Explicit `codanna
-index` remains available for larger projects and recovery. Bootstrap locking is
-not a claim that every legacy CLI writer/watch path has been coordinated.
+512 MiB discovery ceiling, and a five-minute job deadline. Discovery counts
+unsupported entries toward its resource budget and propagates malformed ignore
+rules rather than silently broadening the source set.
+
+The child may inspect one overflow file beyond the normal file limit, but a
+generation exceeding that limit is rejected before publication. Configuration is
+compared with its setup snapshot before publication, so a changed source policy
+cannot publish the old build as current. Failed or oversized jobs return recovery
+guidance without replacing an existing index. These checks are not a transaction
+across arbitrary external source/configuration edits during a build.
+
+Explicit `codanna index` remains available for larger projects and recovery.
+Bootstrap locking coordinates automatic initial builders; it is not a claim
+that every legacy CLI writer/watch path uses the same ownership protocol.
 
 `workspace` (ID/alias) and `project_path` are mutually exclusive per-request
 overrides. A tool-argument path may select an already registered workspace but
@@ -64,20 +81,24 @@ cannot forcibly interrupt a running kernel filesystem operation.
 
 One shared load per workspace serves concurrent callers. The lifecycle lock is
 not held across tool RPCs. Each reader permits four concurrent requests. Bad
-backend parameters retain their original MCP error code and do not restart a
+backend parameters retain their original MCP error category and do not restart a
 healthy reader. Query cancellation targets the individual backend request rather
-than closing a peer used by other calls.
+than closing a peer used by other calls. Generated-router validation that returns
+tool-error content also retains that existing wire contract.
 
 Warm readers reuse metadata snapshots for one second. Refresh checks file
 metadata; configuration is reparsed and a reader replaced when the corresponding
 snapshot changes. This is bounded refresh consistency, not a transactional view
-of concurrent external writes. Explicit selectors still resolve through the
-registry on each request, so removed registrations cannot silently remain defaults.
+of concurrent external writes. Registry selection is still checked on each
+request. Removing recursive scans and model initialization does not mean that
+warm routing performs no filesystem operations or that a speedup has been measured.
 
 Readers use strict lite facade loading. Lexical search/statistics do not initialize
 semantic models. Existing semantic data loads on the first semantic operation;
-documents load on first document/context use. No load error creates a replacement
-empty index. Recall remains disabled until workspace-specific bindings exist.
+documents load on first document/context use. Shared facility initialization
+survives cancellation of its first waiter and retains failures rather than
+starting duplicate work. No load error creates a replacement empty index.
+Recall remains disabled until workspace-specific bindings exist.
 
 The router owns at most four live reader processes. A process permit remains held
 until child exit is observed, including during eviction. Initial index jobs have
@@ -98,10 +119,16 @@ their separate modes. The router exposes tools, not unscoped mutations, resource
 watch subscriptions, or a new HTTP endpoint. First-use cache creation is reflected
 in tool annotations; the new mode is not advertised as strictly read-only.
 
+Automatic bootstrap establishes an initial code index; it is not continuous
+source watching. Once a populated index exists, later source edits still use the
+existing explicit indexing/watching modes. Reloading a published index generation
+is different from indexing changed source files.
+
 ## Verification
 
 ```bash
 cargo test --test workspace_mcp --all-features
+cargo test --test workspace_bootstrap --all-features
 cargo test --test workspace_auto --all-features
 cargo test --test workspace_cli --all-features
 cargo test --lib workspace_ --all-features
@@ -110,5 +137,13 @@ cargo test --lib workspace_ --all-features
 The MCP suite includes fresh non-Git projects with identical symbol names and no
 settings/indexing calls; separate cwd-based sessions; a broadly indexed parent;
 an empty project receiving its first file; invalid-argument recovery; and root
-cache invalidation. Fixtures clear credentials and disable inference. Test code
-alone is not a passing result; consult the commit-specific CI evidence in the PR.
+cache invalidation. A deterministic controlled-reader test proves concurrent
+RPC overlap and cancellation of one request without closing another's peer.
+Lexical queries are tested against a configured local mock embedding endpoint
+and must make zero requests.
+
+The bootstrap suite covers unsupported-file-only projects receiving their first
+source, preserved empty source configuration and ignore rules, empty/overflow
+publication rejection, changed configuration, and cancellation preserving
+existing storage. Fixtures clear credentials and disable inference. Test code
+alone is not a passing result; consult commit-specific CI evidence in the PR.
