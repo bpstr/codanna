@@ -1,265 +1,218 @@
 # Isolated workspaces for coding-agent projects
 
 **Status:** Architecture and acceptance contract for PR #34. Automatic local
-setup, registry administration, and local read-only MCP routing are implemented
-on the review branch. The entire contract is not yet implemented or qualified.
+setup/indexing, registry administration, and local MCP routing are implemented
+on the review branch. The complete optional architecture is not yet qualified.
 See the [workspace guide](../workspaces.md), [MCP guide](../workspace-mcp.md), and
-[delivery checklist](multi-workspace-implementation.md) for the distinction.
+[delivery checklist](multi-workspace-implementation.md) for current limitations.
 
-## 1. Purpose
+## 1. Purpose and required experience
 
-Codanna must serve multiple independent coding-agent projects without mixing
-their code graphs, search results, configuration, documents, or conversation
-context. The feature is generic: any Codex, Claude Code, IDE, or other MCP client
-can work with any supported local codebase. No customer's projects, repository
-names, directory layout, or business/product structure are part of the contract.
+Use one project-agnostic MCP definition:
 
-A **workspace** is an independently indexed source and knowledge boundary.
-Normally it is the project or checkout the developer opens. It can contain one
-repository, a monorepo, or several repositories intentionally indexed together.
-A parent workspace is optional, not a prerequisite for using separate projects.
-
-```text
-MCP connection
-  -> workspace ID -> independent graph/index and runtime
-  -> workspace ID -> independent graph/index and runtime
-  -> ...
+```json
+{"mcpServers":{"codanna":{"command":"codanna","args":["workspace","serve"]}}}
 ```
 
-Aliases and locations are discovered or supplied at runtime. All example labels
-in documentation and tests are synthetic placeholders, not built-in workspaces.
-Never infer shared ownership from matching names, remotes, or sibling locations.
+Open an independent local project in a coding agent and query its code. Local
+client roots or inherited launch cwd select the workspace. A fresh project must
+prepare its configuration, registration, and initial code index automatically;
+manual workspace IDs, repository lists, and `codanna index` are not prerequisites.
+During setup return indexing/empty/error status, never another project's results.
 
-## 2. Required experience
+A workspace is an independent graph/index and knowledge boundary. Normally it is
+the opened project or checkout. It can also be a monorepo or an intentionally
+opened combined source root. No customer's project names, directory topology,
+or business/product hierarchy are part of this feature. All examples and fixtures
+must be synthetic; aliases and canonical locations are runtime data.
 
-In each intended workspace, `codanna index` discovers the source boundary and
-performs initial configuration/registration automatically. Standard layouts must
-not require manual IDs, a repository inventory, or an MCP entry per project.
-Existing source lists, exclusions, aliases, and local data remain authoritative.
-
-One reusable local MCP configuration uses `codanna workspace serve`. Supported
-client roots select the workspace on an unscoped request. Explicit workspace IDs,
-aliases, and registered project paths are overrides, not normal setup requirements.
-A client without roots can use its launch directory. An ambiguous or unknown scope
-must produce guidance rather than query a different graph.
-
-Initial indexing is currently explicit. Future automatic first indexing must run
-only after protocol initialization, with authorized scope, visible progress,
-resource/inference budgets, cancellation, and no silent destructive rebuild.
-
-## 3. Invariants
+## 2. Invariants
 
 1. Each workspace has an independent index/graph and mutation boundary.
-2. A request resolves its workspace once and keeps it immutable until completion.
-3. No process-global mutable current workspace exists.
-4. Every routed result identifies its owning workspace; exact references retain it.
-5. Matching symbol, file, or collection names never join independent graphs.
-6. Discovery is not indexing, and client roots are not filesystem authorization.
-7. One corrupt index, unavailable directory, or worker failure must not disable
-   unrelated workspaces.
-8. Configuration, code, documents, recall, resolver caches, and watch state use the
-   same workspace context when those capabilities are supported.
-9. Existing single-workspace commands remain supported.
-10. No real user projects or personal filesystem paths belong in shipped examples,
-    instructions, fixtures, defaults, or acceptance requirements.
+2. Resolve a request once; keep that scope immutable until the request completes.
+3. Never switch process-global cwd or environment to route concurrent requests.
+4. Keep result and exact-reference ownership explicit. Equal symbol names or
+   local IDs do not identify the same object across independent indexes.
+5. A containing index, equal repository names, or common parent directory is not
+   evidence that independently opened projects belong to the same graph.
+6. An unavailable or initializing workspace never falls back to another graph.
+7. First-use setup is local, bounded, code-only, and non-destructive. No paid
+   embedding batch or force rebuild is an implicit onboarding requirement.
+8. Supported code, document, recall, cache, and watcher operations use the same
+   workspace context. Disable unsupported recall rather than mix namespaces.
+9. Preserve existing explicit configuration, source exclusions, and local data.
+10. Readable metadata and successful routing are not proof of every optional
+    feature, complete indexing, or measured performance.
 
-## 4. Registry and identity
+## 3. Discovery and identity
 
-Evolve the existing `~/.codanna/projects.json` registry, not a competing database.
-The current implementation retains its v1 schema and existing IDs. The registry
-holds identity, aliases, canonical locations, and routing metadata. Workspace
-settings remain in the workspace configuration; do not duplicate authoritative
-source/provider/index settings in the registry.
+The local session root is the authority for automatic setup. An exact opened
+workspace configuration is validated. Source subdirectories may resolve to their
+nearest checkout/project manifest. An unrelated ancestor's configuration alone
+must not widen an independently opened plain project. A malformed unrelated
+ancestor likewise must not invalidate a valid nearer boundary.
 
-Keep stable workspace identity distinct from a mutable alias and checkout path.
-Canonicalize symlink-equivalent roots. A move preserves identity only through a
-validated relocation; a second live clone or Git worktree must not silently share
-mutable index storage. Equal basenames are valid at different locations and need
-unambiguous generated aliases or ID selection.
+Diagnostic discovery and query resolution are different operations. Only explicit
+diagnostics/indexing may inventory descendants. Routine root selection performs
+bounded ancestor checks, not repository enumeration. A model-cache-only `.codanna`
+directory is not a workspace. Directory symlinks must not silently extend source
+ownership. HOME, filesystem roots, and broad system directories are not implicit
+projects; ordinary project directories beneath them remain valid.
 
-Registry updates require an OS-backed lock around the complete read-modify-write
-transaction, atomic replacement, appropriate synchronization, and stale-snapshot
-protection. Corrupt input and unsupported versions must be preserved, not replaced
-with an empty registry. Migration must be recoverable and document old-binary
-compatibility. Older binaries do not participate in new locking protocols.
+Intentional multi-root operation remains available by opening/selecting the
+containing root itself. It does not make that root the automatic owner of every
+child checkout. No sibling scan or hand-maintained membership list is needed for
+the normal independent-project workflow.
 
-Registration alone must not rebuild an index. Unregistration removes routing
-metadata, not source/configuration/index files. The current router rejects new
-calls after unregistration; in-flight work and independent servers are not revoked.
+Reuse `~/.codanna/projects.json` and its existing IDs. Aliases are mutable selectors,
+not identity. Canonical locations distinguish separate clones/worktrees even when
+names or remotes match. A validated move may retain its ID; a second live checkout
+must not silently share mutable storage. Registry updates hold an OS-backed lock
+through the full read-modify-write transaction, use atomic replacement, and
+reject stale snapshots, corruption, and unsupported versions without data loss.
+Older binaries do not participate in the new coordination protocol.
 
-## 5. Discovery and source boundaries
+## 4. First-use indexing
 
-Resolve from an explicit start path without changing the router's process cwd.
-Use valid workspace configuration and configured-source ownership, then the
-nearest checkout or recognized project manifest. A developer can establish a
-multi-root workspace by indexing its intended containing directory once.
+Handshake and tool enumeration remain cheap. An unscoped local request can prepare
+a validated session's metadata; the first knowledge request schedules its initial
+code-only index. Arbitrary `project_path` tool arguments can select an existing
+registration, not authorize bootstrap of unrelated filesystem locations. Validate
+an entire client-root set before creating any state. Ambiguous roots require a
+scope choice rather than merging graphs.
 
-An established parent may own configured descendants, including child repositories
-with standalone settings. Discovery must not overwrite or import those child
-settings/indexes. An unconfigured checkout must not scan its siblings and invent
-a parent workspace. Generic HOME/filesystem roots are not automatic choices.
+Use the existing indexing engine with a private staging configuration/generation.
+Disable semantic indexing for this job, preserve existing project settings, and
+publish only after success and validation. A per-workspace bootstrap lock prevents
+independent automatic sessions from publishing competing initial generations.
+Never recursively delete active storage to take ownership or heal a failed read.
 
-A model-cache-only `.codanna` directory is not a workspace. A malformed applicable
-configuration must return an error rather than silently select another boundary.
-Discovery is bounded, skips dependency/cache directories and directory symlinks,
-and reports truncation. Diagnostic repository inventory is not an index plan or
-proof of persisted repository ownership.
+Admission checks count visited entries/files/bytes, respect ignore rules, and use
+the existing language registry and language-pack detector. Unsupported-file-only
+folders remain empty without repeatedly launching indexers. When an enabled
+source file arrives, the next use can bootstrap it. Zero symbols in a genuinely
+indexed file is not equivalent to having no source files.
 
-Fresh source defaults may be created only for absent/empty storage. Never widen
-an existing populated index merely because its configured source list is empty.
-Explicit external source roots require supported, validated membership; path
-traversal or a copied configuration cannot redirect one workspace to another index.
+Bound worker threads, discovery, total job duration, and file count. An overflow
+witness prevents a capped pass from being published as a complete allowed index.
+Reject publication when the configuration changed since setup. Preserve existing
+nonempty indexes and report actionable recovery errors rather than force rebuilding.
+These guards are not a transaction over arbitrary concurrent filesystem edits;
+complete shared writer coordination remains a separate gate.
 
-## 6. Optional repositories within a workspace
+Automatic first indexing is distinct from continuous file watching. After an
+index is populated, subsequent source edits currently use the established
+explicit indexing/watching modes. Reopening a newly published index generation
+does not itself index newly changed source files.
 
-The primary feature is independent workspace graphs. A workspace can also contain
-multiple repositories without becoming a special product-specific concept.
-Repository membership should be derived under its established source boundary,
-respecting exclusions. Manual membership is an override for unusual layouts.
+## 5. Runtime and Rust implementation rules
 
-Preserve repository provenance for code, documents, and recall as this capability
-is completed. Identical relative paths in separate members must remain distinct.
-Resolver candidates must not connect members based solely on matching names.
-Cross-repository edges within a workspace require verifiable dependency evidence;
-unresolved relationships remain unresolved. Cross-workspace graph traversal is
-not implied by either membership or shared MCP serving.
+Reuse an isolated reader per active workspace with fixed cwd and configuration.
+Production modules live under `src/cli/workspace/mcp`, not cross-directory
+`#[path]` aliases. Each stdio frontend has its own bounded reader pool; one MCP
+configuration does not imply a machine-wide daemon or one process for all clients.
 
-Do not maintain independently editable repository and `indexed_paths` lists that
-silently drift. Preview any migration and specify which representation is
-authoritative. Attaching a source is not permission to merge existing child indexes.
-Removing membership must make detached data non-queryable through that scope;
-cleanup needs explicit, safe publication semantics.
+Use explicit loading/indexing/ready/empty/busy/failed states. Concurrent callers
+share initialization; dropping one waiter does not restart it. Lifecycle locks
+cover short state transitions, not asynchronous RPCs. Bound simultaneous queries
+per reader and target cancellation at the individual request, not its shared peer.
+Preserve typed backend parameter/protocol errors instead of treating every error
+as a crashed process or imposing a cooldown on correctable tool arguments.
 
-Repository IDs and generation-qualified references are future persisted/API work.
-If row semantics change, use existing format/emission compatibility gates and
-require an explicit migration or rebuild. Do not mix old and new row semantics
-or promise rebuild-free storage changes.
+Admission must cover discovery, diagnostics, refresh, and queries. Blocking work
+owns its permit until the closure actually exits, even after cancellation or a
+caller deadline. Do not claim that timing out a `spawn_blocking` handle stops an
+already running kernel filesystem operation. Bound traversal and check cancellation
+between operations wherever possible.
 
-## 7. Runtime architecture
+Validate immutable executable identity once. Use cached metadata snapshots and
+coalesced refresh rather than rereading/hashing all files or rebuilding commands
+on every warm query. Preserve scope validation when optimizing. Do not claim zero
+filesystem work: root/registry validation and bounded refresh still perform I/O.
+Measure warm routing, cold index loading, and semantic initialization separately.
 
-Keep the existing single-workspace engine behind a router. Start with lazy,
-isolated workers, one per active workspace, with fixed configuration and cwd.
-Do not mutate the parent's environment or cwd to service a request. Resolver and
-recall code with process-global assumptions must remain isolated until explicit
-context injection replaces those assumptions.
+Load a lite facade for lexical/statistics queries. Initialize existing semantic
+facilities only when a semantic operation needs them; load documents lazily on
+relevant calls. Facility initialization is shared and retains errors, so canceled
+waiters cannot duplicate model/backend initialization. A failed read never creates
+a replacement empty index.
 
-The local implementation exposes `codanna workspace serve`. Each stdio connection
-has its own worker pool; sharing a registry does not create a machine-wide daemon.
-Ordinary `codanna serve` stays workspace-bound and retains its supported behavior.
+Track physical reader permits through observed child exit, not merely cache
+removal. Pin active calls and startup during eviction. Shutdown cancels owned
+jobs and awaits transport/process cleanup. Model files, model runtime memory,
+and workspace vectors are separate resources; do not introduce a new inference
+service or duplicate downloaded assets to implement workspace isolation.
 
-A future shared HTTP service must reuse existing authentication, authorization,
-host/origin, session-ownership, and TLS controls. Do not expose registry-wide
-filesystem access through a new unauthenticated endpoint. Enumerate only visible
-workspaces and avoid private host paths in remote responses/errors.
+## 6. MCP and output contracts
 
-Bound worker/admission counts, cold loads, query queues, indexing, and memory.
-Coalesce concurrent loads and pin active/queued requests before eviction. Use
-per-workspace synchronization rather than serializing independent graphs behind
-one giant lock. Cancel or close timed-out workers, back off failures, and never
-blindly replay mutations after an uncertain disconnect.
+Explicit workspace ID/alias or registered `project_path` overrides scope for one
+request only. Without an override, capability-checked client roots take precedence
+over launch cwd. Cwd is a fallback only when the client does not provide roots.
+A server launched from HOME with no trustworthy root signal must return a scope
+error; it cannot infer another process's later directory changes.
 
-Shared model files, model runtime memory, and workspace vectors are different
-resources. Keep the existing download cache; do not introduce a shared embedding
-service or new inference spending implicitly.
+Support bounded legacy roots RPC and negotiated modern MRTR root input. Cache
+root responses only when the client promises change notifications. Invalidation
+uses a root generation; continuations are random, expiring, single-use, and bound
+to original tool/arguments/generation. Root updates affect future requests, not
+an already executing request. Reject malformed, remote, excessive, ambiguous,
+or changed input without an unrelated fallback.
 
-## 8. MCP scope and result contracts
+Reuse generated backend tool schemas and keep strict argument validation.
+`list_workspaces` and `get_workspace` do not load every index/model. First-use
+cache writes must be reflected honestly in tool annotations; this mode is not
+strictly read-only. Every routed result contains readable and structured workspace
+ownership. Preserve backend tool errors and JSON-RPC error categories.
 
-Resolve explicit workspace or `project_path` first, within the authorized scope.
-In the local router, supported client roots take precedence over the launch
-directory; the launch directory is the fallback only without roots support.
-An explicit override affects its request only. Multiple roots are unambiguous
-only when all map to the same registered workspace.
+Keep the returned workspace ID on symbol-ID follow-ups. Generation-qualified
+references remain future API work; raw IDs must be looked up again after a full
+rebuild. Namespace future resource URIs, continuations, subscriptions, telemetry,
+and receipts just as carefully as results. Until scoped mutations/resources/
+subscriptions exist, reject them rather than forward to an arbitrary reader.
 
-Check client capabilities and negotiated protocol before requesting roots. The
-implementation supports legacy roots RPC and modern MRTR roots input. Bind
-continuations to the original request with random, expiring, single-use handles.
-Unknown, remote, malformed, changed, or excessive roots must not cause fallback
-to an unrelated graph. Root changes affect future requests, not in-flight scope.
+## 7. Optional follow-on capabilities
 
-Tools accept `workspace` or `project_path`, mutually exclusive. Reuse generated
-backend schemas and preserve strict argument validation. `list_workspaces` and
-`get_workspace` must not load every index or model. Returned text and structured
-content identify the owning workspace. Agents must retain that ID on local
-symbol-ID follow-ups and look up IDs again after a full rebuild.
+These are not prerequisites for the basic independent-project experience:
 
-Eventually exact references should include workspace, repository where applicable,
-local ID, and index generation. Mismatched references are errors, not permission
-to fall back to a name search. Namespace cache keys, resources, subscriptions,
-continuations, telemetry, and job receipts, not only successful tool responses.
+- Repository-qualified provenance and verified cross-repository relationships
+  inside an intentionally combined workspace. Do not create graph edges from
+  equal names or semantic similarity. Row changes need versioned compatibility
+  and migration/rebuild rules, not mixed old/new persisted semantics.
+- Workspace-bound conversation recall. Imported history needs mandatory namespace
+  filters; historical text is evidence rather than current instructions. Current
+  automatic/selected/router launches disable inherited recall. Document collections
+  also retain workspace ownership and cannot silently fall back to another scope.
+- One writer/watcher authority across every legacy CLI and MCP path, persistent
+  watch leases, scoped subscriptions, and durable reindex receipts. Registry locks
+  and bootstrap locks alone do not qualify this larger lifecycle.
+- A shared authenticated HTTP service/daemon. Reuse existing auth, host/origin,
+  session ownership, TLS, and visibility controls. Never expose registry-wide
+  filesystem access through a new unauthenticated endpoint.
+- Explicit federated search across workspaces with bounded fan-out, authorized
+  targets, labelled partial failures, and evaluated ranking. Search aggregation
+  never implicitly merges graph topology.
 
-The current local router advertises read-only tools only. Until custom mutations,
-resources, and subscriptions can be scoped correctly, reject them instead of
-forwarding them to a default worker. Shared read-only access must not silently
-expand a pre-existing connection's scope.
+## 8. Verification and delivery
 
-## 9. Documents and conversation recall
+Start with two fresh temporary plain project directories containing identical
+symbol names but different content. No `.codanna`, registry, manual indexing, or
+project-specific MCP settings may precede connection. Unscoped queries from each
+must initialize its own graph and never return the other's content. Repeat with
+Git projects, broad ancestor indexes, aliases, and roots supplied from HOME.
 
-`search_context` must bind code, documents, and recall through one context.
-Workspace-specific recall must never come from an unrelated inherited global
-selector. Current selected/automatic/router launches disable inherited recall
-until a reliable binding exists; explicit `--config` retains legacy behavior.
+Cover empty and unsupported-file-only projects receiving their first source;
+existing exclusions/configuration; malformed ignore files; changed configuration
+at publication; cap overflow; canceled initialization; two connections initializing
+the same root; invalid arguments followed immediately by valid requests; shared
+initialization and overlapping RPCs; request-local cancellation; metadata refresh;
+physical child cleanup; and no embedding calls for lexical tools.
 
-Map imported conversation checkout paths to their owning workspace without
-relabeling unrelated history. Shared physical recall storage is acceptable only
-with mandatory namespace filters and provenance. Workspace-wide conversations
-or documents do not need a fabricated repository owner. Historical content is
-evidence, not active instructions or current policy.
+Use synthetic fixtures, cleared credentials, and mocked/disabled inference only.
+Do not index real user projects, load their secrets, or spend paid inference in
+automated validation. Run focused tests, repository quick/full checks, and platform
+witnesses. Record exact commit/run evidence and separate code inspection from
+executed tests. Numerical speedup claims require actual benchmarks.
 
-Collection aliases are local to their workspace and, when needed, repository.
-A narrowed request must not silently search another workspace/member as fallback.
-Keep source-specific language settings and ignore rules explicit; do not layer
-nested standalone configurations without a supported migration policy.
-
-## 10. Writers, watching, and rebuilds
-
-A complete implementation needs one writer/watcher authority per storage set
-across processes, including CLI writers and independently launched MCP clients.
-An in-memory router lock or registry lock alone does not provide that guarantee.
-Use storage-safe OS coordination; forward to the owner or return a scoped busy
-error. Never delete a live writer's files to take ownership.
-
-Distinguish persistent watch leases from query-only idle workers. Eviction must
-not silently stop a promised continuous watch. Reindex jobs need status, bounded
-execution, cancellation semantics, and unambiguous completion/failure receipts.
-
-Validate the whole selected source set before destructive work. Missing roots,
-partial traversal, or authorization errors must not erase valid data and report
-success. Keep prior generations recoverable until safe publication. Partial
-rebuilds must not accidentally clear untouched members or other workspaces.
-
-## 11. Health, diagnostics, and future search
-
-Report configured, loading, available, busy, missing-root, rebuild-required, and
-failed states honestly. Metadata/directory presence is not proof of a complete
-index or successful embeddings. Include workspace identity in logs and recovery
-commands, and measure warm routing separately from cold/model startup.
-
-Normal queries target one workspace. Optional federated search is later work:
-authorize every target, bound fan-out and inference, retain provenance, and report
-partial failures. Independent rankings are not necessarily score-comparable;
-start with grouped results or an evaluated deterministic fusion policy. Searching
-multiple graphs must never implicitly merge their topology.
-
-## 12. Acceptance and delivery
-
-Use synthetic temporary workspaces only. Test unrelated single-repository graphs,
-a workspace with multiple members, duplicate directory basenames, moved paths,
-clones/worktrees, and nested folders. Vary arbitrary aliases and locations so no
-particular name or repository structure is a prerequisite.
-
-Deliberately collide symbol names, relative paths, collection aliases, and local
-IDs. Verify exact ownership, scoped queries/graph traversal, stale-reference
-rejection where supported, and consistent code/doc/recall filtering. Run concurrent
-clients against different graphs and verify per-request overrides do not alter
-each other's defaults. Rebuilding/removing one workspace must preserve the other.
-
-Cover configuration and registry corruption, missing roots, symlink escapes,
-writer contention, worker failures, cancellation, admission/eviction, root changes,
-unknown roots, protocol variants, and shutdown. Use deterministic local data,
-cleared credentials, and mocked/disabled inference; never index a user's real
-projects or spend paid inference during automated validation.
-
-The [delivery checklist](multi-workspace-implementation.md) tracks remaining
-qualification. Keep the PR draft until its intended merge scope is reviewed.
-Do not treat a routing test as proof of complete repository graph semantics,
-shared-daemon behavior, storage locking, recall isolation, or all-platform support.
+Keep incomplete qualification gates visible in the linked checklist and PR.
+Nothing in this contract authorizes merging, deploying, or replacing an installed
+binary without a separate user request.
