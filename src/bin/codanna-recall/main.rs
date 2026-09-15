@@ -67,7 +67,10 @@ async fn main() -> Result<()> {
     let workspace = match cli.workspace {
         Some(workspace) => workspace,
         None => {
-            let directory = cli.project_path.map(Ok).unwrap_or_else(std::env::current_dir)?;
+            let directory = cli
+                .project_path
+                .map(Ok)
+                .unwrap_or_else(std::env::current_dir)?;
             codanna::mcp::tools::recall::scope_for_directory(&directory)?
         }
     };
