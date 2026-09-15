@@ -5,6 +5,7 @@ mod documents;
 mod live;
 pub(crate) mod reader;
 mod scope;
+mod transport;
 mod workers;
 
 use crate::IndexError;
@@ -12,7 +13,7 @@ use crate::init::workspaces::WorkspaceRegistry;
 use crate::mcp::server::CodeIntelligenceServer;
 use budget::Budget;
 use rmcp::model::*;
-use rmcp::service::{NotificationContext, RequestContext, RoleServer};
+use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, ServiceExt};
 use scope::{Route, ScopeResolver};
 use serde_json::{Value, json};
@@ -21,7 +22,7 @@ use std::sync::Arc;
 use workers::WorkerPool;
 
 #[derive(Clone)]
-pub struct WorkspaceServer {
+struct WorkspaceServer {
     registry: WorkspaceRegistry,
     scope: Arc<ScopeResolver>,
     workers: Arc<WorkerPool>,
@@ -29,7 +30,7 @@ pub struct WorkspaceServer {
     budget: Budget,
 }
 impl WorkspaceServer {
-    pub fn new(
+    fn new(
         registry: WorkspaceRegistry,
         cwd: PathBuf,
         home: Option<PathBuf>,
@@ -52,7 +53,7 @@ impl WorkspaceServer {
             budget,
         })
     }
-    pub async fn shutdown(&self) {
+    async fn shutdown(&self) {
         self.workers.shutdown().await;
     }
 }
@@ -81,9 +82,6 @@ impl ServerHandler for WorkspaceServer {
             ttl_ms: Some(crate::mcp::server::LIST_CACHE_TTL_MS),
             cache_scope: Some(CacheScope::Private),
         })
-    }
-    async fn on_roots_list_changed(&self, _context: NotificationContext<RoleServer>) {
-        self.scope.invalidate_roots().await;
     }
     async fn call_tool(
         &self,
@@ -220,7 +218,12 @@ pub async fn run(cwd: &Path, home: Option<&Path>) -> Result<i32, IndexError> {
         executable,
     )?;
     let cleanup = server.clone();
-    let connected = server.serve(rmcp::transport::stdio()).await;
+    let (read, write) = rmcp::transport::stdio();
+    let transport = transport::ScopeTransport::new(
+        rmcp::transport::async_rw::AsyncRwTransport::new_server(read, write),
+        server.scope.clone(),
+    );
+    let connected = server.serve(transport).await;
     let result = match connected {
         Ok(running) => running
             .waiting()
