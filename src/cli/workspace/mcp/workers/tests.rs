@@ -86,6 +86,7 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
             tantivy: stamp,
             managed: false,
             ignore: None,
+            git_ignore: None,
         },
     });
     let (_sender, receiver) = watch::channel(Event::Ready(reader));

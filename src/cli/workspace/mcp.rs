@@ -1,6 +1,7 @@
 //! Local workspace MCP: automatic session setup, independent indexes, lazy readers.
 mod bootstrap;
 mod budget;
+mod documents;
 mod live;
 pub(crate) mod reader;
 mod scope;

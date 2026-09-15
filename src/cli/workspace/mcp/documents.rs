@@ -20,12 +20,15 @@ fn prepare(settings: &Settings) -> Result<Option<PathBuf>, String> {
     if !settings.documents.enabled {
         return Ok(None);
     }
-    let root = settings.workspace_root.as_deref().ok_or("Missing document workspace scope")?;
+    let root = settings
+        .workspace_root
+        .as_deref()
+        .ok_or("Missing document workspace scope")?;
     let base = settings.index_path.join("documents");
     match std::fs::symlink_metadata(&base) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.to_string()),
-        Ok(_) => {},
+        Ok(_) => {}
     }
     let base = IndexFacade::contained_source(root, &base).map_err(|error| error.to_string())?;
     if !base.is_dir() {
@@ -37,11 +40,15 @@ fn prepare(settings: &Settings) -> Result<Option<PathBuf>, String> {
         let path = IndexFacade::contained_source(root, &base.join(relative))
             .map_err(|error| error.to_string())?;
         if !path.is_file() {
-            return Err("Document index is incomplete; index the configured collection before querying".into());
+            return Err(
+                "Document index is incomplete; index the configured collection before querying"
+                    .into(),
+            );
         }
     }
     for relative in ["vectors", "clusters.json"] {
-        IndexFacade::contained_source(root, &base.join(relative)).map_err(|error| error.to_string())?;
+        IndexFacade::contained_source(root, &base.join(relative))
+            .map_err(|error| error.to_string())?;
     }
     for collection in settings.documents.collections.values() {
         for path in &collection.paths {
@@ -50,8 +57,11 @@ fn prepare(settings: &Settings) -> Result<Option<PathBuf>, String> {
     }
     const MAX_STATE: u64 = 8 * 1024 * 1024;
     let mut bytes = Vec::new();
-    std::fs::File::open(base.join("state.json")).map_err(|error| error.to_string())?
-        .take(MAX_STATE + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    std::fs::File::open(base.join("state.json"))
+        .map_err(|error| error.to_string())?
+        .take(MAX_STATE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
     if bytes.len() as u64 > MAX_STATE {
         return Err("Document state exceeds the local workspace metadata budget".into());
     }
@@ -69,11 +79,17 @@ pub(super) fn load(settings: &Settings) -> Result<Documents, String> {
     if prepare(settings)?.is_none() {
         return Ok(None);
     }
-    let root = settings.workspace_root.as_deref().ok_or("Missing document workspace scope")?;
+    let root = settings
+        .workspace_root
+        .as_deref()
+        .ok_or("Missing document workspace scope")?;
     let store = crate::documents::load_from_settings(settings)
         .ok_or("Configured document index failed to load")?;
-    store.try_write().map_err(|_| "Document store initialization is busy")?
-        .restrict_workspace(root).map_err(|error| error.to_string())?;
+    store
+        .try_write()
+        .map_err(|_| "Document store initialization is busy")?
+        .restrict_workspace(root)
+        .map_err(|error| error.to_string())?;
     Ok(Some(store))
 }
 
@@ -106,9 +122,17 @@ mod tests {
         std::fs::create_dir_all(base.join("tantivy")).unwrap();
         std::fs::write(base.join("tantivy/meta.json"), "{}").unwrap();
         let state = |path: &Path| serde_json::json!({"file_states": {path.to_str().unwrap(): {}}});
-        std::fs::write(base.join("state.json"), state(&other.join("guide.md")).to_string()).unwrap();
+        std::fs::write(
+            base.join("state.json"),
+            state(&other.join("guide.md")).to_string(),
+        )
+        .unwrap();
         assert!(prepare(&settings).is_err());
-        std::fs::write(base.join("state.json"), state(&root.join("guide.md")).to_string()).unwrap();
+        std::fs::write(
+            base.join("state.json"),
+            state(&root.join("guide.md")).to_string(),
+        )
+        .unwrap();
         assert!(prepare(&settings).unwrap().is_some());
     }
 

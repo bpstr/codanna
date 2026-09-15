@@ -49,6 +49,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
 
     // Create cancellation token for coordinated shutdown
     let ct = CancellationToken::new();
+    let _cancel_on_drop = ct.clone().drop_guard();
 
     // Start index watcher if watch mode is enabled
     if watch {
@@ -147,16 +148,13 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
                     return Err(error.into());
                 }
                 let watcher_ct = ct.clone();
+                let watcher_lease = _code_write_lease.clone();
                 tokio::spawn(async move {
-                    tokio::select! {
-                        result = unified_watcher.watch() => {
-                            if let Err(e) = result {
-                                tracing::error!("[watcher] error: {e}");
-                            }
-                        }
-                        _ = watcher_ct.cancelled() => {
-                            crate::log_event!("watcher", "stopped");
-                        }
+                    // Retain ownership through the actual mutation, including
+                    // cancellation/error paths in the enclosing server future.
+                    let _lease = watcher_lease;
+                    if let Err(error) = unified_watcher.watch_until(watcher_ct).await {
+                        tracing::error!("[watcher] error: {error}");
                     }
                 });
                 crate::log_event!(

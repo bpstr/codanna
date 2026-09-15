@@ -145,11 +145,9 @@ impl ServerHandler for Reader {
             let documents = self
                 .documents
                 .get(async move {
-                    crate::runtime::blocking(move || {
-                        crate::documents::load_from_settings(&settings)
-                    })
-                    .await
-                    .map_err(|error| error.to_string())
+                    crate::runtime::blocking(move || super::documents::load(&settings))
+                        .await
+                        .map_err(|error| error.to_string())?
                 })
                 .await
                 .map_err(super::internal)?;

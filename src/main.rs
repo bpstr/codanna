@@ -331,29 +331,6 @@ async fn main() {
             | Commands::Completions { .. }
     );
 
-    // Initialize project resolution providers (only if needed)
-    // This ensures caches are built before indexing starts
-    if needs_providers {
-        let provider_registry = create_provider_registry();
-        if let Err(e) = initialize_providers(&provider_registry, &config) {
-            // Only fatal for commands that need providers (like index)
-            if matches!(cli.command, Commands::Index { .. }) {
-                eprintln!("\n{e}");
-                let suggestions = e.recovery_suggestions();
-                if !suggestions.is_empty() {
-                    eprintln!("\nSuggestions:");
-                    for suggestion in suggestions {
-                        eprintln!("  - {suggestion}");
-                    }
-                }
-                std::process::exit(1);
-            } else {
-                // For other commands, just warn
-                eprintln!("Warning: Provider initialization failed: {e}");
-            }
-        }
-    }
-
     // Apply config overrides from CLI args
     if let Commands::Index {
         threads: Some(t), ..
@@ -385,6 +362,29 @@ async fn main() {
     } else {
         None
     };
+    // Initialize project resolution providers (only if needed)
+    // This ensures caches are built before indexing starts
+    if needs_providers {
+        let provider_registry = create_provider_registry();
+        if let Err(e) = initialize_providers(&provider_registry, &config) {
+            // Only fatal for commands that need providers (like index)
+            if matches!(cli.command, Commands::Index { .. }) {
+                eprintln!("\n{e}");
+                let suggestions = e.recovery_suggestions();
+                if !suggestions.is_empty() {
+                    eprintln!("\nSuggestions:");
+                    for suggestion in suggestions {
+                        eprintln!("  - {suggestion}");
+                    }
+                }
+                std::process::exit(1);
+            } else {
+                // For other commands, just warn
+                eprintln!("Warning: Provider initialization failed: {e}");
+            }
+        }
+    }
+
     let persistence = IndexPersistence::new(index_path.clone());
 
     // Determine if we need full trait resolver initialization

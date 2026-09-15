@@ -79,6 +79,7 @@ impl Drop for LiveWorkspace {
 struct ContextStamp {
     config: (u64, SystemTime),
     ignore: Option<(u64, SystemTime)>,
+    git_ignore: Option<(u64, SystemTime)>,
 }
 fn context_stamp(root: &Path) -> Result<ContextStamp, IndexError> {
     fn stamp(path: &Path) -> Result<Option<(u64, SystemTime)>, IndexError> {
@@ -95,6 +96,7 @@ fn context_stamp(root: &Path) -> Result<ContextStamp, IndexError> {
         config: stamp(&crate::cli::automatic::config_path(root))?
             .ok_or_else(|| IndexError::General("Workspace configuration disappeared".into()))?,
         ignore: stamp(&root.join(".codannaignore"))?,
+        git_ignore: stamp(&root.join(".gitignore"))?,
     })
 }
 
