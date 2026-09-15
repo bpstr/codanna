@@ -18,7 +18,9 @@ pub(super) fn has_sources(
     if ct.is_cancelled() {
         return Err(fail("Initial source discovery cancelled"));
     }
-    let first = roots.first().ok_or_else(|| fail("No bootstrap source root"))?;
+    let first = roots
+        .first()
+        .ok_or_else(|| fail("No bootstrap source root"))?;
     // Snapshot registered extensions once. Never hold the registry lock over
     // filesystem traversal or instantiate parsers/embedding facilities here.
     let extensions: HashSet<&'static str> = get_registry()
@@ -43,7 +45,9 @@ pub(super) fn has_sources(
     let mut found_source = false;
     for (entries, entry) in walker.build().enumerate() {
         if ct.is_cancelled() || Instant::now() >= deadline || entries >= 100_000 {
-            return Err(fail("Initial source discovery exceeded its budget; use explicit codanna index"));
+            return Err(fail(
+                "Initial source discovery exceeded its budget; use explicit codanna index",
+            ));
         }
         let entry = entry.map_err(|_| fail("Initial source discovery failed"))?;
         // `ignore` can return an entry AND a malformed-ignore-file error.
@@ -56,17 +60,29 @@ pub(super) fn has_sources(
         }
         files += 1;
         bytes = bytes.saturating_add(
-            entry.metadata().map_err(|_| fail("Cannot inspect bootstrap source"))?.len(),
+            entry
+                .metadata()
+                .map_err(|_| fail("Cannot inspect bootstrap source"))?
+                .len(),
         );
         if files > super::MAX_FILES || bytes > 512 * 1024 * 1024 {
-            return Err(fail("Workspace exceeds automatic indexing limits (50,000 files / 512 MiB); use explicit codanna index"));
+            return Err(fail(
+                "Workspace exceeds automatic indexing limits (50,000 files / 512 MiB); use explicit codanna index",
+            ));
         }
         // Match the pipeline's filename/extension rules, including enabled
         // language packs. Unsupported files still count against admission limits.
-        if entry.file_name().to_str().is_some_and(|name| name.starts_with('.')) {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with('.'))
+        {
             continue;
         }
-        let registered = entry.path().extension().and_then(|ext| ext.to_str())
+        let registered = entry
+            .path()
+            .extension()
+            .and_then(|ext| ext.to_str())
             .is_some_and(|ext| extensions.contains(ext));
         found_source |= registered || generic_pack::detect_path(entry.path(), settings).is_some();
     }
