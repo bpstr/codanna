@@ -60,7 +60,8 @@ pub(super) async fn conversation_context(query: &str, limit: usize, root: Option
     };
     let binary = recall_binary();
     let mut command = Command::new(binary);
-    if let Some(index) = std::env::var_os("CODANNA_RECALL_INDEX").filter(|value| !value.is_empty()) {
+    if let Some(index) = std::env::var_os("CODANNA_RECALL_INDEX").filter(|value| !value.is_empty())
+    {
         command.arg("--index").arg(index);
     }
     command
@@ -93,7 +94,10 @@ pub(super) async fn conversation_context(query: &str, limit: usize, root: Option
 
 async fn bounded_read(reader: impl AsyncRead + Unpin, limit: usize) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    reader.take(limit as u64 + 1).read_to_end(&mut bytes).await?;
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .await?;
     if bytes.len() > limit {
         return Err(io::Error::other("recall output budget exceeded"));
     }
@@ -107,8 +111,14 @@ async fn capture(mut command: Command) -> io::Result<(ExitStatus, Vec<u8>, Vec<u
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
-    let stdout = child.stdout.take().ok_or_else(|| io::Error::other("missing recall stdout"))?;
-    let stderr = child.stderr.take().ok_or_else(|| io::Error::other("missing recall stderr"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing recall stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing recall stderr"))?;
     let result = tokio::time::timeout(TIMEOUT, async {
         let (stdout, stderr, status) = tokio::try_join!(
             bounded_read(stdout, MAX_OUTPUT),
@@ -116,7 +126,9 @@ async fn capture(mut command: Command) -> io::Result<(ExitStatus, Vec<u8>, Vec<u
             child.wait(),
         )?;
         Ok((status, stdout, stderr))
-    }).await.unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "recall deadline")));
+    })
+    .await
+    .unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "recall deadline")));
     if result.is_err() {
         let _ = child.start_kill();
         let _ = child.wait().await;
@@ -139,14 +151,25 @@ fn render(value: &Value, workspace: &str, limit: usize) -> String {
     }
     let mut output = String::new();
     for (i, hit) in results.iter().enumerate() {
-        let Some(message) = hit.get("message") else { continue };
+        let Some(message) = hit.get("message") else {
+            continue;
+        };
         let text = |key| message.get(key).and_then(Value::as_str).unwrap_or("");
         let timestamp = text("timestamp");
         let line = message.get("line").and_then(Value::as_u64).unwrap_or(0);
         output.push_str(&format!(
             "{}. {}/{} {} — {}:{line} [recall_id:{}]\n   {}\n",
-            i + 1, text("provider"), text("role"), timestamp, text("source_path"),
-            text("id"), text("text").chars().take(800).collect::<String>().replace('\n', " ")
+            i + 1,
+            text("provider"),
+            text("role"),
+            timestamp,
+            text("source_path"),
+            text("id"),
+            text("text")
+                .chars()
+                .take(800)
+                .collect::<String>()
+                .replace('\n', " ")
         ));
     }
     output
@@ -156,8 +179,13 @@ fn recall_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CODANNA_RECALL_BIN").filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
     }
-    let name = if cfg!(windows) { "codanna-recall.exe" } else { "codanna-recall" };
-    std::env::current_exe().ok()
+    let name = if cfg!(windows) {
+        "codanna-recall.exe"
+    } else {
+        "codanna-recall"
+    };
+    std::env::current_exe()
+        .ok()
         .and_then(|path| path.parent().map(|parent| parent.join(name)))
         .unwrap_or_else(|| PathBuf::from(name))
 }
@@ -172,8 +200,14 @@ mod tests {
         let b = temp.path().join("two/project");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        assert_ne!(scope_for_directory(&a).unwrap(), scope_for_directory(&b).unwrap());
-        assert_eq!(scope_for_directory(&a).unwrap(), scope_for_directory(&a.join(".")).unwrap());
+        assert_ne!(
+            scope_for_directory(&a).unwrap(),
+            scope_for_directory(&b).unwrap()
+        );
+        assert_eq!(
+            scope_for_directory(&a).unwrap(),
+            scope_for_directory(&a.join(".")).unwrap()
+        );
         assert!(!a.join(".codanna").exists());
     }
     #[test]
