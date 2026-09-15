@@ -119,7 +119,17 @@ impl UnifiedWatcher {
 
     /// Run the event loop, preparing first for callers that do not admit a
     /// transport separately. Servers explicitly await `prepare` before handshake.
-    pub async fn watch(mut self) -> Result<(), WatchError> {
+    pub async fn watch(self) -> Result<(), WatchError> {
+        self.watch_until(tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// Cooperative shutdown: finish the current mutation before returning. The
+    /// caller may safely retain an OS writer lease until this future completes.
+    pub async fn watch_until(
+        mut self,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Result<(), WatchError> {
         self.prepare().await?;
 
         // Subscribe to broadcaster for IndexReloaded events
@@ -138,7 +148,10 @@ impl UnifiedWatcher {
         drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
+            // Keep fair selection: an always-ready event queue must not starve
+            // debounce drains, overflow reconciliation, or cancellation.
             tokio::select! {
+                _ = stop.cancelled() => return Ok(()),
                 // Handle incoming file events
                 Some(res) = self.event_rx.recv() => {
                     match res {

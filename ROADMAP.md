@@ -5,6 +5,32 @@ Items remain proposals until their implementation and acceptance criteria are
 verified. Completed work should move to the changelog rather than remaining as
 an open roadmap item.
 
+## Isolated coding-agent workspaces
+
+**Status:** Automatic local discovery, registry administration, explicit selection,
+and local read-only MCP routing are under review in PR #34. Shared HTTP serving,
+workspace-bound recall, and full repository provenance remain incomplete.
+
+Support arbitrary independent coding-agent projects with separate graphs/indexes.
+A workspace normally follows the opened checkout; it may also be a monorepo or
+several repositories intentionally indexed together. No specific project name,
+customer, business/product hierarchy, or repository inventory is required.
+
+Keep setup automatic for standard layouts and reuse one MCP configuration.
+Resolve requests from supported client roots or explicit runtime selectors;
+never combine unrelated graphs based on matching names or sibling directories.
+Preserve workspace-scoped code, documents, recall, and mutation boundaries as
+those capabilities are completed. Examples and fixtures must be synthetic.
+
+- [Implemented workspace usage and limitations](docs/workspaces.md)
+- [Local multi-workspace MCP](docs/workspace-mcp.md)
+- [Feature brief and architecture](docs/design/multi-workspace.md)
+- [Phased implementation and verification checklist](docs/design/multi-workspace-implementation.md)
+
+This is separate from index portability below. Reuse the shared planner and
+compatibility gates where applicable. Registration alone must not force a
+rebuild; later provenance/schema changes need explicit migration requirements.
+
 ## Index planning and dry runs
 
 **Status:** Proposed
@@ -112,7 +138,7 @@ in another checkout without copying a live `.codanna/index` directory by hand.
 - Bundle size, export/import duration, peak memory, and compatibility behavior
   are measured on small and production-shaped deterministic fixtures.
 
-## Recommended sequence
+## Recommended sequence for planning and index portability
 
 1. Complete the shared, read-only index planner and make dry-run trustworthy.
 2. Use that planner and the existing metadata gates to define source identity

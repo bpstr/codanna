@@ -20,6 +20,14 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     let auth = crate::mcp::auth::NetworkAuth::from_env(&config)?;
     let validated_bind = crate::mcp::auth::validate_bind(&bind, true)?;
 
+    let _code_write_lease = if watch || config.file_watch.enabled {
+        Some(crate::storage::write_lease::CodeWriteLease::acquire(
+            &config.index_path,
+        )?)
+    } else {
+        None
+    };
+
     // Initialize logging with config
     crate::logging::init_with_config(&config.logging);
 
@@ -43,6 +51,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
+    let _cancel_on_drop = ct.clone().drop_guard();
 
     // Load document store once (shared between MCP server and watcher)
     let document_store_arc = crate::documents::load_from_settings(&config);
@@ -110,16 +119,13 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
                     return Err(error.into());
                 }
                 let watcher_ct = ct.clone();
+                let watcher_lease = _code_write_lease.clone();
                 tokio::spawn(async move {
-                    tokio::select! {
-                        result = unified_watcher.watch() => {
-                            if let Err(e) = result {
-                                tracing::error!("[watcher] error: {e}");
-                            }
-                        }
-                        _ = watcher_ct.cancelled() => {
-                            crate::log_event!("watcher", "stopped");
-                        }
+                    // Retain ownership through the actual mutation, including
+                    // cancellation/error paths in the enclosing server future.
+                    let _lease = watcher_lease;
+                    if let Err(error) = unified_watcher.watch_until(watcher_ct).await {
+                        tracing::error!("[watcher] error: {error}");
                     }
                 });
                 crate::log_event!(

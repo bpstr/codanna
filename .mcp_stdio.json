@@ -2,12 +2,7 @@
   "mcpServers": {
     "codanna": {
       "command": "codanna",
-      "args": [
-        "serve",
-        "--watch",
-        "--watch-interval",
-        "5"
-      ]
+      "args": ["workspace", "serve"]
     }
   }
 }
