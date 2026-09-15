@@ -3,6 +3,7 @@ pub mod metadata;
 pub mod metadata_keys;
 pub mod persistence;
 pub mod tantivy;
+pub mod write_lease;
 pub use error::{StorageError, StorageResult};
 pub use metadata::{DataSource, EMISSION_SEMANTICS_VERSION, IndexMetadata};
 pub use metadata_keys::MetadataKey;

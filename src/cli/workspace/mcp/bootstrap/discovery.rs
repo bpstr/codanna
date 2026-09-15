@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-pub(super) fn has_sources(
+pub(in crate::cli::workspace::mcp) fn has_sources(
     settings: &Settings,
     roots: &[PathBuf],
     ct: &CancellationToken,

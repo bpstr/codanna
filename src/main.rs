@@ -369,6 +369,22 @@ async fn main() {
     // Update the config with the resolved index_path so SimpleIndexer uses the correct path
     config.index_path = index_path.clone();
 
+    let writes_code = matches!(&cli.command, Commands::Index { dry_run: false, .. })
+        || matches!(&cli.command, Commands::Mcp { watch: true, .. })
+        || matches!(&cli.command, Commands::Serve { watch, http, https, .. }
+            if *watch || ((*http || *https || config.server.mode == "http") && config.file_watch.enabled));
+    let _code_write_lease = if writes_code {
+        Some(
+            codanna::storage::write_lease::CodeWriteLease::acquire(&index_path).unwrap_or_else(
+                |error| {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
     let persistence = IndexPersistence::new(index_path.clone());
 
     // Determine if we need full trait resolver initialization
@@ -707,7 +723,11 @@ async fn main() {
 
     let read_only_serve = matches!(&cli.command, Commands::Serve { .. });
     if let Some(ref mut idx) = indexer {
-        if !read_only_serve && persistence.exists() && !is_force_index && !index_command_fresh_index
+        if writes_code
+            && !read_only_serve
+            && persistence.exists()
+            && !is_force_index
+            && !index_command_fresh_index
         {
             // Load stored indexed_paths from metadata
             match IndexMetadata::load(&config.index_path) {

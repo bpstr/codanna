@@ -1,6 +1,6 @@
 //! Bounded, code-only first indexing. Build privately and publish only a complete
 //! generation. Existing nonempty indexes are never cleared or silently rebuilt.
-mod discovery;
+pub(super) mod discovery;
 
 use super::budget::Budget;
 use crate::init::workspaces::{Workspace, confined_index_path, read_settings};
@@ -26,6 +26,7 @@ pub(super) enum Status {
 }
 struct Build {
     _lock: File,
+    _write_lease: Arc<crate::storage::write_lease::CodeWriteLease>,
     staging: tempfile::TempDir,
     config: PathBuf,
     destination: PathBuf,
@@ -219,6 +220,11 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
             "Existing index is incomplete. Automatic setup will not replace it; run codanna index for recovery.",
         ));
     }
+    let Some(write_lease) = crate::storage::write_lease::CodeWriteLease::try_acquire(&destination)
+        .map_err(super::internal)?
+    else {
+        return Ok(Plan::Complete(Status::Busy));
+    };
     let state = workspace.root.join(crate::init::local_dir_name());
     let lock_path = state.join("bootstrap.lock");
     if fs::symlink_metadata(&lock_path).is_ok_and(|m| m.is_symlink()) {
@@ -275,6 +281,7 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     .map_err(super::internal)?;
     Ok(Plan::Build(Build {
         _lock: lock,
+        _write_lease: write_lease,
         staging,
         config,
         destination,

@@ -67,6 +67,7 @@ struct Reader {
     settings: Arc<Settings>,
     semantic: Arc<Lazy<()>>,
     documents: Arc<Lazy<Documents>>,
+    live: Arc<super::live::LiveWorkspace>,
 }
 impl ServerHandler for Reader {
     fn get_info(&self) -> ServerInfo {
@@ -86,6 +87,33 @@ impl ServerHandler for Reader {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let state = self.live.state();
+        if !state.ready {
+            let mut result = CallToolResult::success(vec![ContentBlock::text(
+                state.detail.clone().unwrap_or_else(|| {
+                    "Workspace code freshness is initializing; retry shortly.".into()
+                }),
+            )]);
+            result.structured_content =
+                Some(serde_json::json!({"status":state.status,"ready":false}));
+            return Ok(result.into());
+        }
+        if request.name == "get_index_info" {
+            let parameters = serde_json::from_value::<crate::mcp::requests::GetIndexInfoRequest>(
+                serde_json::json!(request.arguments.unwrap_or_default()),
+            )
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+            let mut result = self
+                .code
+                .get_index_info(rmcp::handler::server::wrapper::Parameters(parameters))
+                .await?;
+            result.content.push(ContentBlock::text(format!(
+                "Automatic code freshness: {}",
+                state.status
+            )));
+            result.structured_content = Some(serde_json::json!({"freshness":state}));
+            return Ok(result.into());
+        }
         if matches!(
             request.name.as_ref(),
             "semantic_search_docs" | "semantic_search_with_context"
@@ -173,21 +201,25 @@ pub(crate) async fn run(root: &Path) -> Result<i32, IndexError> {
         Ok::<_, IndexError>(facade)
     })
     .await??;
+    let code = CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope);
+    let live = super::live::LiveWorkspace::start(code.facade.clone(), settings.clone());
     let reader = Reader {
-        code: CodeIntelligenceServer::new(facade).with_recall_scope(recall_scope),
+        code,
+        live: live.clone(),
         settings,
         semantic: Arc::new(Lazy::default()),
         documents: Arc::new(Lazy::default()),
     };
-    let running = reader
-        .serve(rmcp::transport::stdio())
-        .await
-        .map_err(|error| IndexError::General(error.to_string()))?;
-    running
-        .waiting()
-        .await
-        .map_err(|error| IndexError::General(error.to_string()))?;
-    Ok(0)
+    let result = match reader.serve(rmcp::transport::stdio()).await {
+        Ok(running) => running
+            .waiting()
+            .await
+            .map(|_| 0)
+            .map_err(|error| IndexError::General(error.to_string())),
+        Err(error) => Err(IndexError::General(error.to_string())),
+    };
+    live.shutdown().await;
+    result
 }
 
 #[cfg(test)]

@@ -84,6 +84,8 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
             config: stamp.clone(),
             metadata: stamp.clone(),
             tantivy: stamp,
+            managed: false,
+            ignore: None,
         },
     });
     let (_sender, receiver) = watch::channel(Event::Ready(reader));
