@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 concurrency:
   group: workspace-review-patch
   cancel-in-progress: false
@@ -38,7 +42,7 @@ jobs:
             if git apply --check "$patch"; then
               git apply --index "$patch"
               cargo fmt --all
-              git add src tests docs Cargo.toml Cargo.lock
+              git add -u
               if ! git diff --cached --quiet; then
                 git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply reviewed workspace lifecycle and isolation fixes'
                 git push origin HEAD:refs/heads/feat/product-workspaces
