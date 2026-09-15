@@ -1,0 +1,5 @@
+.codanna/
+.git/
+__pycache__/
+generated/
+docs/private/
