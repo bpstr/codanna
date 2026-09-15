@@ -3,35 +3,78 @@ name: Workspace review artifacts
 on:
   push:
     branches: [feat/product-workspaces]
-    paths: [.github/workflows/workspace-review-artifacts.yml]
+    paths:
+      - .github/workflows/workspace-review-artifacts.yml
+      - .github/workspace-review.patch
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: workspace-review-patch
+  cancel-in-progress: false
 
 jobs:
-  review-inputs:
+  reliability:
+    if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/feat/product-workspaces'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          ref: feat/product-workspaces
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - name: Package exact tracked revision and formatter
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Apply the reviewed source patch
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/workspace-review"
+          set -euo pipefail
+          patch=.github/workspace-review.patch
+          if test -f "$patch"; then
+            if git apply --check "$patch"; then
+              git apply --index "$patch"
+              cargo fmt --all
+              git add src tests docs Cargo.toml Cargo.lock
+              if ! git diff --cached --quiet; then
+                git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply reviewed workspace lifecycle and isolation fixes'
+                git push origin HEAD:refs/heads/feat/product-workspaces
+              fi
+            elif git apply --reverse --check "$patch"; then
+              echo 'Reviewed patch is already applied.'
+            else
+              echo 'Patch does not apply to the current branch; refusing to overwrite changes.' >&2
+              exit 1
+            fi
+          fi
+      - name: Focused local-only regressions
+        if: hashFiles('.github/workspace-review.patch') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test workspace_ --locked --all-features
+          cargo test hardening_final_https_sessions_reconnect_close_expire_and_enforce_ownership --locked --all-features
+      - name: Package exact tracked revision and formatter
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/workspace-review/lib"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/workspace-review/source.tar.gz"
           cp "$(rustup which rustfmt)" "$RUNNER_TEMP/workspace-review/rustfmt"
+          cp "$(rustc --print sysroot)"/lib/*.so* "$RUNNER_TEMP/workspace-review/lib/"
           git rev-parse HEAD > "$RUNNER_TEMP/workspace-review/revision.txt"
           rustfmt --version > "$RUNNER_TEMP/workspace-review/formatter-version.txt"
           cd "$RUNNER_TEMP/workspace-review"
-          sha256sum source.tar.gz rustfmt > SHA256SUMS
+          sha256sum source.tar.gz rustfmt lib/* > SHA256SUMS
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: workspace-review-${{ github.sha }}
+          name: workspace-review-${{ github.run_id }}
           path: ${{ runner.temp }}/workspace-review/
           retention-days: 1
           if-no-files-found: error
