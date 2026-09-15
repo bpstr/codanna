@@ -1,149 +1,146 @@
 # Isolated local MCP workspaces
 
-Implementation is under review in PR #34. See the PR for the exact tested commit
-and CI outcome. The normal entry is one reusable configuration:
+Implementation is under review in PR #34. Use one reusable configuration:
 
 ```json
 {"mcpServers":{"codanna":{"command":"codanna","args":["workspace","serve"]}}}
 ```
 
-Open a project in the client and query it. No workspace registration command,
-per-project path in MCP configuration, initial indexing command, or repository
-inventory is required for supported local layouts. Names are runtime data.
+Open a project and query it. No per-project names, registration, repository lists,
+initial indexing command, or MCP paths are required for supported local layouts.
 
 ## Selection and first use
 
-Supported client roots take precedence over the subprocess launch directory.
-Without roots support, the launch cwd supplies the project context. A server
-launched from HOME with no roots can connect and list tools but cannot invent a
-project context. An independent project must never fall back to another graph.
-A running process cannot observe later cwd changes in a different process;
-clients must send root updates or launch the MCP process in the correct project.
+Capability-checked client roots take precedence over the subprocess launch cwd.
+Without roots support, the launch cwd supplies project context. A HOME-launched
+process without roots can connect and list tools, but cannot invent a project.
+A long-running server cannot inspect another process's changing cwd; clients
+must publish root updates or relaunch in their new project.
 
-Nearest independent checkouts/configurations win. A containing index with source
-`.` does not adopt an independently opened child. A plain non-Git client root is
-valid, including an initially empty directory; an unrelated ancestor's settings
-cannot widen it. An intentionally combined root remains usable when that root
-is actually opened or explicitly selected. Multiple unrelated client roots are
-ambiguous: no files are created until a single scope is selected.
+An independent opened child is not captured by a broad parent index. Plain
+non-Git client roots are valid, including empty folders. Intentionally combined
+roots remain usable when explicitly opened or selected. Multiple unrelated roots
+are ambiguous; no state is created before a single scope is resolved.
 
-An unscoped tool call may prepare settings and registration for its validated
-local session root. The first knowledge query schedules initial code-only
-indexing and can return `result.status = "indexing"`, `result.ready = false`.
-Retry the same query shortly. Initialization and tools/list themselves do not
-index or load models.
+Handshake and tool enumeration do not index or load models. The first knowledge
+query prepares local metadata and schedules initial code-only indexing. A reply
+may contain `result.status = "indexing"` and `result.ready = false`; retry the same
+query. Empty or unsupported-file-only folders remain retryable when supported
+source arrives. They do not repeatedly launch empty indexers.
 
-Empty roots and folders containing only unsupported files return `empty`. They
-are checked again on subsequent use, so adding the first enabled source file does
-not require setup commands. Discovery consults the existing language registry
-and language-pack detector without creating parsers or models. A notes-only
-folder does not repeatedly spawn an indexer, and a zero-file staging generation
-is not published as a ready index. A genuinely indexed file with zero symbols
-is still a valid file, not an empty project.
+Bootstrap uses private staging, a workspace bootstrap lock, a shared code-writer
+lease, at most two indexing threads, a conservative 50,000-file/512 MiB discovery
+ceiling, and a five-minute deadline. It honors exclusions, propagates discovery
+errors, disables embeddings for that job, and preserves existing settings.
+Overflow and changed-configuration checks precede publication. Existing nonempty
+indexes are never force-rebuilt to recover a failed read. Larger or incomplete
+indexes receive explicit recovery guidance. These are bounded safeguards, not a
+transaction over arbitrary external filesystem changes.
 
-Automatic indexing disables embeddings for that indexing job, preserves existing
-settings, and never force-rebuilds nonempty data. New automatic settings disable
-semantic search until deliberately configured. It uses a private staging index,
-a per-workspace OS bootstrap lock, at most two indexing threads, a 50,000-file /
-512 MiB discovery ceiling, and a five-minute job deadline. Discovery counts
-unsupported entries toward its resource budget and propagates malformed ignore
-rules rather than silently broadening the source set.
+`workspace` (ID or alias) and registered `project_path` are mutually exclusive
+per-request overrides. Arbitrary tool paths cannot authorize new indexing.
+Overrides never alter the next request's default. HOME, filesystem roots, and
+broad system directories are not automatic project choices.
 
-The child may inspect one overflow file beyond the normal file limit, but a
-generation exceeding that limit is rejected before publication. Configuration is
-compared with its setup snapshot before publication, so a changed source policy
-cannot publish the old build as current. Failed or oversized jobs return recovery
-guidance without replacing an existing index. These checks are not a transaction
-across arbitrary external source/configuration edits during a build.
+## Automatic freshness
 
-Explicit `codanna index` remains available for larger projects and recovery.
-Bootstrap locking coordinates automatic initial builders; it is not a claim
-that every legacy CLI writer/watch path uses the same ownership protocol.
+New code-only workspaces continue with native source watching. Bounded catch-up
+handles offline edits on connection or writer election. Watches are installed
+between catch-up passes to close the scan/registration race. Warm searches never
+repeat those source inventories.
 
-`workspace` (ID/alias) and `project_path` are mutually exclusive per-request
-overrides. A tool-argument path may select an already registered workspace but
-cannot bootstrap an arbitrary filesystem location. Overrides never change the
-next call's default. HOME, filesystem roots, and broad system directories are
-not automatic project choices. No network listener is introduced.
+One OS-backed lease elects the writer for each physical code index. Other clients
+follow its committed changes and can take ownership after it exits. Updated CLI
+indexing, MCP reindex, and HTTP/HTTPS watchers use the same lease. It lives outside
+replaceable index contents and is held through actual blocking write completion.
+A competing explicit force rebuild is refused before clearing storage. Older
+binaries and direct third-party storage writers are outside this protocol.
+
+Root settings/ignore changes trigger revalidation and reader reload. Freshness is
+reported by `get_index_info`: watching, following, refreshing, disabled,
+semantic-manual, or unavailable. Failed refresh is not presented as a current
+empty graph. Explicitly disabled watching is respected. Existing semantic
+configuration or data requires explicit semantic maintenance rather than silently
+spending inference or replacing embeddings with a code-only generation.
 
 ## Runtime and performance
 
-Queries never run the diagnostic repository inventory. Root selection walks only
-applicable ancestors. Root responses are cached only when the client promises
-root-change notifications; a notification invalidates future requests. Other
-clients are queried each time. MRTR continuation tokens are single-use, expire,
-and are bound to the original arguments and root generation.
+Admission covers discovery, diagnostics, refresh, and queries: sixteen requests
+per router and four blocking filesystem jobs. Blocking closures retain permits
+until actual completion even when the caller cancels. Timing out an await cannot
+forcibly interrupt a running kernel filesystem operation.
 
-Admission starts before discovery and diagnostics: sixteen requests per router,
-with four blocking filesystem jobs. Blocking closures retain their own permits
-after their callers cancel. Filesystem refresh has a separate deadline; a timeout
-cannot forcibly interrupt a running kernel filesystem operation.
+Workspace loads are shared. Short lifecycle locks do not cover complete RPCs;
+each reader allows four concurrent queries. Bad arguments preserve backend error
+categories and do not restart a healthy reader. Cancellation targets only the
+individual request, not the peer shared with other queries.
 
-One shared load per workspace serves concurrent callers. The lifecycle lock is
-not held across tool RPCs. Each reader permits four concurrent requests. Bad
-backend parameters retain their original MCP error category and do not restart a
-healthy reader. Query cancellation targets the individual backend request rather
-than closing a peer used by other calls. Generated-router validation that returns
-tool-error content also retains that existing wire contract.
+One-second metadata snapshots coalesce reader refresh. Four document metadata
+checks also invalidate cached store absence and changed collection state without
+walking or hashing document sources. Scope/registry checks still perform I/O;
+no zero-I/O or unmeasured speedup claim is made. Refresh is bounded consistency,
+not a transactional snapshot of arbitrary external writes.
 
-Warm readers reuse metadata snapshots for one second. Refresh checks file
-metadata; configuration is reparsed and a reader replaced when the corresponding
-snapshot changes. This is bounded refresh consistency, not a transactional view
-of concurrent external writes. Registry selection is still checked on each
-request. Removing recursive scans and model initialization does not mean that
-warm routing performs no filesystem operations or that a speedup has been measured.
+Strict lite facade loading keeps lexical/statistics queries model-free. Semantic
+facilities initialize on demand; document facilities load only on relevant calls.
+Initialization survives cancelled waiters and retains errors. No failed load
+manufactures an empty replacement index.
 
-Readers use strict lite facade loading. Lexical search/statistics do not initialize
-semantic models. Existing semantic data loads on the first semantic operation;
-documents load on first document/context use. Shared facility initialization
-survives cancellation of its first waiter and retains failures rather than
-starting duplicate work. No load error creates a replacement empty index.
-Recall remains disabled until workspace-specific bindings exist.
+At most four reader processes are owned per router. Physical permits remain held
+until observed child exit, including eviction. Bootstrap has a separate one-job
+limit per router. Active work pins slots. Eviction/shutdown relinquishes a reader's
+watch; another connected follower can elect itself. Cleanup waits for owned writes
+and child processes rather than treating map removal as process termination.
+Separate stdio clients retain separate pools; this is not a machine-wide daemon.
 
-The router owns at most four live reader processes. A process permit remains held
-until child exit is observed, including during eviction. Initial index jobs have
-a separate one-job-per-router limit. Slots are pinned during queries/startup;
-idle slots are reclaimed on subsequent activity. Shutdown cancels jobs and waits
-for child cleanup. Separate stdio clients still have separate router pools: this
-is not a machine-wide shared daemon or an authenticated multi-workspace HTTP server.
+## Recall and document boundaries
 
-## Results, compatibility, and limits
+Imported conversation recall is automatically bound to the canonical opened
+project, not an inherited legacy label. The companion importer derives the same
+namespace without manual workspace settings. Import remains an explicit choice
+of one JSONL transcript; no private transcript tree is discovered automatically.
+Reply scope is verified before rendering text, with bounded subprocess output
+and a deadline. See the [workspace guide](workspaces.md) for usage.
 
-Every tool result carries a visible and structured workspace identity. Keep that
-identity on symbol-ID follow-ups. Raw IDs are not globally unique and generation-
-qualified references remain future work. Repository-partitioned resolution inside
-an intentionally combined workspace is not provided merely by this router.
+Document storage, configured roots, persisted source paths, and returned hits are
+validated against the code workspace before model use and at materialization.
+Foreign or corrupt auxiliary state is refused without poisoning independent
+lexical tools. Document indexing remains explicit. Newly published document
+metadata invalidates a reader that previously cached no document store.
 
-Ordinary `codanna serve`, explicit configuration, and manual index commands retain
-their separate modes. The router exposes tools, not unscoped mutations, resources,
-watch subscriptions, or a new HTTP endpoint. First-use cache creation is reflected
-in tool annotations; the new mode is not advertised as strictly read-only.
+## Existing HTTP/HTTPS session shutdown
 
-Automatic bootstrap establishes an initial code index; it is not continuous
-source watching. Once a populated index exists, later source edits still use the
-existing explicit indexing/watching modes. Reloading a published index generation
-is different from indexing changed source files.
+Project-bound network serving retains authentication, workspace ACLs, origin/host
+checks, session ownership, and replay. Session-map locks are not held over handle
+RPCs. DELETE/expiry cancels a session independently of full or unpolled SSE queues.
+Closing a session drops receivers and releases permits even when the client never
+polls again. Per-session capacity cannot consume another session's stream budget.
+This is a lifecycle fix, not a new multi-workspace network endpoint.
+
+## Output and remaining extensions
+
+Every routed reply includes readable and structured workspace identity. Keep that
+identity on symbol-ID follow-ups. Raw IDs are not globally unique; generation-
+qualified references are future API work. The router does not partition graph
+resolution between repositories intentionally combined inside one workspace.
+
+Ordinary `codanna serve`, explicit configuration, and manual indexing retain their
+separate modes. This router exposes tools, not unscoped mutations, resources,
+subscriptions, or HTTP serving. Tool annotations reflect first-use cache writes
+rather than advertising strict read-only behavior.
 
 ## Verification
 
 ```bash
-cargo test --test workspace_mcp --all-features
-cargo test --test workspace_bootstrap --all-features
-cargo test --test workspace_auto --all-features
-cargo test --test workspace_cli --all-features
-cargo test --lib workspace_ --all-features
+cargo test --locked --all-features --test workspace_mcp --test workspace_bootstrap
+cargo test --locked --all-features --test workspace_auto --test workspace_cli
+cargo test --locked --all-features --test workspace_live --test workspace_recall
+cargo test --locked --all-features --lib workspace_
 ```
 
-The MCP suite includes fresh non-Git projects with identical symbol names and no
-settings/indexing calls; separate cwd-based sessions; a broadly indexed parent;
-an empty project receiving its first file; invalid-argument recovery; and root
-cache invalidation. A deterministic controlled-reader test proves concurrent
-RPC overlap and cancellation of one request without closing another's peer.
-Lexical queries are tested against a configured local mock embedding endpoint
-and must make zero requests.
-
-The bootstrap suite covers unsupported-file-only projects receiving their first
-source, preserved empty source configuration and ignore rules, empty/overflow
-publication rejection, changed configuration, and cancellation preserving
-existing storage. Fixtures clear credentials and disable inference. Test code
-alone is not a passing result; consult commit-specific CI evidence in the PR.
+Fixtures use synthetic temporary projects, cleared credentials, disabled/mock
+inference, and execution deadlines. Coverage includes fresh roots and changes,
+independent code/recall, edit/create/delete convergence, offline catch-up, follower
+visibility before handoff, writer contention, ignore changes, document cache
+invalidation, concurrent RPC cancellation, stream limits, and full/unpolled SSE
+teardown. Consult exact-commit CI results; test source alone is not a passing run.
