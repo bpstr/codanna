@@ -1,0 +1,37 @@
+name: Workspace review artifacts
+
+on:
+  push:
+    branches: [feat/product-workspaces]
+    paths: [.github/workflows/workspace-review-artifacts.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  review-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Package exact tracked revision and formatter
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/workspace-review"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/workspace-review/source.tar.gz"
+          cp "$(rustup which rustfmt)" "$RUNNER_TEMP/workspace-review/rustfmt"
+          git rev-parse HEAD > "$RUNNER_TEMP/workspace-review/revision.txt"
+          rustfmt --version > "$RUNNER_TEMP/workspace-review/formatter-version.txt"
+          cd "$RUNNER_TEMP/workspace-review"
+          sha256sum source.tar.gz rustfmt > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-review-${{ github.sha }}
+          path: ${{ runner.temp }}/workspace-review/
+          retention-days: 1
+          if-no-files-found: error
