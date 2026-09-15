@@ -5,12 +5,16 @@ use crate::init::workspaces::{Workspace, confined_index_path, read_settings};
 use crate::storage::IndexMetadata;
 use rmcp::model::ErrorData;
 use std::fs::{self, File, OpenOptions};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+
+const MAX_FILES: u32 = 50_000;
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(super) enum Status {
@@ -24,6 +28,8 @@ struct Build {
     config: PathBuf,
     destination: PathBuf,
     root: PathBuf,
+    source_config: PathBuf,
+    source_config_bytes: Vec<u8>,
 }
 enum Plan {
     Complete(Status),
@@ -45,25 +51,20 @@ pub(super) async fn ensure(
     let plan = budget
         .run(&ct, move |token| plan(&selected, &token))
         .await?;
-    let Plan::Build(build) = plan else {
-        if let Plan::Complete(status) = plan {
-            return Ok(status);
-        }
-        unreachable!()
+    let build = match plan {
+        Plan::Complete(status) => return Ok(status),
+        Plan::Build(build) => build,
     };
     let mut command = tokio::process::Command::new(executable);
     command
         .current_dir(&build.root)
-        .args(["--config"])
+        .arg("--config")
         .arg(&build.config)
-        .args([
-            "index",
-            "--threads",
-            "2",
-            "--max-files",
-            "50000",
-            "--no-progress",
-        ])
+        .args(["index", "--threads", "2", "--max-files"])
+        // One overflow witness distinguishes a complete allowed generation from
+        // a truncated pass if files arrive after the discovery preflight.
+        .arg((MAX_FILES + 1).to_string())
+        .arg("--no-progress")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -99,60 +100,96 @@ pub(super) async fn ensure(
             "Initial code indexing failed or exceeded its five-minute budget. No existing index was replaced. Run codanna index in the workspace for detailed recovery output.",
         ));
     }
-    budget
-        .run(&ct, move |token| {
-            if token.is_cancelled() {
-                return Err(super::internal(
-                    "Workspace bootstrap cancelled before publication",
-                ));
-            }
-            let staged = build.staging.path().join("index");
-            let mut metadata = IndexMetadata::load(&staged).map_err(super::internal)?;
-            if metadata.emission_version
-                != Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION)
-                || !staged.join("tantivy/meta.json").is_file()
-            {
-                return Err(super::internal(
-                    "Initial index did not produce a complete compatible generation",
-                ));
-            }
-            // A concurrent explicit writer wins. Never replace its nonempty output.
-            if build.destination.exists()
-                && !crate::cli::automatic::is_uninitialized_index(&build.destination)
-                    .map_err(super::internal)?
-            {
-                IndexMetadata::load(&build.destination).map_err(super::internal)?;
-                return Ok(Status::Ready);
-            }
-            if build.destination.exists() {
-                // Only remove the empty skeleton previously verified above. remove_dir
-                // refuses nonempty directories, including a writer's newly added files.
-                if build.destination.join("tantivy").is_dir() {
-                    fs::remove_dir(build.destination.join("tantivy")).map_err(super::internal)?;
-                }
-                fs::remove_dir(&build.destination).map_err(super::internal)?;
-            }
-            if let crate::storage::DataSource::Tantivy { path, .. } = &mut metadata.data_source {
-                *path = build.destination.join("tantivy");
-            }
-            metadata.save(&staged).map_err(super::internal)?;
-            fs::rename(&staged, &build.destination).map_err(super::internal)?;
-            #[cfg(unix)]
-            File::open(
-                build
-                    .destination
-                    .parent()
-                    .ok_or_else(|| super::internal("Index has no parent"))?,
-            )
-            .and_then(|file| file.sync_all())
-            .map_err(super::internal)?;
-            Ok(Status::Ready)
-        })
-        .await
+    budget.run(&ct, move |token| publish(build, &token)).await
+}
+
+fn read_config_bytes(path: &Path) -> Result<Vec<u8>, ErrorData> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(super::internal)?
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(super::internal)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(super::internal("Workspace configuration exceeds 1 MiB"));
+    }
+    Ok(bytes)
+}
+
+fn validate_generation(metadata: &IndexMetadata) -> Result<Status, ErrorData> {
+    if metadata.emission_version != Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION) {
+        return Err(super::internal("Initial index has incompatible emission semantics"));
+    }
+    if metadata.file_count > MAX_FILES {
+        return Err(super::internal(
+            "Source files exceeded the automatic indexing limit during the build. The partial generation was not published; use explicit codanna index.",
+        ));
+    }
+    // README/config-only directories and disabled languages can produce a valid
+    // index with no indexed files. Do not publish that as permanently ready: the
+    // session must still bootstrap when its first supported source file arrives.
+    // A file with zero symbols is different and remains a valid indexed file.
+    if metadata.file_count == 0 {
+        Ok(Status::Empty)
+    } else {
+        Ok(Status::Ready)
+    }
+}
+
+fn publish(build: Build, ct: &CancellationToken) -> Result<Status, ErrorData> {
+    if ct.is_cancelled() {
+        return Err(super::internal("Workspace bootstrap cancelled before publication"));
+    }
+    if read_config_bytes(&build.source_config)? != build.source_config_bytes {
+        return Err(super::internal(
+            "Workspace configuration changed during initial indexing. No generation was published; retry with the current configuration.",
+        ));
+    }
+    let staged = build.staging.path().join("index");
+    let mut metadata = IndexMetadata::load(&staged).map_err(super::internal)?;
+    let status = validate_generation(&metadata)?;
+    if matches!(status, Status::Empty) {
+        return Ok(status);
+    }
+    if !staged.join("tantivy/meta.json").is_file() {
+        return Err(super::internal("Initial index has no committed code generation"));
+    }
+    // A concurrent explicit writer wins. Never replace its nonempty output.
+    if build.destination.exists()
+        && !crate::cli::automatic::is_uninitialized_index(&build.destination)
+            .map_err(super::internal)?
+    {
+        IndexMetadata::load(&build.destination).map_err(super::internal)?;
+        return Ok(Status::Ready);
+    }
+    if build.destination.exists() {
+        // These operations refuse nonempty directories, including a writer's
+        // newly added files. Do not use recursive removal for live storage.
+        if build.destination.join("tantivy").is_dir() {
+            fs::remove_dir(build.destination.join("tantivy")).map_err(super::internal)?;
+        }
+        fs::remove_dir(&build.destination).map_err(super::internal)?;
+    }
+    if let crate::storage::DataSource::Tantivy { path, .. } = &mut metadata.data_source {
+        *path = build.destination.join("tantivy");
+    }
+    metadata.save(&staged).map_err(super::internal)?;
+    fs::rename(&staged, &build.destination).map_err(super::internal)?;
+    #[cfg(unix)]
+    File::open(
+        build.destination.parent().ok_or_else(|| super::internal("Index has no parent"))?,
+    )
+    .and_then(|file| file.sync_all())
+    .map_err(super::internal)?;
+    Ok(Status::Ready)
 }
 
 fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData> {
+    let source_config_bytes = read_config_bytes(&workspace.config_path)?;
     let mut settings = read_settings(&workspace.root).map_err(super::internal)?;
+    if read_config_bytes(&workspace.config_path)? != source_config_bytes {
+        return Err(super::internal("Workspace configuration changed during setup; retry"));
+    }
     let destination = confined_index_path(&workspace.root, &settings).map_err(super::internal)?;
     if destination.join("index.meta").is_file() {
         IndexMetadata::load(&destination).map_err(super::internal)?;
@@ -185,15 +222,9 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     }
     let mut roots = Vec::new();
     for source in &settings.indexing.indexed_paths {
-        let path = workspace
-            .root
-            .join(source)
-            .canonicalize()
-            .map_err(super::internal)?;
+        let path = workspace.root.join(source).canonicalize().map_err(super::internal)?;
         if !path.starts_with(&workspace.root) {
-            return Err(super::internal(
-                "Automatic indexing cannot include external source roots",
-            ));
+            return Err(super::internal("Automatic indexing cannot include external source roots"));
         }
         roots.push(path);
     }
@@ -211,7 +242,7 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
         .require_git(false)
         .add_custom_ignore_filename(".codannaignore");
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut files = 0usize;
+    let mut files = 0u32;
     let mut entries = 0usize;
     let mut bytes = 0u64;
     for entry in walker.build() {
@@ -225,7 +256,7 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
         if entry.file_type().is_some_and(|kind| kind.is_file()) {
             files += 1;
             bytes = bytes.saturating_add(entry.metadata().map_err(super::internal)?.len());
-            if files > 50_000 || bytes > 512 * 1024 * 1024 {
+            if files > MAX_FILES || bytes > 512 * 1024 * 1024 {
                 return Err(super::internal(
                     "Workspace exceeds automatic indexing limits (50,000 files / 512 MiB); use explicit codanna index",
                 ));
@@ -246,16 +277,18 @@ fn plan(workspace: &Workspace, ct: &CancellationToken) -> Result<Plan, ErrorData
     settings.semantic_search.enabled = false;
     settings.file_watch.enabled = false;
     let config = staging.path().join("settings.toml");
-    fs::write(
-        &config,
-        toml::to_string_pretty(&settings).map_err(super::internal)?,
-    )
-    .map_err(super::internal)?;
+    fs::write(&config, toml::to_string_pretty(&settings).map_err(super::internal)?)
+        .map_err(super::internal)?;
     Ok(Plan::Build(Build {
         _lock: lock,
         staging,
         config,
         destination,
         root: workspace.root.clone(),
+        source_config: workspace.config_path.clone(),
+        source_config_bytes,
     }))
 }
+
+#[cfg(test)]
+mod tests;
