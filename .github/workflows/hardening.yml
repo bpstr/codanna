@@ -61,6 +61,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run watcher hardening tests
         run: cargo test hardening_watcher_ --all-features -- --nocapture
+      - name: Exercise automatic local workspace lifecycle
+        run: cargo test --locked --all-features --test workspace_live --test workspace_recall
 
   macos-watcher:
     name: macOS watcher witness
@@ -74,6 +76,8 @@ jobs:
         run: cargo check --all-features
       - name: Run watcher hardening tests
         run: cargo test hardening_watcher_ --all-features -- --nocapture
+      - name: Exercise automatic local workspace lifecycle
+        run: cargo test --locked --all-features --test workspace_live --test workspace_recall
 
   stress:
     name: Stress and recovery smoke
