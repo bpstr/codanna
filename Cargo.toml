@@ -93,6 +93,7 @@ tower = { version = "0.5.3", optional = true }
 tower-http = { version = "0.7.0", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
 tokio-util = "0.7.19"
+tokio-stream = { version = "0.1.18", optional = true }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"], optional = true }
 rcgen = { version = "0.14.9", optional = true }
@@ -125,7 +126,7 @@ thread-id = "5.1.0"
 
 [features]
 default = ["http-server"]
-http-server = ["axum", "tower", "tower-http"]
+http-server = ["axum", "tower", "tower-http", "dep:tokio-stream"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
 # Optional local embedding acceleration. The active target decides which ORT
 # execution provider is compiled: CoreML on Apple, CUDA on Linux/Windows.

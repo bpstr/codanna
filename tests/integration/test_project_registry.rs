@@ -35,7 +35,9 @@ impl TestProjectRegistry {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_id = format!("test-id-{}-{}", timestamp, std::process::id());
+        // Fixed-width fields keep the mock identifier stable across hosts whose
+        // process IDs have different digit counts.
+        let project_id = format!("test-id-{timestamp:032x}-{:08x}", std::process::id());
         let project_name = project_path
             .file_name()
             .and_then(|n| n.to_str())

@@ -14,9 +14,12 @@ struct Cli {
     /// Dedicated index directory; defaults to the user's local data directory.
     #[arg(long, global = true)]
     index: Option<PathBuf>,
-    /// Explicit privacy/retrieval scope, shared by both clients (for example assign).
-    #[arg(long)]
-    workspace: String,
+    /// Optional legacy namespace. Normally derived from the opened project.
+    #[arg(long, conflicts_with = "project_path")]
+    workspace: Option<String>,
+    /// Optional project directory; defaults to the process working directory.
+    #[arg(long, conflicts_with = "workspace")]
+    project_path: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -61,7 +64,17 @@ fn validate_workspace(workspace: &str) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    validate_workspace(&cli.workspace)?;
+    let workspace = match cli.workspace {
+        Some(workspace) => workspace,
+        None => {
+            let directory = cli
+                .project_path
+                .map(Ok)
+                .unwrap_or_else(std::env::current_dir)?;
+            codanna::mcp::tools::recall::scope_for_directory(&directory)?
+        }
+    };
+    validate_workspace(&workspace)?;
     let path = cli.index.map(Ok).unwrap_or_else(|| {
         dirs::data_local_dir()
             .map(|p| p.join("codanna").join("recall-v1"))
@@ -70,20 +83,20 @@ async fn main() -> Result<()> {
     let create = matches!(&cli.command, Command::Import { .. });
     let store = store::Store::open(&path, create)?;
     let output = match cli.command {
-        Command::Import { provider, file } => store.import(&cli.workspace, provider, &file)?,
+        Command::Import { provider, file } => store.import(&workspace, provider, &file)?,
         Command::Search {
             query,
             limit,
             role,
             provider,
-        } => store.search(&cli.workspace, &query, limit, role.as_deref(), provider)?,
-        Command::Read { id } => store.read(&cli.workspace, &id)?,
+        } => store.search(&workspace, &query, limit, role.as_deref(), provider)?,
+        Command::Read { id } => store.read(&workspace, &id)?,
         Command::Forget { source_id } => {
-            store.forget(&cli.workspace, &source_id)?;
+            store.forget(&workspace, &source_id)?;
             json!({"forgotten_source": source_id, "original_file_modified": false})
         }
         Command::Serve => {
-            server::serve(store, cli.workspace).await?;
+            server::serve(store, workspace).await?;
             return Ok(());
         }
     };

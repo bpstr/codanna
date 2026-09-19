@@ -28,6 +28,8 @@ pub mod notifications;
 pub mod requests;
 pub mod server;
 pub mod service;
+#[cfg(feature = "http-server")]
+pub(crate) mod sessions;
 pub mod stale_server;
 pub mod tools;
 

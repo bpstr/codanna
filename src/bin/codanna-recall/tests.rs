@@ -100,18 +100,30 @@ fn shared_recall_prefers_users_and_finds_assistant_only_terms() {
         ]),
     )
     .unwrap();
-    store.import("assign", Provider::Codex, &c).unwrap();
-    store.import("assign", Provider::Claude, &a).unwrap();
-    let hits = store.search("assign", "status bar", 8, None, None).unwrap();
+    store
+        .import("example-workspace", Provider::Codex, &c)
+        .unwrap();
+    store
+        .import("example-workspace", Provider::Claude, &a)
+        .unwrap();
+    let hits = store
+        .search("example-workspace", "status bar", 8, None, None)
+        .unwrap();
     assert_eq!(hits["total_matches"], 2);
     assert_eq!(hits["results"][0]["message"]["role"], "user");
     let id = hits["results"][1]["message"]["id"].as_str().unwrap();
     assert_eq!(
-        store.read("assign", id).unwrap()["message"]["text"],
+        store.read("example-workspace", id).unwrap()["message"]["text"],
         "status bar layout"
     );
     let answers = store
-        .search("assign", "status bar", 8, Some("assistant"), None)
+        .search(
+            "example-workspace",
+            "status bar",
+            8,
+            Some("assistant"),
+            None,
+        )
         .unwrap();
     assert_eq!(answers["total_matches"], 1);
     assert_eq!(answers["results"][0]["message"]["provider"], "claude");
@@ -147,32 +159,50 @@ fn unchanged_import_replacement_failure_and_forget() {
     let file = temp.path().join("log.jsonl");
     let original = jsonl(&[codex("user", "old status bar")]);
     fs::write(&file, &original).unwrap();
-    let imported = store.import("assign", Provider::Codex, &file).unwrap();
+    let imported = store
+        .import("example-workspace", Provider::Codex, &file)
+        .unwrap();
     assert_eq!(
-        store.import("assign", Provider::Codex, &file).unwrap()["unchanged"],
+        store
+            .import("example-workspace", Provider::Codex, &file)
+            .unwrap()["unchanged"],
         true
     );
     fs::write(&file, format!("{original}broken\n")).unwrap();
-    assert!(store.import("assign", Provider::Codex, &file).is_err());
+    assert!(
+        store
+            .import("example-workspace", Provider::Codex, &file)
+            .is_err()
+    );
     assert_eq!(
-        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
+        reader
+            .search("example-workspace", "old", 8, None, None)
+            .unwrap()["total_matches"],
         1
     );
     fs::write(&file, jsonl(&[codex("user", "new stable layout")])).unwrap();
-    store.import("assign", Provider::Codex, &file).unwrap();
+    store
+        .import("example-workspace", Provider::Codex, &file)
+        .unwrap();
     assert_eq!(
-        reader.search("assign", "old", 8, None, None).unwrap()["total_matches"],
+        reader
+            .search("example-workspace", "old", 8, None, None)
+            .unwrap()["total_matches"],
         0
     );
     assert_eq!(
-        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
+        reader
+            .search("example-workspace", "stable", 8, None, None)
+            .unwrap()["total_matches"],
         1
     );
     store
-        .forget("assign", imported["source_id"].as_str().unwrap())
+        .forget("example-workspace", imported["source_id"].as_str().unwrap())
         .unwrap();
     assert_eq!(
-        reader.search("assign", "stable", 8, None, None).unwrap()["total_matches"],
+        reader
+            .search("example-workspace", "stable", 8, None, None)
+            .unwrap()["total_matches"],
         0
     );
     assert!(file.exists());
@@ -185,13 +215,27 @@ fn query_bounds_unknown_fields_and_unicode_preview() {
     let file = temp.path().join("log.jsonl");
     let text = format!("status {}", "ő界🙂".repeat(600));
     fs::write(&file, jsonl(&[claude("user", &text)])).unwrap();
-    store.import("assign", Provider::Claude, &file).unwrap();
-    assert!(store.search("assign", "status", 0, None, None).is_err());
-    assert!(store.search("assign", "status", 21, None, None).is_err());
-    assert!(store.search("assign", "", 8, None, None).is_err());
+    store
+        .import("example-workspace", Provider::Claude, &file)
+        .unwrap();
     assert!(
         store
-            .search("assign", "status", 8, Some("system"), None)
+            .search("example-workspace", "status", 0, None, None)
+            .is_err()
+    );
+    assert!(
+        store
+            .search("example-workspace", "status", 21, None, None)
+            .is_err()
+    );
+    assert!(
+        store
+            .search("example-workspace", "", 8, None, None)
+            .is_err()
+    );
+    assert!(
+        store
+            .search("example-workspace", "status", 8, Some("system"), None)
             .is_err()
     );
     assert!(
@@ -200,10 +244,15 @@ fn query_bounds_unknown_fields_and_unicode_preview() {
         }))
         .is_err()
     );
-    let hit = store.search("assign", "status", 8, None, None).unwrap();
+    let hit = store
+        .search("example-workspace", "status", 8, None, None)
+        .unwrap();
     assert_eq!(hit["results"][0]["preview_truncated"], true);
     let id = hit["results"][0]["message"]["id"].as_str().unwrap();
-    assert_eq!(store.read("assign", id).unwrap()["message"]["text"], text);
+    assert_eq!(
+        store.read("example-workspace", id).unwrap()["message"]["text"],
+        text
+    );
 }
 
 #[test]

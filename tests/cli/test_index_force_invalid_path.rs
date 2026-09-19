@@ -172,33 +172,48 @@ fn force_bare_with_no_existing_roots_refuses_before_clearing_index() {
     assert!(meta.exists(), "seed must persist index.meta");
     let meta_before = std::fs::read(&meta).expect("read index.meta");
     let entries_before = index_dir_entries(workspace);
+    let config = workspace.join(".codanna/settings.toml");
+    let config = config.to_str().expect("fixture configuration path");
+    let missing_root = workspace.join("src");
+    std::fs::remove_dir_all(&missing_root).expect("remove registered root");
 
-    std::fs::remove_dir_all(workspace.join("src")).expect("remove registered root");
-
-    let (exit, stdout, stderr) = run_cli(workspace, &["index", "--force"]);
-    assert_ne!(
-        exit, 0,
-        "bare force with no existing configured root must fail\nstdout:{stdout}\nstderr:{stderr}"
-    );
-    assert!(
-        stderr.contains("Configured path does not exist"),
-        "refusal must name the missing configured root:\nstderr:{stderr}"
-    );
-    assert!(
-        stderr.contains("nothing to rebuild"),
-        "refusal must state the reason:\nstderr:{stderr}"
-    );
-
-    let meta_after = std::fs::read(&meta).expect("read index.meta");
-    assert_eq!(
-        meta_before, meta_after,
-        "index.meta must be byte-identical after the refused bare-force run"
-    );
-    assert_eq!(
-        entries_before,
-        index_dir_entries(workspace),
-        "index directory contents must be untouched after the refused bare-force run"
-    );
+    // Automatic selection now rejects the missing source even earlier than the
+    // legacy facade gate. Both paths must preserve the same index bytes.
+    for explicit in [false, true] {
+        let args = if explicit {
+            vec!["--config", config, "index", "--force"]
+        } else {
+            vec!["index", "--force"]
+        };
+        let (exit, stdout, stderr) = run_cli(workspace, &args);
+        assert_ne!(
+            exit, 0,
+            "bare force with no existing configured root must fail (explicit={explicit})\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            stderr.contains(missing_root.to_string_lossy().as_ref()),
+            "refusal must identify the exact missing configured root:\nstderr:{stderr}"
+        );
+        if explicit {
+            assert!(
+                stderr.contains("Configured path does not exist"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("nothing to rebuild"), "{stderr}");
+        } else {
+            assert!(stderr.contains("Failed to read file"), "{stderr}");
+        }
+        let meta_after = std::fs::read(&meta).expect("read index.meta");
+        assert_eq!(
+            meta_before, meta_after,
+            "index.meta must be byte-identical after the refused bare-force run"
+        );
+        assert_eq!(
+            entries_before,
+            index_dir_entries(workspace),
+            "index directory contents must be untouched after the refused bare-force run"
+        );
+    }
 }
 
 #[test]

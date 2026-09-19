@@ -230,6 +230,32 @@ async fn main() {
         return;
     }
 
+    // Workspace management is metadata-only. Selection must precede even the
+    // legacy auto-init/config-fallback paths, not merely precede tool dispatch.
+    if let Commands::Workspace { action } = &cli.command {
+        if cli.config.is_some() || cli.workspace_selector.is_some() {
+            eprintln!(
+                "Workspace management takes its own selector; do not combine it with --config or --workspace."
+            );
+            std::process::exit(2);
+        }
+        let result = codanna::cli::workspace::run(action);
+        exit_workspace_command(result);
+    }
+    if let Some(selector) = &cli.workspace_selector {
+        let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+        let result = codanna::cli::workspace::launch(selector, &arguments);
+        exit_workspace_command(result);
+    }
+
+    // Local discovery pins the product root before any configuration fallback,
+    // model loading, or index access. Explicit selectors retain their behavior.
+    match codanna::cli::automatic::try_run(&cli) {
+        Ok(None) => {}
+        Ok(Some(code)) => exit_workspace_command(Ok(code)),
+        Err(error) => exit_workspace_command(Err(error)),
+    }
+
     codanna::embedding_runtime::configure_embedding_runtime();
 
     // For index command, auto-initialize if needed (but not when using --config)
@@ -305,6 +331,37 @@ async fn main() {
             | Commands::Completions { .. }
     );
 
+    // Apply config overrides from CLI args
+    if let Commands::Index {
+        threads: Some(t), ..
+    } = &cli.command
+    {
+        config.indexing.parallelism = *t;
+    }
+
+    // Set up persistence based on config
+    // Use global path resolution that handles --config properly
+    let index_path = codanna::init::resolve_index_path(&config, cli.config.as_deref());
+
+    // Update the config with the resolved index_path so SimpleIndexer uses the correct path
+    config.index_path = index_path.clone();
+
+    let writes_code = matches!(&cli.command, Commands::Index { dry_run: false, .. })
+        || matches!(&cli.command, Commands::Mcp { watch: true, .. })
+        || matches!(&cli.command, Commands::Serve { watch, http, https, .. }
+            if *watch || ((*http || *https || config.server.mode == "http") && config.file_watch.enabled));
+    let _code_write_lease = if writes_code {
+        Some(
+            codanna::storage::write_lease::CodeWriteLease::acquire(&index_path).unwrap_or_else(
+                |error| {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
     // Initialize project resolution providers (only if needed)
     // This ensures caches are built before indexing starts
     if needs_providers {
@@ -327,21 +384,6 @@ async fn main() {
             }
         }
     }
-
-    // Apply config overrides from CLI args
-    if let Commands::Index {
-        threads: Some(t), ..
-    } = &cli.command
-    {
-        config.indexing.parallelism = *t;
-    }
-
-    // Set up persistence based on config
-    // Use global path resolution that handles --config properly
-    let index_path = codanna::init::resolve_index_path(&config, cli.config.as_deref());
-
-    // Update the config with the resolved index_path so SimpleIndexer uses the correct path
-    config.index_path = index_path.clone();
 
     let persistence = IndexPersistence::new(index_path.clone());
 
@@ -681,7 +723,11 @@ async fn main() {
 
     let read_only_serve = matches!(&cli.command, Commands::Serve { .. });
     if let Some(ref mut idx) = indexer {
-        if !read_only_serve && persistence.exists() && !is_force_index && !index_command_fresh_index
+        if writes_code
+            && !read_only_serve
+            && persistence.exists()
+            && !is_force_index
+            && !index_command_fresh_index
         {
             // Load stored indexed_paths from metadata
             match IndexMetadata::load(&config.index_path) {
@@ -970,7 +1016,19 @@ async fn main() {
             codanna::cli::commands::profile::run(action);
         }
 
-        Commands::Completions { .. } => unreachable!("handled before configuration loading"),
+        Commands::Completions { .. } | Commands::Workspace { .. } => {
+            unreachable!("handled before configuration loading")
+        }
+    }
+}
+
+fn exit_workspace_command(result: Result<i32, codanna::IndexError>) -> ! {
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("Workspace error: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
