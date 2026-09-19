@@ -43,17 +43,19 @@ These describe code, not a blanket final-head/platform qualification result.
 
 ## Qualification gates
 
-- [ ] Focused workspace CLI, bootstrap, discovery, MCP, live-watch, recall,
+- [x] Focused workspace CLI, bootstrap, discovery, MCP, live-watch, recall,
   document refresh, lazy loading, cancellation, and session tests pass on final head.
-- [ ] Default/all-feature suites, no-default-features build, strict Clippy,
+- [x] Default/all-feature suites, no-default-features build, strict Clippy,
   formatting, and documentation checks pass on that same head.
 - [ ] Linux/macOS process-lifecycle witnesses and the advertised Windows support
-  level are qualified. A type-check is not a native process regression result.
+  level are qualified on the final remote head. This remains a merge gate while
+  fresh platform CI runs; a type-check is not a native process regression result.
 - [ ] Measure warm routing separately from indexing/model loading; report actual
-  latency/memory rather than inferred numerical speedups.
-- [ ] Expand deterministic stress witnesses for delayed exits, admission, storage
+  latency/memory rather than inferred numerical speedups. This is a non-blocking
+  follow-up because this PR makes no numerical performance claim.
+- [x] Expand deterministic stress witnesses for delayed exits, admission, storage
   contention, source growth, cancellation, and recovery.
-- [ ] Keep PR draft until its scope, limitations, and claimed behavior match evidence.
+- [x] Keep PR draft until its scope, limitations, and claimed behavior match evidence.
 
 Older binaries and direct third-party storage access do not participate in the
 new advisory lease protocol. Separate stdio frontends are not a shared daemon.
