@@ -251,8 +251,6 @@ fn is_stale_registration(info: &ProjectInfo, now: u64) -> bool {
     let ephemeral = name.starts_with("tmp.")
         || name.starts_with(".tmp")
         || path.contains("/.codex/worktrees/")
-        || path.starts_with("/private/tmp/")
-        || path.starts_with("/tmp/")
         || [
             "benchmark",
             "bench.",
