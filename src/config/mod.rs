@@ -624,7 +624,10 @@ mod tests {
         // Use the correct local dir name for test mode
         let expected_index_path = PathBuf::from(format!("{}/index", crate::init::local_dir_name()));
         assert_eq!(settings.index_path, expected_index_path);
-        assert!(settings.indexing.parallelism > 0);
+        assert_eq!(
+            settings.indexing.parallelism,
+            num_cpus::get().saturating_sub(2).max(1)
+        );
         assert!(settings.languages.contains_key("rust"));
     }
 

@@ -37,6 +37,11 @@ pub enum WorkspaceAction {
         #[arg(long)]
         json: bool,
     },
+    /// Remove stale disposable registrations; leaves all workspace files untouched
+    Prune {
+        #[arg(long)]
+        json: bool,
+    },
     /// Show metadata for an exact workspace ID or alias
     Show {
         workspace: String,
@@ -128,6 +133,25 @@ pub fn run(action: &WorkspaceAction) -> Result<i32, IndexError> {
                     writeln!(
                         out,
                         "{}\t{}\t{}",
+                        workspace.name,
+                        workspace.id,
+                        workspace.root.display()
+                    )
+                    .map_err(output_error)?;
+                }
+            }
+        }
+        WorkspaceAction::Prune { json } => {
+            let removed = registry.prune_stale()?;
+            if *json {
+                write_json(&mut out, &serde_json::json!({"removed":removed}))?;
+            } else if removed.is_empty() {
+                writeln!(out, "No stale workspace registrations found.").map_err(output_error)?;
+            } else {
+                for workspace in removed {
+                    writeln!(
+                        out,
+                        "Removed registration: {} [{}] ({})",
                         workspace.name,
                         workspace.id,
                         workspace.root.display()

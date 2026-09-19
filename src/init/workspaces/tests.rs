@@ -166,6 +166,85 @@ fn workspace_remove_and_rename_never_touch_project_data() {
 }
 
 #[test]
+fn workspace_prune_removes_only_old_disposable_metadata() {
+    let temp = TempDir::new().unwrap();
+    let disposable = fixture(temp.path(), "diagnostic-bench.123");
+    let durable = fixture(temp.path(), "product");
+    let registry = registry(temp.path());
+    let disposable = registry.add(&disposable, None).unwrap();
+    let durable = registry.add(&durable, None).unwrap();
+    with_registry(&registry.path, |state| {
+        state
+            .projects
+            .get_mut(disposable.id.as_str())
+            .unwrap()
+            .last_modified = 100;
+        state
+            .projects
+            .get_mut(durable.id.as_str())
+            .unwrap()
+            .last_modified = 100;
+        Ok(())
+    })
+    .unwrap();
+
+    let removed = registry.prune_stale_at(100 + 24 * 60 * 60).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].id, disposable.id);
+    assert_eq!(registry.list().unwrap()[0].id, durable.id);
+    assert!(removed[0].root.exists());
+}
+
+#[test]
+fn workspace_prune_preserves_recent_and_untracked_registrations() {
+    let temp = TempDir::new().unwrap();
+    let recent = fixture(temp.path(), "qualification-smoke-1");
+    let never_indexed = fixture(temp.path(), "diagnostic-never-indexed");
+    let registry = registry(temp.path());
+    let recent = registry.add(&recent, None).unwrap();
+    registry.add(&never_indexed, None).unwrap();
+    with_registry(&registry.path, |state| {
+        state
+            .projects
+            .get_mut(recent.id.as_str())
+            .unwrap()
+            .last_modified = 1_000;
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(registry.prune_stale_at(1_000 + 60).unwrap().is_empty());
+    assert_eq!(registry.list().unwrap().len(), 2);
+}
+
+#[test]
+fn workspace_prune_removes_missing_legacy_disposable_registration() {
+    let temp = TempDir::new().unwrap();
+    let missing = temp.path().join("tmp.legacy-missing");
+    let registry = registry(temp.path());
+    with_registry(&registry.path, |state| {
+        state.projects.insert(
+            "legacy-temp".to_string(),
+            ProjectInfo {
+                name: "tmp.legacy-missing".to_string(),
+                path: missing.clone(),
+                symbol_count: 0,
+                file_count: 0,
+                last_modified: 0,
+                doc_count: 0,
+            },
+        );
+        Ok(())
+    })
+    .unwrap();
+
+    let removed = registry.prune_stale_at(1_000).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].id.as_str(), "legacy-temp");
+    assert!(registry.list().unwrap().is_empty());
+}
+
+#[test]
 fn workspace_move_requires_original_to_be_gone_and_preserves_id() {
     let temp = TempDir::new().unwrap();
     let root = fixture(temp.path(), "a");

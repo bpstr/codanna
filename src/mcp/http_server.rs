@@ -58,8 +58,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         let index_watcher_broadcaster = broadcaster.clone();
         let index_watcher_ct = ct.clone();
 
-        // Default to 5 second interval
-        let watch_interval = 5u64;
+        let watch_interval = config.server.watch_interval;
 
         let hot_reload_watcher = HotReloadWatcher::new(
             index_watcher_indexer,

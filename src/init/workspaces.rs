@@ -9,6 +9,10 @@ use fs4::fs_std::FileExt;
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const EPHEMERAL_REGISTRATION_TTL_SECS: u64 = 24 * 60 * 60;
+const MISSING_REGISTRATION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Reuse existing stable project IDs without rewriting a user's registry.
 pub type WorkspaceId = ProjectId;
@@ -75,6 +79,46 @@ impl WorkspaceRegistry {
                 .then_with(|| a.id.as_str().cmp(b.id.as_str()))
         });
         Ok(workspaces)
+    }
+
+    /// Remove old routing metadata for disposable or long-missing workspaces.
+    /// Source trees, configurations, and indexes are never deleted.
+    pub fn prune_stale(&self) -> Result<Vec<Workspace>, IndexError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.prune_stale_at(now)
+    }
+
+    fn prune_stale_at(&self, now: u64) -> Result<Vec<Workspace>, IndexError> {
+        let snapshot = ProjectRegistry::load_from_path(&self.path)?;
+        let stale_ids: Vec<_> = snapshot
+            .projects
+            .iter()
+            .filter(|(_, info)| is_stale_registration(info, now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if stale_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        with_registry(&self.path, |registry| {
+            let mut removed = Vec::new();
+            for id in &stale_ids {
+                let Some(info) = registry.projects.get(id) else {
+                    continue;
+                };
+                if !is_stale_registration(info, now) {
+                    continue;
+                }
+                let info = registry.projects.remove(id).expect("entry checked above");
+                if registry.default_project.as_deref() == Some(id.as_str()) {
+                    registry.default_project = None;
+                }
+                removed.push(Workspace::from_entry(id, &info));
+            }
+            Ok(removed)
+        })
     }
 
     /// Resolve an exact ID or alias. Legacy duplicate aliases are errors, not guesses.
@@ -199,6 +243,39 @@ impl WorkspaceRegistry {
             detail,
         })
     }
+}
+
+fn is_stale_registration(info: &ProjectInfo, now: u64) -> bool {
+    let name = info.name.to_ascii_lowercase();
+    let path = info.path.to_string_lossy().to_ascii_lowercase();
+    let ephemeral = name.starts_with("tmp.")
+        || name.starts_with(".tmp")
+        || path.contains("/.codex/worktrees/")
+        || path.starts_with("/private/tmp/")
+        || path.starts_with("/tmp/")
+        || [
+            "benchmark",
+            "bench.",
+            "diagnostic",
+            "qualification",
+            "smoke-",
+        ]
+        .iter()
+        .any(|marker| name.contains(marker) || path.contains(marker));
+    // Legacy registrations may predate activity timestamps. A missing
+    // disposable root is sufficient evidence in that case; retain all
+    // existing never-indexed workspaces and missing durable roots.
+    if info.last_modified == 0 {
+        return ephemeral && !info.path.exists();
+    }
+    if now < info.last_modified {
+        return false;
+    }
+    let age = now - info.last_modified;
+    if ephemeral && age >= EPHEMERAL_REGISTRATION_TTL_SECS {
+        return true;
+    }
+    age >= MISSING_REGISTRATION_TTL_SECS && !info.path.exists()
 }
 
 /// Discover from a supplied path without changing cwd. A cache-only `.codanna`

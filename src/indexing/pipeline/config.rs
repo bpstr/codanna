@@ -3,7 +3,10 @@
 //! Controls threading, batching, and channel sizes for the parallel pipeline.
 //! Reads from Settings (.codanna/settings.toml).
 
-use crate::{Settings, memory::MemoryBudget};
+use crate::{
+    Settings,
+    memory::{CpuBudget, MemoryBudget},
+};
 
 /// Configuration for the parallel indexing pipeline.
 #[derive(Debug, Clone)]
@@ -72,18 +75,31 @@ impl PipelineConfig {
     /// - `indexing.batches_per_commit` -> batches_per_commit
     /// - `indexing.pipeline_tracing` -> pipeline_tracing
     pub fn from_settings(settings: &Settings) -> Self {
-        Self::from_settings_with_budget(settings, MemoryBudget::current())
+        Self::from_settings_with_resources(settings, MemoryBudget::current(), CpuBudget::current())
     }
 
+    #[cfg(test)]
     fn from_settings_with_budget(settings: &Settings, memory: MemoryBudget) -> Self {
+        Self::from_settings_with_resources(
+            settings,
+            memory,
+            CpuBudget::from_values(num_cpus::get(), 0.0),
+        )
+    }
+
+    fn from_settings_with_resources(
+        settings: &Settings,
+        memory: MemoryBudget,
+        cpu: CpuBudget,
+    ) -> Self {
         let indexing = &settings.indexing;
-        let parallelism = indexing.parallelism;
+        let parallelism = cpu.indexing_parallelism(indexing.parallelism);
         let queue_scale = memory.queue_scale_percent();
         let scale = |value: usize| (value.saturating_mul(queue_scale) / 100).max(1);
 
         // Derive thread counts from single parallelism value
         // 60% for CPU-heavy parsing, 20% for I/O, 10% for discovery
-        let parse_threads = (parallelism * 60 / 100).max(2);
+        let parse_threads = (parallelism * 60 / 100).max(1);
         let read_threads = (parallelism * 20 / 100).max(1);
         let discover_threads = (parallelism * 10 / 100).max(1);
 
@@ -214,9 +230,11 @@ mod tests {
 
         // Thread counts derived from parallelism
         let parallelism = settings.indexing.parallelism;
-        assert_eq!(config.parse_threads, (parallelism * 60 / 100).max(2));
-        assert_eq!(config.read_threads, (parallelism * 20 / 100).max(1));
-        assert_eq!(config.discover_threads, (parallelism * 10 / 100).max(1));
+        let effective =
+            CpuBudget::from_values(num_cpus::get(), 0.0).indexing_parallelism(parallelism);
+        assert_eq!(config.parse_threads, (effective * 60 / 100).max(1));
+        assert_eq!(config.read_threads, (effective * 20 / 100).max(1));
+        assert_eq!(config.discover_threads, (effective * 10 / 100).max(1));
 
         println!("Config from settings (parallelism={parallelism}):");
         println!("  parse_threads: {}", config.parse_threads);
@@ -241,6 +259,23 @@ mod tests {
             config.batches_per_commit,
             settings.indexing.batches_per_commit
         );
+    }
+
+    #[test]
+    fn busy_host_caps_explicit_parallelism() {
+        let mut settings = Settings::default();
+        settings.indexing.parallelism = 8;
+        let gib = 1024 * 1024 * 1024;
+        let config = PipelineConfig::from_settings_with_resources(
+            &settings,
+            MemoryBudget::from_values(32 * gib, 24 * gib, 0),
+            CpuBudget::from_values(8, 3.2),
+        );
+
+        assert_eq!(config.parse_threads, 1);
+        assert_eq!(config.read_threads, 1);
+        assert_eq!(config.discover_threads, 1);
+        assert_eq!(config.path_channel_size, 200);
     }
 
     #[test]

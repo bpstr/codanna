@@ -26,6 +26,42 @@ pub struct MemoryBudget {
     pub headroom: u64,
 }
 
+/// Snapshot of CPU capacity and recent host pressure used to keep indexing
+/// responsive on shared developer machines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuBudget {
+    pub logical_cpus: usize,
+    pub one_minute_load: f64,
+}
+
+impl CpuBudget {
+    pub fn current() -> Self {
+        Self::from_values(num_cpus::get(), System::load_average().one)
+    }
+
+    /// Deterministic constructor for configuration tests.
+    pub fn from_values(logical_cpus: usize, one_minute_load: f64) -> Self {
+        Self {
+            logical_cpus: logical_cpus.max(1),
+            one_minute_load: if one_minute_load.is_finite() {
+                one_minute_load.max(0.0)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Cap configured pipeline concurrency while reserving two logical CPUs
+    /// for the index writer, embedding work, and the rest of the host. Recent
+    /// load consumes that headroom too, but never disables indexing entirely.
+    pub fn indexing_parallelism(self, requested: usize) -> usize {
+        let capacity = self.logical_cpus.saturating_sub(2).max(1);
+        let busy_cpus = self.one_minute_load.ceil() as usize;
+        let available = capacity.saturating_sub(busy_cpus).max(1);
+        requested.max(1).min(available)
+    }
+}
+
 /// Reusable host/process sampler for loops that need fresh memory readings at
 /// batch boundaries. Keeping the `System` allocation avoids rebuilding the
 /// process table for every candidate added to a batch.
@@ -177,5 +213,16 @@ mod tests {
         assert!(budget.under_pressure());
         assert_eq!(budget.embedding_instances(8, true), 1);
         assert_eq!(budget.queue_scale_percent(), 10);
+    }
+
+    #[test]
+    fn cpu_budget_reserves_host_capacity_and_honors_pressure() {
+        let idle = CpuBudget::from_values(8, 0.0);
+        assert_eq!(idle.indexing_parallelism(8), 6);
+        assert_eq!(idle.indexing_parallelism(4), 4);
+
+        let busy = CpuBudget::from_values(8, 3.2);
+        assert_eq!(busy.indexing_parallelism(8), 2);
+        assert_eq!(busy.indexing_parallelism(1), 1);
     }
 }

@@ -211,8 +211,17 @@ fn catalogue() -> Result<Vec<Tool>, serde_json::Error> {
 }
 pub async fn run(cwd: &Path, home: Option<&Path>) -> Result<i32, IndexError> {
     let executable = std::env::current_exe().map_err(|e| IndexError::General(e.to_string()))?;
+    let registry = WorkspaceRegistry::default();
+    for workspace in registry.prune_stale()? {
+        tracing::info!(
+            target: "workspace",
+            id = workspace.id.as_str(),
+            root = %workspace.root.display(),
+            "pruned stale workspace registration"
+        );
+    }
     let server = WorkspaceServer::new(
-        WorkspaceRegistry::default(),
+        registry,
         cwd.to_path_buf(),
         home.map(Path::to_path_buf),
         executable,

@@ -149,8 +149,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         let hot_reload_broadcaster = broadcaster.clone();
         let hot_reload_ct = ct.clone();
 
-        // Default to 5 second interval
-        let watch_interval = 5u64;
+        let watch_interval = config.server.watch_interval;
 
         let hot_reload_watcher = HotReloadWatcher::new(
             hot_reload_indexer,

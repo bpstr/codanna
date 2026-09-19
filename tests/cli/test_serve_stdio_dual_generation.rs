@@ -141,18 +141,29 @@ fn spawn_serve(workspace: &Path) -> ServeSession {
 }
 
 fn spawn_serve_with_args(workspace: &Path, args: &[&str]) -> ServeSession {
+    spawn_serve_with_options(workspace, args, None)
+}
+
+fn spawn_serve_with_options(
+    workspace: &Path,
+    args: &[&str],
+    idle_timeout_seconds: Option<u64>,
+) -> ServeSession {
     let bin = codanna_binary();
     let test_home = workspace.join(".home");
     std::fs::create_dir_all(&test_home).expect("create test home");
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(args)
         .current_dir(workspace)
         .env("HOME", &test_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn serve");
+        .stderr(Stdio::piped());
+    if let Some(seconds) = idle_timeout_seconds {
+        command.env("CODANNA_STDIO_IDLE_SECONDS", seconds.to_string());
+    }
+    let mut child = command.spawn().expect("spawn serve");
 
     let stdin = child.stdin.take().expect("child stdin");
     let stdout = child.stdout.take().expect("child stdout");
@@ -328,6 +339,40 @@ fn serve_stdio_legacy_handshake_unaffected() {
     assert!(
         status.success(),
         "serve exits clean after legacy session, got {status:?}"
+    );
+}
+
+/// A host that retains an abandoned stdin pipe must not retain the initialized
+/// server process forever. The production default is fifteen minutes; use the
+/// bounded test override so this contract remains fast and deterministic.
+#[test]
+fn serve_stdio_initialized_idle_session_expires() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_with_options(workspace.path(), &["serve"], Some(1));
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "idle-expiry-test", "version": "0"}
+            }
+        })
+    )
+    .expect("write initialize");
+    session.stdin.flush().expect("flush initialize");
+    let init = recv_json(&session.rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(5));
+    assert!(
+        status.success(),
+        "initialized idle session exits cleanly, got {status:?}"
     );
 }
 

@@ -27,7 +27,9 @@ pub(super) fn default_index_path() -> PathBuf {
     PathBuf::from(local_dir).join("index")
 }
 pub(super) fn default_parallelism() -> usize {
-    num_cpus::get()
+    // Leave capacity for the index writer, embedding work, and the host UI.
+    // Users that want full saturation can still opt in explicitly.
+    num_cpus::get().saturating_sub(2).max(1)
 }
 pub(super) fn default_tantivy_heap_mb() -> usize {
     50 // Universal default that balances performance and permissions

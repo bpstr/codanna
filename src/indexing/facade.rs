@@ -359,6 +359,19 @@ impl IndexFacade {
         Ok(())
     }
 
+    /// Prepare a persisted semantic index for a direct query without creating
+    /// duplicate model owners. Lite facades load the vectors on demand; both
+    /// local and remote indexes then use the facade's shared backend.
+    pub fn prepare_semantic_query(&mut self) -> FacadeResult<()> {
+        if !self.has_semantic_search() {
+            let semantic_path = self.index_base.join("semantic");
+            if !self.load_semantic_search(&semantic_path)? {
+                return Err(IndexError::SemanticSearchNotEnabled);
+            }
+        }
+        self.ensure_embedding_pool()
+    }
+
     /// Get semantic search embedding count.
     pub fn semantic_search_embedding_count(&self) -> usize {
         self.semantic_search
@@ -882,8 +895,8 @@ impl IndexFacade {
         } else {
             let pool = self.embedding_pool.get().ok_or_else(|| {
                 IndexError::General(
-                    "Remote-mode index requires an embedding backend for queries. \
-                     Set CODANNA_EMBED_URL or re-index with a local model."
+                    "Semantic index requires its configured embedding backend for queries. \
+                     Initialize the query backend or verify semantic_search settings."
                         .to_string(),
                 )
             })?;

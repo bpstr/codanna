@@ -217,7 +217,7 @@ pub async fn run(
     args: Option<String>,
     json: bool,
     fields: Option<Vec<String>>,
-    facade: IndexFacade,
+    mut facade: IndexFacade,
     config: &Settings,
 ) {
     // Build arguments from both positional and --args
@@ -352,6 +352,24 @@ pub async fn run(
         }
     }
     let arguments = arguments;
+
+    // Semantic snapshots intentionally load without constructing a second
+    // query model. Direct CLI invocations do not pass through the workspace
+    // reader's lazy initializer, so initialize the shared backend once before
+    // either JSON collection or text dispatch tries to embed the query.
+    if matches!(
+        tool.as_str(),
+        "semantic_search_docs" | "semantic_search_with_context"
+    ) {
+        if let Err(error) = facade.prepare_semantic_query() {
+            let query = arguments
+                .as_ref()
+                .and_then(|map| map.get("query"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            exit_index_error(EntityType::SearchResult, query, error);
+        }
+    }
 
     // Collect data for find_symbol if JSON output is requested
     let find_symbol_data = if json && tool == "find_symbol" {

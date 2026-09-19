@@ -17,7 +17,7 @@ pub struct ServeArgs {
 /// Run the serve command.
 pub async fn run(
     args: ServeArgs,
-    config: Settings,
+    mut config: Settings,
     settings: Arc<Settings>,
     facade: IndexFacade,
     index_path: PathBuf,
@@ -62,6 +62,10 @@ pub async fn run(
     } else {
         config.server.watch_interval
     };
+    // Network transports read their polling interval from Settings. Persist
+    // the effective CLI/config value there so HTTP and HTTPS honor the same
+    // override semantics as stdio.
+    config.server.watch_interval = actual_watch_interval;
 
     match server_mode {
         "https" => {
@@ -275,19 +279,26 @@ async fn run_stdio_server(
         server.get_info(),
     ))
     .expect("DiscoverResult serializes: closed struct of strings and maps");
-    let service = match server.serve(probe_tolerant_stdio(discover_result)).await {
+    let (transport, disconnected) = probe_tolerant_stdio(discover_result);
+    let service = match server.serve(transport).await {
         Ok(service) => service,
         Err(e) => {
             eprintln!("Failed to start MCP server: {e}");
             std::process::exit(1);
         }
     };
+    let cancellation = service.cancellation_token();
+    let disconnect_task = tokio::spawn(async move {
+        let _ = disconnected.await;
+        cancellation.cancel();
+    });
 
     // Wait for the stdio transport, then synchronously tear down all work
     // owned by that session. `abort` is sufficient
     // for these async loops because the native notify watcher is owned inside
     // the task and drops when the future is cancelled.
     let service_result = service.waiting().await;
+    disconnect_task.abort();
     for task in &background_tasks {
         task.abort();
     }
@@ -314,8 +325,14 @@ pub async fn run_stale_stdio(stored: Option<u32>, current: u32) {
         server.get_info(),
     ))
     .expect("DiscoverResult serializes: closed struct of strings and maps");
-    match server.serve(probe_tolerant_stdio(discover_result)).await {
+    let (transport, disconnected) = probe_tolerant_stdio(discover_result);
+    match server.serve(transport).await {
         Ok(service) => {
+            let cancellation = service.cancellation_token();
+            tokio::spawn(async move {
+                let _ = disconnected.await;
+                cancellation.cancel();
+            });
             if let Err(e) = service.waiting().await {
                 eprintln!("Degraded MCP server error: {e}");
             }
@@ -340,23 +357,45 @@ pub async fn run_stale_stdio(stored: Option<u32>, current: u32) {
 /// inbound message.
 fn probe_tolerant_stdio(
     discover_result: serde_json::Value,
-) -> (tokio::io::DuplexStream, tokio::io::Stdout) {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+) -> (
+    (tokio::io::DuplexStream, tokio::io::Stdout),
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    use std::io::BufRead;
+    use tokio::io::AsyncWriteExt;
 
     const BUFFER_BYTES: usize = 64 * 1024;
     let (mut inbound, transport_side) = tokio::io::duplex(BUFFER_BYTES);
+    let (disconnected_tx, disconnected_rx) = tokio::sync::oneshot::channel();
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(tokio::io::stdin());
-        let mut line = String::new();
-        let mut handoff = false;
-
+    // Tokio's process-stdin wrapper uses a blocking read that cannot be
+    // cancelled reliably. Keep that read on a detached OS thread and apply
+    // the idle deadline to this channel instead; the process can then finish
+    // even when an abandoned client retains its pipe forever.
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = std::io::BufReader::new(stdin.lock());
         loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => break,
+                Ok(_) if line_tx.send(line).is_err() => break,
                 Ok(_) => {}
             }
+        }
+    });
+
+    tokio::spawn(async move {
+        let mut handoff = false;
+        let idle_timeout =
+            stdio_idle_timeout(std::env::var("CODANNA_STDIO_IDLE_SECONDS").ok().as_deref());
+
+        loop {
+            let line = match tokio::time::timeout(idle_timeout, line_rx.recv()).await {
+                Ok(Some(line)) => line,
+                Ok(None) | Err(_) => break,
+            };
 
             if !handoff {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
@@ -390,7 +429,40 @@ fn probe_tolerant_stdio(
                 break;
             }
         }
+        let _ = disconnected_tx.send(());
     });
 
-    (transport_side, tokio::io::stdout())
+    ((transport_side, tokio::io::stdout()), disconnected_rx)
+}
+
+/// Stdio clients normally close their pipe when a session ends. Some hosts
+/// retain abandoned pipes indefinitely, so expire a connection after fifteen
+/// minutes with no protocol traffic. The override exists for deterministic
+/// lifecycle tests and tightly controlled integrations.
+fn stdio_idle_timeout(value: Option<&str>) -> std::time::Duration {
+    const DEFAULT_SECONDS: u64 = 15 * 60;
+    const MAX_SECONDS: u64 = 24 * 60 * 60;
+    let seconds = value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_SECONDS)
+        .min(MAX_SECONDS);
+    std::time::Duration::from_secs(seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stdio_idle_timeout;
+    use std::time::Duration;
+
+    #[test]
+    fn stdio_idle_timeout_is_bounded_and_configurable() {
+        assert_eq!(stdio_idle_timeout(None), Duration::from_secs(15 * 60));
+        assert_eq!(stdio_idle_timeout(Some("1")), Duration::from_secs(1));
+        assert_eq!(stdio_idle_timeout(Some("0")), Duration::from_secs(15 * 60));
+        assert_eq!(
+            stdio_idle_timeout(Some("999999")),
+            Duration::from_secs(24 * 60 * 60)
+        );
+    }
 }
