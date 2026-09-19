@@ -118,6 +118,9 @@ mod tests {
     const READER: &str = "reader-fixture-secret-not-for-use-1234567890";
     const WRITER: &str = "writer-fixture-secret-not-for-use-1234567890";
     const PROTOCOL: &str = "2025-11-25";
+    // These are hang guards, not latency assertions. Scheduled hardening runs
+    // execute this fixture beside the release build and 5,000-file stress job.
+    const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 
     // A client-side Response drop is not an acknowledgement that Hyper has
     // dropped the server body. rmcp deliberately creates an idle shadow GET
@@ -193,7 +196,7 @@ mod tests {
     }
     impl EventStream {
         async fn changed_after(&mut self, previous: Option<usize>) -> usize {
-            tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::time::timeout(TEST_TIMEOUT, async {
                 loop {
                     while let Some(end) = self.buffered.windows(2).position(|pair| pair == b"\n\n")
                     {
@@ -309,9 +312,7 @@ mod tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
-            let mut client = Client::builder()
-                .no_proxy()
-                .connect_timeout(Duration::from_secs(5));
+            let mut client = Client::builder().no_proxy().connect_timeout(TEST_TIMEOUT);
             let task = if tls {
                 let certificate =
                     rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
@@ -359,7 +360,7 @@ mod tests {
             if let Some(sid) = sid {
                 request = request.header("Mcp-Session-Id", sid);
             }
-            tokio::time::timeout(Duration::from_secs(5), request.json(&body).send())
+            tokio::time::timeout(TEST_TIMEOUT, request.json(&body).send())
                 .await
                 .unwrap()
                 .unwrap()
@@ -372,7 +373,7 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .to_string();
-            let body = tokio::time::timeout(Duration::from_secs(5), response.text())
+            let body = tokio::time::timeout(TEST_TIMEOUT, response.text())
                 .await
                 .unwrap()
                 .unwrap();
@@ -400,7 +401,7 @@ mod tests {
             if let Some(previous) = previous {
                 request = request.header("Last-Event-ID", previous.to_string());
             }
-            let response = tokio::time::timeout(Duration::from_secs(5), request.send())
+            let response = tokio::time::timeout(TEST_TIMEOUT, request.send())
                 .await
                 .unwrap()
                 .unwrap();
@@ -411,7 +412,7 @@ mod tests {
             }
         }
         async fn disconnected(&self, expected: &str) {
-            let actual = tokio::time::timeout(Duration::from_secs(5), async {
+            let actual = tokio::time::timeout(TEST_TIMEOUT, async {
                 self.closed
                     .lock()
                     .await
@@ -424,7 +425,7 @@ mod tests {
             assert_eq!(actual, expected, "only the disconnected stream may close");
         }
         async fn subscribers(&self, expected: usize) {
-            tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::time::timeout(TEST_TIMEOUT, async {
                 while self.events.subscriber_count() != expected {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
@@ -471,7 +472,7 @@ mod tests {
         let deleted = server
             .client
             .delete(&server.url)
-            .timeout(Duration::from_secs(5))
+            .timeout(TEST_TIMEOUT)
             .bearer_auth(READER)
             .header("Mcp-Session-Id", &a)
             .header("MCP-Protocol-Version", PROTOCOL)
