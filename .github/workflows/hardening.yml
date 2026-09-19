@@ -103,13 +103,14 @@ jobs:
         run: |
           set -euo pipefail
           root="$(cat "$RUNNER_TEMP/hardening-root")"
-          /usr/bin/time -v ./target/release/codanna index "$root" 2>"$RUNNER_TEMP/index-metrics.txt"
+          cd "$root"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/target/release/codanna" index . 2>"$RUNNER_TEMP/index-metrics.txt"
       - name: Validate indexed repository remains queryable
         run: |
           set -euo pipefail
           root="$(cat "$RUNNER_TEMP/hardening-root")"
           cd "$root"
-          "$GITHUB_WORKSPACE/target/release/codanna" retrieve search-symbols query:symbol_4999 limit:5
+          "$GITHUB_WORKSPACE/target/release/codanna" retrieve search query:symbol_4999 limit:5
       - name: Upload metrics
         uses: actions/upload-artifact@v4
         with:
