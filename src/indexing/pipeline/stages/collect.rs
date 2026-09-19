@@ -315,6 +315,7 @@ impl CollectStage {
     fn process_file(&self, state: &mut CollectorState, mut parsed: ParsedFile) {
         let file_id = state.next_file_id();
         let file_path: Box<str> = parsed.path.to_string_lossy().into();
+        let has_source_symbols = !parsed.raw_symbols.is_empty();
 
         if !parsed.variable_bindings.is_empty() {
             state
@@ -388,13 +389,17 @@ impl CollectStage {
             state.current_batch.imports.push(import);
         }
 
-        // Process relationships
-        for raw_rel in parsed.raw_relationships {
-            let unresolved = create_unresolved_relationship(&state.caches, raw_rel, file_id);
-            state
-                .current_batch
-                .unresolved_relationships
-                .push(unresolved);
+        // Relationships need a source symbol to become a stored edge. Parsers
+        // can still observe top-level calls in declaration-free scripts; do
+        // not send those orphan relationships into context resolution.
+        if has_source_symbols {
+            for raw_rel in parsed.raw_relationships {
+                let unresolved = create_unresolved_relationship(&state.caches, raw_rel, file_id);
+                state
+                    .current_batch
+                    .unresolved_relationships
+                    .push(unresolved);
+            }
         }
     }
 }
@@ -619,6 +624,34 @@ mod tests {
         assert_eq!(rel.from_id.unwrap().value(), 1, "caller should have id=1");
         assert_eq!(rel.from_name.as_ref(), "caller");
         assert_eq!(rel.to_name.as_ref(), "callee");
+    }
+
+    #[test]
+    fn relationships_without_source_symbols_are_dropped() {
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+
+        let mut parsed = make_parsed_file("wrapper.sh", vec![]);
+        parsed.language_id = LanguageId::new("bash");
+        parsed.raw_relationships.push(RawRelationship::new(
+            "wrapper.sh",
+            Range::new(1, 0, 1, 10),
+            "exec",
+            Range::new(2, 0, 2, 4),
+            RelationKind::Calls,
+        ));
+
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+
+        let stage = CollectStage::new(100);
+        stage.run(parsed_rx, batch_tx, None, None).unwrap();
+
+        let batches: Vec<_> = batch_rx.iter().collect();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].file_registrations.len(), 1);
+        assert!(batches[0].symbols.is_empty());
+        assert!(batches[0].unresolved_relationships.is_empty());
     }
 
     #[test]

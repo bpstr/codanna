@@ -196,6 +196,23 @@ fn workspace_prune_removes_only_old_disposable_metadata() {
 }
 
 #[test]
+fn workspace_prune_preserves_durable_workspace_beneath_system_temp() {
+    let info = ProjectInfo {
+        name: "product".to_string(),
+        path: PathBuf::from("/tmp/session/product"),
+        symbol_count: 1,
+        file_count: 1,
+        last_modified: 100,
+        doc_count: 0,
+    };
+
+    assert!(!is_stale_registration(
+        &info,
+        100 + EPHEMERAL_REGISTRATION_TTL_SECS
+    ));
+}
+
+#[test]
 fn workspace_prune_preserves_recent_and_untracked_registrations() {
     let temp = TempDir::new().unwrap();
     let recent = fixture(temp.path(), "qualification-smoke-1");
