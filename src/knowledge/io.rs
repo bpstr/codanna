@@ -179,6 +179,19 @@ pub fn parse_dump(reader: impl BufRead, repo: &str) -> Result<Input> {
                         let end = data["range"]["end_line"]
                             .as_u64()
                             .ok_or("missing end line")?;
+                        let end_column = data["range"]["end_column"]
+                            .as_u64()
+                            .ok_or("missing end column")?;
+                        let start_line = u32::try_from(start)?
+                            .checked_add(1)
+                            .ok_or("line overflow")?;
+                        // Dump ranges are zero-based and half-open. When a node ends at
+                        // column zero on a later row, that row is outside the symbol.
+                        let end_line = if end_column == 0 && end > start {
+                            u32::try_from(end)?
+                        } else {
+                            u32::try_from(end)?.checked_add(1).ok_or("line overflow")?
+                        };
                         input.symbols.push(CodeSymbol {
                             key: data["id"].as_u64().ok_or("missing symbol id")?,
                             qualified_name: if module.is_empty() {
@@ -189,10 +202,8 @@ pub fn parse_dump(reader: impl BufRead, repo: &str) -> Result<Input> {
                             name,
                             signature: data["signature"].as_str().unwrap_or("").into(),
                             path,
-                            start_line: u32::try_from(start)?
-                                .checked_add(1)
-                                .ok_or("line overflow")?,
-                            end_line: u32::try_from(end)?.checked_add(1).ok_or("line overflow")?,
+                            start_line,
+                            end_line,
                         });
                     }
                     Some("relationship") => input.edges.push(CodeEdge {
@@ -241,6 +252,15 @@ mod tests {
         assert!(parse_dump(BufReader::new(b"{\"type\":\"begin\"}\n".as_slice()), "r").is_err());
         let empty = b"{\"type\":\"begin\"}\n{\"type\":\"summary\",\"status\":\"success\",\"data\":{\"symbols\":0,\"relationships\":0}}\n";
         assert!(parse_dump(BufReader::new(empty.as_slice()), "r").is_ok());
+    }
+    #[test]
+    fn dump_end_at_column_zero_excludes_the_following_line() {
+        let dump = b"{\"type\":\"begin\"}\n\
+{\"type\":\"result\",\"status\":\"success\",\"data\":{\"id\":1,\"name\":\"<module>\",\"file_path\":\"src/lib.py\",\"range\":{\"start_line\":0,\"end_line\":3,\"end_column\":0}},\"meta\":{\"entity_type\":\"symbol\"}}\n\
+{\"type\":\"summary\",\"status\":\"success\",\"data\":{\"symbols\":1,\"relationships\":0}}\n";
+        let input = parse_dump(BufReader::new(dump.as_slice()), "r").unwrap();
+        assert_eq!(input.symbols[0].start_line, 1);
+        assert_eq!(input.symbols[0].end_line, 3);
     }
     #[test]
     fn replacement_roundtrip_and_size_limit() {
