@@ -80,6 +80,13 @@ fn query(source: &Path) -> SearchQuery {
     }
 }
 
+fn file_state<'a>(store: &'a DocumentStore, path: &Path) -> &'a FileState {
+    store
+        .file_states
+        .get(&normalize_source_path(path))
+        .expect("indexed source has file state")
+}
+
 fn seed(temp: &TempDir) -> (PathBuf, PathBuf, DocumentStore) {
     let source = temp.path().join("guide.md");
     let other = temp.path().join("untouched.md");
@@ -117,7 +124,7 @@ fn assert_snapshot(store: &mut DocumentStore, source: &Path, expected: Option<&s
         Some(text) => {
             assert_eq!(hits.len(), 1);
             assert_eq!(hits[0].content_preview, text);
-            let state = store.file_states.get(source).unwrap();
+            let state = file_state(store, source);
             assert_eq!(state.content_hash, calculate_hash(text));
             assert_eq!(state.chunk_ids, candidates);
             let scores = store.score_by_similarity(&candidates, &[1.0, 0.0]).unwrap();
@@ -171,7 +178,7 @@ fn process_termination_reopens_one_matching_generation_at_every_publication_boun
         for (boundary, committed) in boundaries.into_iter().chain(batch_boundary) {
             let temp = TempDir::new().unwrap();
             let (source, _, store) = seed(&temp);
-            let old_id = store.file_states[&source].chunk_ids[0];
+            let old_id = file_state(&store, &source).chunk_ids[0];
             drop(store);
             fs::write(&source, "beta replacement policy").unwrap();
             let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -206,7 +213,7 @@ fn process_termination_reopens_one_matching_generation_at_every_publication_boun
                 .index_collection("docs", &config(&source), &chunks())
                 .unwrap();
             assert_snapshot(&mut reopened, &source, Some("beta replacement policy"));
-            assert!(reopened.file_states[&source].chunk_ids[0].get() > old_id.get());
+            assert!(file_state(&reopened, &source).chunk_ids[0].get() > old_id.get());
             let stats = reopened.embedding_diagnostics();
             assert!(stats.physical_vectors <= stats.live_vectors * 2);
             assert_eq!(fs::read_dir(index.join("generations")).unwrap().count(), 1);
@@ -253,7 +260,7 @@ fn failed_second_embedding_batch_keeps_generation_and_reserves_ids_across_reopen
     reopened
         .index_collection("docs", &config(&source), &small)
         .unwrap();
-    let ids = &reopened.file_states[&source].chunk_ids;
+    let ids = &file_state(&reopened, &source).chunk_ids;
     assert!(ids.len() > 64);
     assert!(ids.iter().all(|id| id.get() as u64 >= next_after_failure));
     assert_eq!(reopened.embedding_diagnostics().unembedded_chunks, 0);
@@ -327,7 +334,8 @@ fn committed_generation_repairs_missing_and_stale_state_mirrors() {
         assert_snapshot(&mut reopened, &source, Some("beta replacement policy"));
         let mirror: PersistedState = DocumentStore::load_state(&index.join("state.json")).unwrap();
         assert_eq!(
-            mirror.file_states[&source.to_string_lossy().to_string()].content_hash,
+            mirror.file_states[&normalize_source_path(&source).to_string_lossy().to_string()]
+                .content_hash,
             calculate_hash("beta replacement policy")
         );
     }
@@ -404,7 +412,7 @@ fn missing_vector_ids_are_reported_even_when_obsolete_records_hide_the_count_gap
     let (source, other, store) = seed(&temp);
     let index = temp.path().join("index");
     let first_segment = store.vector_storage.as_ref().unwrap().names()[0].clone();
-    let other_id = store.file_states[&other].chunk_ids[0].get();
+    let other_id = file_state(&store, &other).chunk_ids[0].get();
     drop(store);
     let path = index
         .join("vectors")

@@ -240,14 +240,15 @@ fn document_budget_splitting_matches_collection_and_watcher_and_skips_unchanged_
         (&mut collection_store, &collection_model),
         (&mut watcher_store, &watcher_model),
     ] {
-        let prior_ids = store.file_states[&path].chunk_ids.clone();
+        let normalized_path = normalize_source_path(&path);
+        let prior_ids = store.file_states[&normalized_path].chunk_ids.clone();
         let prior_calls = model.calls.load(Ordering::SeqCst);
         let skipped = store
             .index_collection("docs", &collection_for(&path), &config)
             .unwrap();
         assert_eq!(skipped.files_skipped, 1);
         assert_eq!(skipped.chunks_created, 0);
-        assert_eq!(store.file_states[&path].chunk_ids, prior_ids);
+        assert_eq!(store.file_states[&normalized_path].chunk_ids, prior_ids);
         assert_eq!(model.calls.load(Ordering::SeqCst), prior_calls);
     }
     drop(collection_store);
@@ -281,16 +282,17 @@ struct SourceSnapshot {
 }
 
 fn snapshot(store: &mut DocumentStore, path: &Path, collection: &str) -> SourceSnapshot {
-    let state = store.file_states[path].clone();
+    let path = normalize_source_path(path);
+    let state = store.file_states[&path].clone();
     let mut scores = store
         .score_by_similarity(&state.chunk_ids, &[1.0, 0.0])
         .unwrap();
     scores.sort_unstable_by_key(|(id, _)| id.get());
     SourceSnapshot {
-        chunks: stored_chunks(store, path, collection),
+        chunks: stored_chunks(store, &path, collection),
         chunk_ids: state.chunk_ids.clone(),
         content_hash: state.content_hash.clone(),
-        embedding_identity: store.embedded_files.get(path).cloned(),
+        embedding_identity: store.embedded_files.get(&path).cloned(),
         generation: store.current_generation.clone(),
         scores,
     }
@@ -391,7 +393,7 @@ fn document_budget_later_embedding_failure_rolls_back_splits_and_can_retry() {
         );
         assert_eq!(stored_chunks(&reopened, &other, "other"), untouched.chunks);
         assert_eq!(
-            reopened.file_states[&path].content_hash,
+            reopened.file_states[&normalize_source_path(&path)].content_hash,
             calculate_hash(&replacement)
         );
         assert_eq!(reopened.embedding_diagnostics().unembedded_chunks, 0);
@@ -447,11 +449,12 @@ fn document_budget_policy_migration_reprocesses_unchanged_source_once() {
     assert_ne!(old_fingerprint, new_fingerprint);
     let prior_chunks = stored_chunks(&store, &path, "docs");
     let untouched = stored_chunks(&store, &other, "other");
-    let prior_hash = store.file_states[&path].content_hash.clone();
+    let normalized_path = normalize_source_path(&path);
+    let prior_hash = store.file_states[&normalized_path].content_hash.clone();
     let prior_calls = model.calls.load(Ordering::SeqCst);
     store
         .chunking_fingerprints
-        .insert(path.clone(), old_fingerprint);
+        .insert(normalized_path.clone(), old_fingerprint);
 
     let migrated = store
         .index_collection("docs", &collection_for(&path), &config)
@@ -461,8 +464,11 @@ fn document_budget_policy_migration_reprocesses_unchanged_source_once() {
     assert_eq!(migrated.files_skipped, 0);
     assert_eq!(migrated.chunks_removed, prior_chunks.len());
     assert_eq!(migrated.chunks_created, prior_chunks.len());
-    assert_eq!(store.file_states[&path].content_hash, prior_hash);
-    assert_eq!(store.chunking_fingerprints[&path], new_fingerprint);
+    assert_eq!(store.file_states[&normalized_path].content_hash, prior_hash);
+    assert_eq!(
+        store.chunking_fingerprints[&normalized_path],
+        new_fingerprint
+    );
     assert_eq!(
         model.calls.load(Ordering::SeqCst),
         prior_calls,

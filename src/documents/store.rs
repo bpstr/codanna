@@ -1558,10 +1558,16 @@ impl DocumentStore {
                 }
 
                 let relative = path.strip_prefix(&base_path).unwrap_or(path);
-                if patterns
-                    .iter()
-                    .any(|pattern| pattern.matches_path(relative))
-                {
+                if patterns.iter().any(|pattern| {
+                    pattern.matches_path(relative)
+                        || pattern
+                            .as_str()
+                            .strip_prefix("**/")
+                            .is_some_and(|root_pattern| {
+                                glob::Pattern::new(root_pattern)
+                                    .is_ok_and(|pattern| pattern.matches_path(relative))
+                            })
+                }) {
                     files.push(path.to_path_buf());
                 }
             }
@@ -2213,6 +2219,7 @@ impl DocumentStore {
 
         // Document filter
         if let Some(ref doc_path) = query.document {
+            let doc_path = normalize_source_path(doc_path);
             let term =
                 Term::from_field_text(self.schema.source_path, doc_path.to_string_lossy().as_ref());
             subqueries.push((
@@ -2867,10 +2874,34 @@ mod tests {
         files.sort();
 
         assert_eq!(files.len(), 3);
-        assert!(files.contains(&source_dir.path().join("README.md")));
-        assert!(files.contains(&source_dir.path().join(".agents/guide.md")));
-        assert!(files.contains(&source_dir.path().join("node_modules/pkg/README.md")));
-        assert!(!files.contains(&source_dir.path().join("vendor/pkg/README.md")));
+        assert!(files.contains(&source_dir.path().join("README.md").canonicalize().unwrap()));
+        assert!(
+            files.contains(
+                &source_dir
+                    .path()
+                    .join(".agents/guide.md")
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
+        assert!(
+            files.contains(
+                &source_dir
+                    .path()
+                    .join("node_modules/pkg/README.md")
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
+        assert!(
+            !files.contains(
+                &source_dir
+                    .path()
+                    .join("vendor/pkg/README.md")
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
     }
 
     #[test]
@@ -3064,7 +3095,8 @@ mod tests {
         store
             .index_collection("keep", &collection, &ChunkingConfig::default())
             .unwrap();
-        let ids = store.file_states.get(&path).unwrap().chunk_ids.clone();
+        let normalized_path = normalize_source_path(&path);
+        let ids = store.file_states[&normalized_path].chunk_ids.clone();
         let bad = ChunkingConfig {
             max_chunk_chars: 0,
             ..Default::default()
@@ -3077,7 +3109,7 @@ mod tests {
             store.reindex_file(&path, &bad),
             Err(DocumentStoreError::InvalidChunkingConfig(_))
         ));
-        assert_eq!(store.file_states.get(&path).unwrap().chunk_ids, ids);
+        assert_eq!(store.file_states[&normalized_path].chunk_ids, ids);
         assert!(!store.collection_ids.contains_key("new"));
     }
 
@@ -3090,6 +3122,8 @@ mod tests {
         let body = "# Heading\n\n".to_string() + &"Unique document text. ".repeat(30);
         std::fs::write(&alpha, &body).unwrap();
         std::fs::write(&beta, &body).unwrap();
+        let alpha = normalize_source_path(&alpha);
+        let beta = normalize_source_path(&beta);
         let mut store = DocumentStore::new(dir.path(), test_dimension()).unwrap();
         let config = |path| CollectionConfig {
             paths: vec![path],
@@ -3140,6 +3174,8 @@ mod workspace_tests {
             "PRIVATE_WORKSPACE_TOPIC ".repeat(30),
         )
         .unwrap();
+        let root = normalize_source_path(&root);
+        let foreign = normalize_source_path(&foreign);
         let config = |path: &Path| CollectionConfig {
             paths: vec![path.to_path_buf()],
             ..CollectionConfig::default()

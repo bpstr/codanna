@@ -398,17 +398,16 @@ impl UnifiedWatcher {
             return;
         }
         for path in event.paths {
-            let absolute = if path.is_absolute() {
-                path.clone()
+            let path = if path.is_absolute() {
+                path
             } else {
-                self.workspace_root.join(&path)
+                self.workspace_root.join(path)
             };
+            let path = crate::documents::store::normalize_source_path(&path);
             // Managed artifacts are never source events, including when the
             // configured index lives outside the conventional .codanna tree.
             // Parent policy edits and workspace/root recreation remain visible.
-            if crate::documents::store::normalize_source_path(&absolute)
-                .starts_with(&self.index_path)
-            {
+            if path.starts_with(&self.index_path) {
                 continue;
             }
             crate::trace_event!(
@@ -442,7 +441,7 @@ impl UnifiedWatcher {
                                 .tracked_paths()
                                 .await
                                 .iter()
-                                .any(|settings| settings.starts_with(&absolute)))
+                                .any(|settings| settings.starts_with(&path)))
                     {
                         *self.pending_config.write().await = None;
                     }
@@ -1722,7 +1721,8 @@ mod tests {
         watcher.synchronize_roots(vec![root.clone()]).await.unwrap();
         watcher.prepare().await.unwrap();
         watcher.debouncer = Debouncer::new(0);
-        assert!(watcher.registry.watch_dirs().contains(&nested));
+        let canonical_nested = nested.canonicalize().unwrap();
+        assert!(watcher.registry.watch_dirs().contains(&canonical_nested));
         for name in [".gitignore", ".codannaignore"] {
             let policy = nested.join(name);
             for excluded in [true, false] {
@@ -1751,7 +1751,7 @@ mod tests {
                     "policy={name}, excluded={excluded}"
                 );
                 assert!(
-                    watcher.registry.watch_dirs().contains(&nested),
+                    watcher.registry.watch_dirs().contains(&canonical_nested),
                     "empty code directories must retain their policy watch"
                 );
             }
@@ -1769,7 +1769,10 @@ mod tests {
         let mut watcher = watcher_over(dir.path(), &root).await;
         watcher.prepare().await.unwrap();
         assert!(
-            watcher.registry.watch_dirs().contains(&nested),
+            watcher
+                .registry
+                .watch_dirs()
+                .contains(&nested.canonicalize().unwrap()),
             "a nested policy is observable even when no source in that directory is indexed"
         );
     }
