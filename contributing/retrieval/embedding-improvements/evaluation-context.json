@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "revision": "dd8e247c62dcfd61dd1cdb7feaf23fe3777a469d",
+    "report": "lexical-baseline.json",
+    "report_sha256": "110a3dbd3196093172bba55fc2d911b45fd7133b6b7db41c1c42c0f7878e6282",
+    "binary_sha256": "77b77dea8904a4ae33d015521fe212e8db17498b725e395114c92b093372436a",
+    "knowledge_binary_sha256": "7b7437cc272491e682c4dde0df4442ce4c4ea1c0cd3f05f21ba256d143182573",
+    "passed": 23,
+    "failed": 6
+  },
+  "implementation": {
+    "base_revision": "dd8e247c62dcfd61dd1cdb7feaf23fe3777a469d",
+    "worktree_dirty": true,
+    "source_tree_sha256": "a4dff01b27eb17c5f2db9f23b4375994732aa48e791e3bcbf5af4ec68a93498b",
+    "source_tree_hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests",
+    "source_file_count": 635,
+    "embedding_inference": false,
+    "report": "lexical-final.json",
+    "report_sha256": "bba5eb6c160cf9de60e0fccd2879d09631eae7996c5f6ee6ae640f312dc9dbd0",
+    "binary_sha256": "f338ce86a87dd7bdfda065b3a36017ca2549ce140839422cf79809dd6829bb03",
+    "knowledge_binary_sha256": "c7376a7d4f95ab91b0e3dd92075e67b7f71ab7f10a68717e40946630bf878a0c",
+    "passed": 29,
+    "failed": 0
+  },
+  "unchanged_acceptance_inputs": {
+    "fixture_sha256": "3dcca038ed61c665c264b6b4d03ce40df10dc6f85bd0ea0c901dc5bcc7e2b66c",
+    "peer_fixture_sha256": "876b8e24bf891d4abac188c2bef575cbb1981734b1fe4f865025eeacdc4f4253",
+    "cases_sha256": "a5ecff723a277da35c185d110be3566e54f98d416638681510af29430c1b6a3e"
+  },
+  "runtime": {
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "onnxruntime": "1.22.0 CPU native library; no model inference",
+    "cargo": "locked dependencies; default HTTP features; development profile; debug=0; incremental=false; codanna.codegen-units=1; build.jobs=6",
+    "execution": "Credential-free allowlisted environment with offline model flags and isolated configuration/cache; ONNX RUNPATH embedded so evaluator subprocesses need no inherited library-path override"
+  },
+  "commands": {
+    "build": "cargo build --locked --bin codanna --bin codanna-knowledge",
+    "manifest": "python3 contributing/retrieval/run.py --check",
+    "evaluator_tests": "python3 -m unittest discover -s contributing/retrieval -p 'test_run.py'",
+    "lexical": "python3 contributing/retrieval/run.py --profile lexical --codanna <frozen-codanna-binary> --knowledge <frozen-codanna-knowledge-binary> --out <fresh-output-directory>"
+  },
+  "qualification": {
+    "lexical_only": true,
+    "real_model_inference": false,
+    "provider_credentials": false,
+    "manual_scenarios_completed": false,
+    "semantic_quality_evaluated": false,
+    "interpretation": "All 29 selected lexical-profile cases and all 18 invariants pass. Structural cases also run in that profile. The three semantic-only cases and ten manual scenarios remain outside this qualification."
+  }
+}

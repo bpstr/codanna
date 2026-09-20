@@ -31,6 +31,11 @@ pub struct SemanticMetadata {
     #[serde(default)]
     pub backend: EmbeddingBackendKind,
 
+    /// Backend, endpoint digest, explicit revision and complete-input policy.
+    /// Legacy indexes without this field must be rebuilt before model inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_identity: Option<String>,
+
     /// Dimension of embeddings
     pub dimension: usize,
 
@@ -49,7 +54,7 @@ pub struct SemanticMetadata {
 
 impl SemanticMetadata {
     /// Current metadata version
-    const CURRENT_VERSION: u32 = 2;
+    const CURRENT_VERSION: u32 = 3;
 
     /// Create new metadata for a local fastembed index.
     pub fn new(model_name: String, dimension: usize, embedding_count: usize) -> Self {
@@ -57,6 +62,7 @@ impl SemanticMetadata {
         Self {
             model_name,
             backend: EmbeddingBackendKind::Local,
+            embedding_identity: None,
             dimension,
             embedding_count,
             created_at: now,
@@ -71,6 +77,7 @@ impl SemanticMetadata {
         Self {
             model_name,
             backend: EmbeddingBackendKind::Remote,
+            embedding_identity: None,
             dimension,
             embedding_count,
             created_at: now,

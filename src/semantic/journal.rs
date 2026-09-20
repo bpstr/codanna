@@ -119,12 +119,12 @@ fn valid_name(name: &str) -> bool {
 
 fn manifest(bytes: &[u8]) -> Result<Manifest, SemanticSearchError> {
     let value: Manifest = serde_json::from_slice(bytes).map_err(error)?;
-    if !(1..=2).contains(&value.metadata.version) || !(1..=4096).contains(&value.metadata.dimension)
+    if !(1..=3).contains(&value.metadata.version) || !(1..=4096).contains(&value.metadata.dimension)
     {
         return Err(error("unsupported semantic metadata version or dimension"));
     }
     if let Some(j) = &value.journal {
-        if value.metadata.version != 2
+        if !(2..=3).contains(&value.metadata.version)
             || j.version != 1
             || !valid_name(&j.base)
             || j.deltas.len() > MAX_DELTAS
@@ -265,7 +265,7 @@ pub(super) fn save(
         }
     };
     sync_dir(path)?;
-    metadata.version = 2;
+    metadata.version = 3;
     let next = Manifest {
         metadata,
         journal: Some(journal),

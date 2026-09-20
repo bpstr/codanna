@@ -74,6 +74,14 @@ pub trait WatchHandler: Send + Sync {
         false
     }
 
+    /// Whether source events should coalesce directly by document collection.
+    /// Such handlers return collection truth-scan actions from
+    /// `on_directory_change`, including when passed a matching source path.
+    /// Other handlers matching the same path retain their per-file events.
+    fn coalesces_document_events(&self) -> bool {
+        false
+    }
+
     /// Handle a file modification event (called after debouncing).
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError>;
 

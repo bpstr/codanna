@@ -1,5 +1,7 @@
 # Document embedding review
 
+Historical review: its baseline and repair results remain unchanged; see [the subsequent storage improvements](../embedding-improvements/EMBEDDING-STORAGE.md) for the later generation, recovery and compaction implementation.
+
 The reviewed baseline is `1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2`.
 Sixteen deterministic integration scenarios were executed against that clean
 source: 15 failed and one unchanged/deletion control passed. The final integrated

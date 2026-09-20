@@ -1,0 +1,9 @@
+{"schema_version":1,"fixture":"document-churn-v1","documents":8,"dimensions":384,"edit_cycles":100,"mock_embeddings":true,"samples":[
+{"cycle":0,"live_files":8,"live_chunks":8,"vector_files":1,"vector_file_bytes":12336,"allocated_vector_bytes":16384,"physical_vector_records":8,"elapsed_ms":43}
+,{"cycle":1,"live_files":8,"live_chunks":8,"vector_files":2,"vector_file_bytes":13892,"allocated_vector_bytes":20480,"physical_vector_records":9,"elapsed_ms":72}
+,{"cycle":10,"live_files":8,"live_chunks":8,"vector_files":3,"vector_file_bytes":15448,"allocated_vector_bytes":24576,"physical_vector_records":10,"elapsed_ms":386}
+,{"cycle":25,"live_files":8,"live_chunks":8,"vector_files":2,"vector_file_bytes":13892,"allocated_vector_bytes":20480,"physical_vector_records":9,"elapsed_ms":986}
+,{"cycle":50,"live_files":8,"live_chunks":8,"vector_files":3,"vector_file_bytes":15448,"allocated_vector_bytes":24576,"physical_vector_records":10,"elapsed_ms":2185}
+,{"cycle":75,"live_files":8,"live_chunks":8,"vector_files":4,"vector_file_bytes":17004,"allocated_vector_bytes":28672,"physical_vector_records":11,"elapsed_ms":3730}
+,{"cycle":100,"live_files":8,"live_chunks":8,"vector_files":5,"vector_file_bytes":18560,"allocated_vector_bytes":32768,"physical_vector_records":12,"elapsed_ms":5532}
+] ,"edit_elapsed_ms":5532,"reopened_live_chunks":8}

@@ -5,7 +5,10 @@ use std::time::Instant;
 
 use crate::cli::DocumentAction;
 use crate::config::Settings;
-use crate::documents::{CollectionConfig, DocumentStore, IndexProgress, SearchQuery};
+use crate::documents::{
+    CollectionConfig, CollectionStats, DocumentStore, EmbeddingDiagnostics, IndexProgress,
+    SearchQuery,
+};
 use crate::io::EnvelopeEntityType;
 use crate::io::envelope::{Envelope, ResultCode};
 use crate::io::status_line::StatusLine;
@@ -21,6 +24,14 @@ fn print_json<T: serde::Serialize>(value: &T) {
             std::process::exit(2);
         }
     }
+}
+
+#[derive(serde::Serialize)]
+struct DocumentStatistics {
+    #[serde(flatten)]
+    collection: CollectionStats,
+    /// Vectors belong to the shared document index, across all collections.
+    embedding_index: EmbeddingDiagnostics,
 }
 
 /// Run documents management command.
@@ -224,12 +235,32 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
 
             match store.collection_stats(&collection) {
                 Ok(stats) => {
+                    let embedding_index = store.embedding_diagnostics();
                     if json {
-                        print_json(&stats);
+                        print_json(&DocumentStatistics {
+                            collection: stats,
+                            embedding_index,
+                        });
                     } else {
                         println!("Collection: {}", stats.name);
                         println!("  Chunks: {}", stats.chunk_count);
                         println!("  Files: {}", stats.file_count);
+                        println!("Embedding index (all collections):");
+                        println!(
+                            "  Vectors: {} live / {} stored in {} segments",
+                            embedding_index.live_vectors,
+                            embedding_index.physical_vectors,
+                            embedding_index.vector_segments,
+                        );
+                        println!(
+                            "  Chunks without embeddings: {}",
+                            embedding_index.unembedded_chunks,
+                        );
+                        println!(
+                            "  Last publication: {} new vector bytes, {} compacted vector bytes",
+                            embedding_index.new_vector_bytes,
+                            embedding_index.compacted_vector_bytes,
+                        );
                     }
                 }
                 Err(e) => {

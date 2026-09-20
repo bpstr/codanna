@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-09-20T16:08:53.188561+00:00",
+  "base_revision": "dd8e247c62dcfd61dd1cdb7feaf23fe3777a469d",
+  "worktree_dirty": true,
+  "source_tree_sha256": "a4dff01b27eb17c5f2db9f23b4375994732aa48e791e3bcbf5af4ec68a93498b",
+  "source_tree_hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests",
+  "source_file_count": 635,
+  "embedding_inference": false,
+  "fixtures": {
+    "new_tests": 68,
+    "revised_tests": 7,
+    "helpers": 1,
+    "crash_subcases": 19,
+    "imported_or_retained_integration_invocations": 33,
+    "imported_or_retained_integration_unique_functions": 21,
+    "new_or_revised_passed_in_observed_logs": 75,
+    "new_or_revised_pending": 0
+  },
+  "gates": {
+    "quick_check": {
+      "command": "./contributing/scripts/quick-check.sh",
+      "exit_code": 0,
+      "formatting": "passed",
+      "strict_clippy_all_targets_all_features": "passed",
+      "log_sha256": "42d59929af12eda5a5c463c5b5a0f0a14edea29fc7636e088ac7b01cedf49338"
+    },
+    "unmodified_full_test_script": {
+      "command": "./contributing/scripts/full-test.sh",
+      "exit_code": 101,
+      "formatting": "passed",
+      "strict_clippy": "passed",
+      "no_default_features": "passed",
+      "library": {
+        "completed_test_targets": 1,
+        "passed": 1375,
+        "failed": 1,
+        "ignored": 27,
+        "measured": 0,
+        "filtered_out": 0,
+        "log_sha256": "de85989472976c82adc3f39c075f880cad0ca9cb151f39bacd9a9ac45612543d"
+      },
+      "sole_failure": "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "failure_reason": "The local execution environment denies creation of AF_UNIX sockets with EPERM. This test remains unchanged and enabled in CI."
+    },
+    "complete_default_features": {
+      "command": "cargo test --locked --no-fail-fast -- --test-threads=2 --skip indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "exit_code": 0,
+      "completed_test_targets": 37,
+      "passed": 2338,
+      "failed": 0,
+      "ignored": 62,
+      "measured": 0,
+      "filtered_out": 1,
+      "log_sha256": "a25a7330462188784f82dd3005f4bdda740feb0df6dda5d88d733999337627f7"
+    },
+    "complete_all_features": {
+      "command": "cargo test --locked --all-features --no-fail-fast -- --test-threads=2 --skip indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "exit_code": 0,
+      "completed_test_targets": 37,
+      "passed": 2340,
+      "failed": 0,
+      "ignored": 62,
+      "measured": 0,
+      "filtered_out": 1,
+      "log_sha256": "18055721c6a5bbf2be6374209667e7119700b5d39880b0ef08070b57f9e74970"
+    },
+    "documentation": {
+      "command": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --locked --no-deps --all-features",
+      "exit_code": 0,
+      "log_sha256": "8b5c90ab81611e7d512245c36d0798bd50af2831eff16cd12bd7efe362c7935b"
+    },
+    "cli_mcp_smoke": {
+      "exit_code": 0,
+      "checks": [
+        "main help",
+        "index help",
+        "retrieve help",
+        "documents stats help",
+        "fresh lexical workspace indexing and mcp-test custom requests"
+      ],
+      "log_sha256": "25c8732c9732f026b0a2742ce58efb747b6c449bace523ebd3054e4fdda4ca9a"
+    },
+    "evaluator_manifest": {
+      "command": "python3 contributing/retrieval/run.py --check",
+      "exit_code": 0,
+      "executable_cases": 32,
+      "manual_scenarios": 10,
+      "log_sha256": "8a142cbcf9983e11152d43845cb540ed6636b82648885da896e56f463b7b274b"
+    },
+    "evaluator_unit_tests": {
+      "passed": 25,
+      "failed": 0,
+      "log_sha256": "33b248360fa309a4117612a09df854a1ba7e7412d7f535fd7cb125dbf12912f4"
+    },
+    "plugin_boundaries": {
+      "passed": 7,
+      "failed": 0,
+      "log_sha256": "f7c7bf05acf303801cd318e81171d6add13d4dd1c3b81e0dcb4b661a3334193f"
+    }
+  },
+  "lexical_acceptance": {
+    "baseline_passed": 23,
+    "final_passed": 29,
+    "selected": 29,
+    "invariants_passed": 18,
+    "mean_required_evidence_recall_at_5_before": 0.875,
+    "mean_required_evidence_recall_at_5_after": 1.0,
+    "hit_at_5": 1.0,
+    "mrr_at_5": 1.0,
+    "forbidden_evidence": 0,
+    "inputs_unchanged": true,
+    "context": "evaluation-context.json"
+  },
+  "storage_probe": {
+    "baseline": "churn-baseline.json",
+    "final": "churn-final.json",
+    "probe": "document_churn.rs",
+    "live_chunks_before_and_after": 8,
+    "edit_cycles": 100,
+    "physical_vectors_before": 108,
+    "physical_vectors_after": 12,
+    "vector_file_bytes_before": 166336,
+    "vector_file_bytes_after": 18560,
+    "report": "STORAGE-MEASUREMENTS.md"
+  },
+  "scope": {
+    "real_model_or_paid_provider_inference": false,
+    "transport_fixtures": "credential-free loopback mocks",
+    "new_or_revised_fixtures_excluded": 0,
+    "unchanged_local_environment_exclusions": [
+      "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking"
+    ],
+    "preexisting_ignored_tests": 62,
+    "manual_semantic_quality_qualification": false,
+    "ci": "CI must provide a separate witness with no Unix-socket exclusion; pending at the time of this local validation."
+  },
+  "notes": [
+    "Counts include Cargo test invocations, including imported retained tests and one subprocess helper; independent added-fixture counts are listed separately.",
+    "Default and all-feature suites completed 37 test targets each.",
+    "The existing build-stamp test exposed inconsistent cached executables after switching feature sets; refreshing build metadata and rebuilding produced the complete passing default run. No assertion was changed.",
+    "Wall-clock storage samples are descriptive; the updated final sample was slower despite reduced vector storage."
+  ]
+}

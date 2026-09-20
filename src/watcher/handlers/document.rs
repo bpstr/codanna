@@ -86,17 +86,51 @@ impl DocumentFileHandler {
 
     fn affected_collections(&self, path: &Path) -> Vec<(String, CollectionConfig)> {
         let path = self.to_absolute(path);
+        let policy_parent = path
+            .file_name()
+            .filter(|name| *name == ".codannaignore")
+            .and_then(|_| path.parent());
         self.collections
             .iter()
             .filter(|(_, collection)| {
                 collection.paths.iter().any(|root| {
                     // Reconcile an entire configured collection: the common
                     // discovery path applies patterns and .codannaignore.
-                    path == *root || path.starts_with(root) || root.starts_with(&path)
+                    path == *root
+                        || root.starts_with(&path)
+                        || policy_parent.is_some_and(|parent| {
+                            parent.starts_with(root) || root.starts_with(parent)
+                        })
+                        || (path.starts_with(root) && Self::event_is_discoverable(root, &path))
                 })
             })
             .cloned()
             .collect()
+    }
+
+    /// Apply the walker's exact path policy without walking the collection.
+    /// A fresh matcher observes policy edits immediately and does not retain an
+    /// unbounded cache of directories from historical event paths. Root and
+    /// policy events bypass this source filter in affected_collections.
+    fn event_is_discoverable(root: &Path, path: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        let mut walk = ignore::WalkBuilder::new(root);
+        walk.hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .follow_links(false)
+            .add_custom_ignore_filename(".codannaignore");
+        let Some(mut matcher) = walk.build_matchers().pop() else {
+            return true;
+        };
+        let (matched, error) = matcher.matched_with_errors(relative, path.is_dir());
+        // A policy read failure must reach the collection's normal error and
+        // retry path instead of silently dropping a potentially relevant event.
+        error.is_some() || !matched.is_ignore()
     }
 
     fn reconcile_action(&self, path: &Path) -> WatchAction {
@@ -119,8 +153,21 @@ impl WatchHandler for DocumentFileHandler {
         "document"
     }
 
+    fn coalesces_document_events(&self) -> bool {
+        !self.collections.is_empty()
+    }
+
     fn matches(&self, path: &Path) -> bool {
         let absolute = self.to_absolute(path);
+        // Discovery inherits parent policy. The root's parent watch must also
+        // route policy edits, including while the configured root is absent.
+        if absolute
+            .file_name()
+            .is_some_and(|name| name == ".codannaignore")
+            && !self.affected_collections(&absolute).is_empty()
+        {
+            return true;
+        }
         if let Ok(cache) = self.cached_paths.try_read() {
             if cache.contains(&absolute) {
                 return true;
@@ -151,6 +198,7 @@ impl WatchHandler for DocumentFileHandler {
 
     async fn watch_roots(&self) -> Vec<PathBuf> {
         let collections = self.collections.clone();
+        let workspace_root = self.workspace_root.clone();
         crate::runtime::blocking(move || {
             let mut roots = Vec::new();
             for (_, collection) in collections {
@@ -160,6 +208,16 @@ impl WatchHandler for DocumentFileHandler {
                     // recreation or directory move can reinstall the subtree.
                     if let Some(parent) = path.ancestors().skip(1).find(|p| p.is_dir()) {
                         roots.push(parent.to_path_buf());
+                        // Custom ignore files are inherited by discovery. For
+                        // nested roots, observe policy at every workspace
+                        // ancestor, not only the immediate root parent.
+                        roots.extend(
+                            parent
+                                .ancestors()
+                                .skip(1)
+                                .take_while(|ancestor| ancestor.starts_with(&workspace_root))
+                                .map(Path::to_path_buf),
+                        );
                     }
                     if path.is_file() || !path.exists() {
                         continue;
@@ -200,52 +258,37 @@ impl WatchHandler for DocumentFileHandler {
     }
 
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError> {
-        if !self.affected_collections(path).is_empty() {
-            return Ok(self.reconcile_action(path));
+        let action = self.reconcile_action(path);
+        if !matches!(action, WatchAction::None) {
+            return Ok(action);
         }
         // DocumentStore.file_states uses absolute paths, so pass absolute
         Ok(WatchAction::ReindexDocument {
-            path: path.to_path_buf(),
+            path: self.to_absolute(path),
         })
     }
 
     async fn on_delete(&self, path: &Path) -> Result<WatchAction, WatchError> {
-        if !self.affected_collections(path).is_empty() {
-            return Ok(self.reconcile_action(path));
+        let action = self.reconcile_action(path);
+        if !matches!(action, WatchAction::None) {
+            return Ok(action);
         }
+        let path = self.to_absolute(path);
         // Remove from cache
         {
             let mut cache = self.cached_paths.write().await;
-            cache.remove(path);
+            cache.remove(&path);
         }
 
         // DocumentStore.file_states uses absolute paths, so pass absolute
-        Ok(WatchAction::RemoveDocument {
-            path: path.to_path_buf(),
-        })
+        Ok(WatchAction::RemoveDocument { path })
     }
 
     async fn refresh_paths(&self) -> Result<(), WatchError> {
-        if self.collections.is_empty() {
-            self.init_cache().await;
-            return Ok(());
-        }
-        let collections = self.collections.clone();
-        let paths = crate::runtime::blocking(move || {
-            let mut paths = HashSet::new();
-            for (_, collection) in collections {
-                paths.extend(DocumentStore::discover_files(&collection)?);
-            }
-            Ok::<_, crate::documents::store::DocumentStoreError>(paths)
-        })
-        .await
-        .map_err(|error| WatchError::EventError {
-            details: error.to_string(),
-        })?
-        .map_err(|error| WatchError::EventError {
-            details: error.to_string(),
-        })?;
-        *self.cached_paths.write().await = paths;
+        // Configured roots already match new files. Keep this cache tied to
+        // indexed truth, avoiding another collection discovery after each
+        // successful batch; overflow reconciliation explicitly scans roots.
+        self.init_cache().await;
         Ok(())
     }
 

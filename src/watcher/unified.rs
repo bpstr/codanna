@@ -1,16 +1,17 @@
 //! Unified file watcher that routes events to pluggable handlers.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::Duration;
 
-use crate::documents::DocumentStore;
 use crate::documents::config::ChunkingConfig;
+use crate::documents::{CollectionConfig, DocumentStore};
 use crate::indexing::facade::IndexFacade;
 use crate::mcp::notifications::{FileChangeEvent, NotificationBroadcaster};
 
@@ -23,6 +24,121 @@ use super::path_registry::PathRegistry;
 /// lane. This avoids one semantic-index save per path after large filesystem
 /// event bursts such as a macOS wake or branch checkout.
 const BATCH_MODIFICATION_THRESHOLD: usize = 32;
+
+/// Bound collection debounce even during a continuous stream of source events.
+const MAX_DOCUMENT_BATCH_DELAY: Duration = Duration::from_secs(2);
+
+/// One pending truth scan per configured collection, independent of burst size.
+/// Retry deadlines use the regular drain tick; they never sleep in the event lane.
+#[derive(Clone)]
+struct PendingDocumentCollection {
+    config: CollectionConfig,
+    defaults: ChunkingConfig,
+    refresh_watches: bool,
+    first_event_at: Instant,
+    ready_at: Instant,
+    failures: u32,
+    retry_at: Option<Instant>,
+}
+
+impl PendingDocumentCollection {
+    fn retry(&mut self, now: Instant) {
+        self.failures = self.failures.saturating_add(1);
+        let delay_ms = (250_u64 << self.failures.saturating_sub(1).min(7)).min(30_000);
+        self.retry_at = Some(now + Duration::from_millis(delay_ms));
+    }
+}
+
+#[derive(Default)]
+struct DocumentReconciliations {
+    pending: BTreeMap<String, PendingDocumentCollection>,
+    debounce: Duration,
+}
+
+impl DocumentReconciliations {
+    fn new(debounce_ms: u64) -> Self {
+        Self {
+            pending: BTreeMap::new(),
+            debounce: Duration::from_millis(debounce_ms).min(MAX_DOCUMENT_BATCH_DELAY),
+        }
+    }
+
+    fn record(
+        &mut self,
+        path: &Path,
+        collections: Vec<(String, CollectionConfig)>,
+        defaults: ChunkingConfig,
+        now: Instant,
+    ) {
+        let refresh_watches = path.is_dir()
+            || !path.exists()
+            || path
+                .file_name()
+                .is_some_and(|name| name == ".codannaignore");
+        for (name, config) in collections {
+            self.pending
+                .entry(name)
+                .and_modify(|pending| {
+                    pending.config = config.clone();
+                    pending.defaults = defaults.clone();
+                    pending.refresh_watches |= refresh_watches;
+                    pending.ready_at = (now + self.debounce)
+                        .min(pending.first_event_at + MAX_DOCUMENT_BATCH_DELAY);
+                    // New events must not defeat the backoff of a failing
+                    // collection; its next truth scan includes these changes.
+                })
+                .or_insert_with(|| PendingDocumentCollection {
+                    config,
+                    defaults: defaults.clone(),
+                    refresh_watches,
+                    first_event_at: now,
+                    ready_at: now + self.debounce,
+                    failures: 0,
+                    retry_at: None,
+                });
+        }
+    }
+
+    fn take_ready(&mut self, now: Instant) -> BTreeMap<String, PendingDocumentCollection> {
+        // Detach before awaiting the worker. Never clear the live map after a
+        // scan: events received during it belong to the following dispatch.
+        let names: Vec<_> = self
+            .pending
+            .iter()
+            .filter(|(_, pending)| {
+                now >= pending.ready_at && pending.retry_at.is_none_or(|deadline| now >= deadline)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        names
+            .into_iter()
+            .filter_map(|name| self.pending.remove(&name).map(|pending| (name, pending)))
+            .collect()
+    }
+
+    fn retry(&mut self, name: String, mut failed: PendingDocumentCollection, now: Instant) {
+        failed.retry(now);
+        self.pending
+            .entry(name)
+            .and_modify(|pending| {
+                // Retain newer policy/work recorded during the failed scan.
+                pending.refresh_watches |= failed.refresh_watches;
+                pending.failures = pending.failures.max(failed.failures);
+                pending.retry_at = pending.retry_at.max(failed.retry_at);
+            })
+            .or_insert(failed);
+    }
+}
+
+/// Deterministic work counters, excluding watch-directory traversal and failed
+/// scans whose partial file work is not reported by DocumentStore.
+#[derive(Debug, Default)]
+struct DocumentBatchStats {
+    collection_scans: usize,
+    files_checked: usize,
+    files_processed: usize,
+    chunks_removed: usize,
+}
 
 /// Unified file watcher with pluggable handlers.
 ///
@@ -48,6 +164,8 @@ pub struct UnifiedWatcher {
     facade: Arc<RwLock<IndexFacade>>,
     /// Document store for executing document actions (optional).
     document_store: Option<Arc<RwLock<DocumentStore>>>,
+    /// Coalesced collection work, bounded by configured collection count.
+    document_reconciliations: RwLock<DocumentReconciliations>,
     /// Chunking config for document re-indexing.
     chunking_config: ChunkingConfig,
     /// Path for semantic search persistence.
@@ -168,43 +286,7 @@ impl UnifiedWatcher {
                 // Process debounced changes and recover queue overflow from
                 // filesystem truth. The native callback never blocks.
                 _ = drain.tick() => {
-                    if self.event_overflowed.swap(false, Ordering::AcqRel) {
-                        self.reconcile_event_overflow().await;
-                    }
-
-                    if self.debouncer.has_pending_removals() {
-                        // A removal may be one side of a rename. Hold the
-                        // whole burst until every side is stable, then hand
-                        // remove + create to the shared batch lane in one
-                        // wave so discovery can pair them.
-                        if let Some((removed, modified)) = self.debouncer.take_settled_burst() {
-                            self.process_change_wave(removed, modified).await;
-                        }
-                    } else {
-                        let ready = self.debouncer.take_ready();
-                        let ready_count = ready.len();
-                        let (vanished, alive): (Vec<PathBuf>, Vec<PathBuf>) =
-                            ready.into_iter().partition(|path| !path.exists());
-                        if ready_count >= BATCH_MODIFICATION_THRESHOLD {
-                            self.process_change_wave(vanished, alive).await;
-                        } else if vanished.is_empty() {
-                            for path in alive {
-                                self.process_modification(&path).await;
-                            }
-                        } else {
-                            // rename-as-modify (macOS): vanished paths are
-                            // removal observations, and the survivors of the
-                            // same batch must ride the same wave -- indexing
-                            // a rename's create side per-file here would
-                            // leave discovery nothing to pair.
-                            for path in vanished {
-                                self.debouncer.record_removal(path);
-                            }
-                            for path in alive {
-                                self.debouncer.record(path);
-                            }
-                        }
-                    }
+                    self.dispatch_ready_changes(Instant::now()).await;
                 }
 
                 // Handle broadcast notifications
@@ -277,6 +359,10 @@ impl UnifiedWatcher {
 
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
+        self.handle_event_at(event, Instant::now()).await;
+    }
+
+    async fn handle_event_at(&mut self, event: Event, now: Instant) {
         // Access events observe state; they never change it. inotify
         // emits Access(Open) for every directory read -- including the
         // watcher's OWN catch-up walks -- so routing them into the
@@ -288,6 +374,17 @@ impl UnifiedWatcher {
             return;
         }
         for path in event.paths {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                self.workspace_root.join(&path)
+            };
+            // Managed artifacts are never source events, including when the
+            // configured index lives outside the conventional .codanna tree.
+            // Parent policy edits and workspace/root recreation remain visible.
+            if absolute.starts_with(&self.index_path) {
+                continue;
+            }
             crate::trace_event!(
                 "watcher",
                 "event",
@@ -295,6 +392,46 @@ impl UnifiedWatcher {
                 event.kind,
                 crate::parsing::paths::render_absolute_path(&path).display()
             );
+            let is_directory = path.is_dir();
+            let removed_directory = !path.exists()
+                && self
+                    .registry
+                    .watch_dirs()
+                    .iter()
+                    .any(|directory| directory.starts_with(&path));
+            if matches!(
+                event.kind,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            ) {
+                for handler in &self.handlers {
+                    if !handler.coalesces_document_events()
+                        || !(is_directory || removed_directory || handler.matches(&path))
+                    {
+                        continue;
+                    }
+                    match handler.on_directory_change(&path).await {
+                        Ok(WatchAction::ReconcileDocuments {
+                            path,
+                            collections,
+                            defaults,
+                        }) => {
+                            if self.document_store.is_some() {
+                                self.document_reconciliations.write().await.record(
+                                    &path,
+                                    collections,
+                                    defaults,
+                                    now,
+                                );
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::error!("[{}] event routing failed: {error}", handler.name());
+                            self.event_overflowed.store(true, Ordering::Release);
+                        }
+                    }
+                }
+            }
             // Ignore files alter the inventory, including already-indexed
             // files and currently empty subtrees. They are policy events even
             // though source handlers deliberately reject unknown dot-files.
@@ -317,7 +454,7 @@ impl UnifiedWatcher {
             // catch up files that landed before the watch existed. Disk
             // truth decides, not event kind -- a dir rename's to-side
             // arrives as Modify(Name), never Create.
-            if path.is_dir() {
+            if is_directory {
                 if let Err(error) = self.handle_created_directory(&path).await {
                     tracing::error!("[watcher] created-directory discovery incomplete: {error}");
                 }
@@ -330,19 +467,21 @@ impl UnifiedWatcher {
             // with NO per-file events following; one removal observation
             // stands in for the subtree and the wave's batch sync
             // re-derives the owning root.
-            if !path.exists()
+            if removed_directory
                 && self
-                    .registry
-                    .watch_dirs()
+                    .handlers
                     .iter()
-                    .any(|dir| dir.starts_with(&path))
+                    .any(|handler| !handler.coalesces_document_events())
             {
                 self.debouncer.record_removal(path);
                 continue;
             }
 
             // Check if any handler cares about this path
-            let matched = self.handlers.iter().any(|h| h.matches(&path));
+            let matched = self
+                .handlers
+                .iter()
+                .any(|handler| !handler.coalesces_document_events() && handler.matches(&path));
             if !matched {
                 crate::trace_event!(
                     "watcher",
@@ -378,6 +517,15 @@ impl UnifiedWatcher {
     /// creation at the top of a root is visible even when the root
     /// holds no indexed file directly.
     async fn register_handler_roots(&mut self) -> Result<(), WatchError> {
+        self.register_handler_roots_with_reinstall(&[]).await
+    }
+
+    /// Reinstall affected document roots even when their path strings were
+    /// registered before a delete/recreate replaced the underlying inode.
+    async fn register_handler_roots_with_reinstall(
+        &mut self,
+        reinstall_roots: &[PathBuf],
+    ) -> Result<(), WatchError> {
         let mut roots = Vec::new();
         let mut sync_roots = Vec::new();
         for handler in &self.handlers {
@@ -390,8 +538,18 @@ impl UnifiedWatcher {
         let new_roots: Vec<_> = roots
             .iter()
             .filter(|root| {
+                let reinstall = reinstall_roots
+                    .iter()
+                    .any(|affected| root.starts_with(affected) || affected.starts_with(root));
+                // A shared code/document root can be absent after deletion.
+                // Keep its parent's document watch and reconcile its empty
+                // inventory; attempting a native watch would block cleanup.
+                // Startup registration still fails on an invalid missing root.
+                if reinstall && !root.exists() {
+                    return false;
+                }
                 let new_dir = self.registry.add_watch_dir((*root).clone());
-                new_dir || !self.handler_roots.contains(root)
+                new_dir || !self.handler_roots.contains(root) || reinstall
             })
             .cloned()
             .collect();
@@ -439,25 +597,24 @@ impl UnifiedWatcher {
         // A directory move can contain documents before individual file
         // watches exist. Collection handlers reconcile through their own
         // discovery policy; the code lane below keeps its existing behavior.
-        let mut document_directories = Vec::new();
         for handler in &self.handlers {
-            let action = handler.on_directory_change(path).await?;
-            let reconcile_documents = matches!(action, WatchAction::ReconcileDocuments { .. });
-            self.execute_action(action, handler.name()).await?;
-            if reconcile_documents {
-                document_directories.extend(
-                    handler
-                        .watch_roots()
-                        .await
-                        .into_iter()
-                        .filter(|root| root.starts_with(path)),
-                );
+            if handler.coalesces_document_events() {
+                // Ingress already queued document directory events.
+                continue;
             }
+            let action = handler.on_directory_change(path).await?;
+            self.execute_action(action, handler.name()).await?;
         }
-        // Native watches disappear when their inode is deleted. Reinstall
-        // restored document subtrees even if registry path strings are old.
-        self.watch_directories(&document_directories, false)?;
-        self.register_handler_roots().await?;
+        // Document roots and their watches reconcile once on the next drain,
+        // before scanning content. The parent watch remains active meanwhile.
+
+        if !self
+            .handlers
+            .iter()
+            .any(|handler| handler.covered_by_batch_sync())
+        {
+            return Ok(());
+        }
 
         let path_owned = path.to_path_buf();
         let (dirs, files) = crate::runtime::read(&self.facade, move |facade| {
@@ -498,7 +655,7 @@ impl UnifiedWatcher {
 
     /// Recover from a full native-event queue by deriving state from the
     /// filesystem and handler snapshots instead of relying on dropped events.
-    async fn reconcile_event_overflow(&mut self) {
+    async fn reconcile_event_overflow(&mut self, now: Instant) {
         tracing::warn!(
             "[watcher] event queue overflowed; reconciling watched state from filesystem truth"
         );
@@ -517,6 +674,45 @@ impl UnifiedWatcher {
         // files through normal modify handling.
         for handler in &self.handlers {
             if handler.covered_by_batch_sync() {
+                continue;
+            }
+
+            // Collection handlers can reconcile empty, deleted and newly
+            // populated roots directly. Replaying every file would multiply
+            // collection discovery work and miss untracked sources.
+            let mut collection_handler = false;
+            let mut observed_roots: Vec<PathBuf> = Vec::new();
+            let mut watch_roots = handler.watch_roots().await;
+            watch_roots.sort();
+            for root in watch_roots {
+                if observed_roots.iter().any(|parent| root.starts_with(parent)) {
+                    continue;
+                }
+                observed_roots.push(root.clone());
+                match handler.on_directory_change(&root).await {
+                    Ok(WatchAction::ReconcileDocuments {
+                        path,
+                        collections,
+                        defaults,
+                    }) => {
+                        collection_handler = true;
+                        if self.document_store.is_some() {
+                            self.document_reconciliations.write().await.record(
+                                &path,
+                                collections,
+                                defaults,
+                                now,
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::error!(
+                        "[{}] overflow reconciliation failed: {error}",
+                        handler.name()
+                    ),
+                }
+            }
+            if collection_handler {
                 continue;
             }
 
@@ -568,6 +764,46 @@ impl UnifiedWatcher {
         self.broadcaster.send(FileChangeEvent::IndexReloaded);
     }
 
+    /// One fixed-cadence dispatch. Explicit time keeps retry tests independent
+    /// of OS notification timing and real debounce sleeps.
+    async fn dispatch_ready_changes(&mut self, now: Instant) -> DocumentBatchStats {
+        if self.event_overflowed.swap(false, Ordering::AcqRel) {
+            self.reconcile_event_overflow(now).await;
+        }
+
+        if self.debouncer.has_pending_removals() {
+            // Hold both sides of a possible rename until the whole burst is
+            // stable, so shared code discovery can pair remove and create.
+            if let Some((removed, modified)) = self.debouncer.take_settled_burst() {
+                self.process_change_wave(removed, modified).await;
+            }
+        } else {
+            let ready = self.debouncer.take_ready();
+            let ready_count = ready.len();
+            let (vanished, alive): (Vec<PathBuf>, Vec<PathBuf>) =
+                ready.into_iter().partition(|path| !path.exists());
+            if ready_count >= BATCH_MODIFICATION_THRESHOLD {
+                self.process_change_wave(vanished, alive).await;
+            } else if vanished.is_empty() {
+                for path in alive {
+                    self.process_modification(&path).await;
+                }
+            } else {
+                // Rename-as-modify: defer the vanished paths and surviving
+                // create sides together to the next settled removal wave.
+                for path in vanished {
+                    self.debouncer.record_removal(path);
+                }
+                for path in alive {
+                    self.debouncer.record(path);
+                }
+            }
+        }
+        // This also runs on otherwise idle ticks, making failed collections
+        // retry without requiring another filesystem event.
+        self.flush_document_reconciliations(now).await
+    }
+
     /// Process a debounced file modification.
     async fn process_modification(&self, path: &Path) {
         // Vanished since the drain: the removal lane owns it -- the
@@ -578,7 +814,7 @@ impl UnifiedWatcher {
         }
 
         for handler in &self.handlers {
-            if !handler.matches(path) {
+            if handler.coalesces_document_events() || !handler.matches(path) {
                 continue;
             }
 
@@ -626,7 +862,10 @@ impl UnifiedWatcher {
         // Resolution defers across the covered roots so a burst whose
         // importing and imported files land in different roots binds
         // its cross-root edges regardless of loop order.
-        if let Err(error) = self.synchronize_roots(roots.clone()).await {
+        if let Err(error) = self
+            .synchronize_roots_after_removals(roots.clone(), removed.clone())
+            .await
+        {
             tracing::error!("[watcher] batch sync failed: {error}");
         }
 
@@ -657,6 +896,9 @@ impl UnifiedWatcher {
     /// subsume.
     async fn process_wave_residual(&self, path: &Path, batch_covered: bool, is_removal: bool) {
         for handler in &self.handlers {
+            if handler.coalesces_document_events() {
+                continue;
+            }
             if !handler.matches(path) {
                 if is_removal && !handler.covered_by_batch_sync() {
                     match handler.on_directory_change(path).await {
@@ -708,6 +950,15 @@ impl UnifiedWatcher {
     /// Complete a multi-root code mutation in one serialized worker transaction.
     /// Already committed files can survive an error, but the error is not hidden.
     async fn synchronize_roots(&self, roots: Vec<PathBuf>) -> Result<(), WatchError> {
+        self.synchronize_roots_after_removals(roots, Vec::new())
+            .await
+    }
+
+    async fn synchronize_roots_after_removals(
+        &self,
+        roots: Vec<PathBuf>,
+        removed: Vec<PathBuf>,
+    ) -> Result<(), WatchError> {
         if roots.is_empty() {
             return Ok(());
         }
@@ -715,6 +966,16 @@ impl UnifiedWatcher {
             let mut pending = crate::indexing::pipeline::PendingResolution::default();
             let mut failures = Vec::new();
             for root in roots {
+                if removed.iter().any(|path| root.starts_with(path)) {
+                    match indexer.remove_observed_directory(&root) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => {
+                            failures.push(format!("{}: {error}", root.display()));
+                            continue;
+                        }
+                    }
+                }
                 if let Err(error) = indexer.index_directory_deferred(&root, false, &mut pending) {
                     failures.push(format!("{}: {error}", root.display()));
                 }
@@ -736,7 +997,8 @@ impl UnifiedWatcher {
         })?
     }
 
-    /// Serialized code mutations and exclusive document mutations run off Tokio.
+    /// Serialized code mutations and exclusive legacy document mutations run
+    /// off Tokio. Configured collections queue for one scan per dispatch.
     /// Notifications follow publication, never precede it.
     async fn execute_action(
         &self,
@@ -746,8 +1008,13 @@ impl UnifiedWatcher {
         let result: Result<Option<FileChangeEvent>, WatchError> = match action {
             WatchAction::ReindexCode { path, created } => {
                 let semantic_path = self.index_path.join("semantic");
+                let source_path = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    self.workspace_root.join(&path)
+                };
                 crate::runtime::mutate(&self.facade, move |indexer| {
-                    let result = indexer.index_file(&path)?;
+                    let result = indexer.index_file(&source_path)?;
                     indexer.save_semantic_search(&semantic_path)?;
                     Ok::<_, crate::IndexError>(match result {
                         crate::IndexingResult::Indexed(_) => Some(if created {
@@ -768,8 +1035,13 @@ impl UnifiedWatcher {
             }
             WatchAction::RemoveCode { path } => {
                 let semantic_path = self.index_path.join("semantic");
+                let source_path = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    self.workspace_root.join(&path)
+                };
                 crate::runtime::mutate(&self.facade, move |indexer| {
-                    indexer.remove_file(&path)?;
+                    indexer.remove_file(&source_path)?;
                     indexer.save_semantic_search(&semantic_path)?;
                     Ok::<_, crate::IndexError>(Some(FileChangeEvent::FileDeleted { path }))
                 })
@@ -786,32 +1058,15 @@ impl UnifiedWatcher {
                 collections,
                 defaults,
             } => {
-                if let Some(store) = self.document_store.clone() {
-                    crate::runtime::blocking(move || {
-                        let mut store = store.blocking_write();
-                        let mut changed = false;
-                        for (name, collection) in collections {
-                            let effective = collection.effective_chunking(&defaults);
-                            let stats = store
-                                .index_collection(&name, &collection, &effective)
-                                .map_err(|error| WatchError::EventError {
-                                    details: error.to_string(),
-                                })?;
-                            changed |= stats.files_processed > 0 || stats.chunks_removed > 0;
-                        }
-                        Ok(changed.then_some(if path.exists() {
-                            FileChangeEvent::FileReindexed { path }
-                        } else {
-                            FileChangeEvent::FileDeleted { path }
-                        }))
-                    })
-                    .await
-                    .map_err(|error| WatchError::EventError {
-                        details: error.to_string(),
-                    })?
-                } else {
-                    Ok(None)
+                if self.document_store.is_some() {
+                    self.document_reconciliations.write().await.record(
+                        &path,
+                        collections,
+                        defaults,
+                        Instant::now(),
+                    );
                 }
+                Ok(None)
             }
             WatchAction::ReindexDocument { path } => {
                 if let Some(store) = self.document_store.clone() {
@@ -901,6 +1156,89 @@ impl UnifiedWatcher {
         }
     }
 
+    /// Flush each due collection once. Native events arriving while this awaits
+    /// remain in event_rx (or latch overflow); retries remain in the bounded map.
+    async fn flush_document_reconciliations(&mut self, now: Instant) -> DocumentBatchStats {
+        let mut total = DocumentBatchStats::default();
+        let ready = self.document_reconciliations.write().await.take_ready(now);
+        if ready.is_empty() {
+            return total;
+        }
+        let started = Instant::now();
+        let mut reinstall_roots: Vec<_> = ready
+            .values()
+            .filter(|pending| pending.refresh_watches)
+            .flat_map(|pending| pending.config.paths.iter().cloned())
+            .collect();
+        reinstall_roots.sort();
+        reinstall_roots.dedup();
+        if !reinstall_roots.is_empty() {
+            // Install watches first; the following truth scan catches files
+            // that arrived before installation, and later writes queue events.
+            if let Err(error) = self
+                .register_handler_roots_with_reinstall(&reinstall_roots)
+                .await
+            {
+                tracing::error!("[document] batch watch registration failed; retrying: {error}");
+                let mut queue = self.document_reconciliations.write().await;
+                for (name, pending) in ready {
+                    queue.retry(name, pending, now.max(Instant::now()));
+                }
+                return total;
+            }
+        }
+        for (name, pending) in ready {
+            let Some(store) = self.document_store.clone() else {
+                continue;
+            };
+            let config = pending.config.clone();
+            let effective = config.effective_chunking(&pending.defaults);
+            let collection_name = name.clone();
+            total.collection_scans += 1;
+            let result = crate::runtime::blocking(move || {
+                store
+                    .blocking_write()
+                    .index_collection(&collection_name, &config, &effective)
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(std::convert::identity);
+            match result {
+                Ok(stats) => {
+                    total.files_checked += stats.files_processed + stats.files_skipped;
+                    total.files_processed += stats.files_processed;
+                    total.chunks_removed += stats.chunks_removed;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        "[document] collection '{name}' reconciliation failed; retrying: {error}"
+                    );
+                    self.document_reconciliations.write().await.retry(
+                        name,
+                        pending,
+                        now.max(Instant::now()),
+                    );
+                }
+            }
+        }
+        tracing::debug!(
+            target: "rag",
+            collection_scans = total.collection_scans,
+            files_checked = total.files_checked,
+            files_processed = total.files_processed,
+            elapsed_ms = started.elapsed().as_millis(),
+            "document watcher dispatch completed"
+        );
+        if total.files_processed > 0 || total.chunks_removed > 0 {
+            // A collection scan can change many sources, including sources
+            // whose native events were lost. Request a complete client refresh
+            // without retaining an unbounded list of individual source paths.
+            self.broadcaster.send(FileChangeEvent::IndexReloaded);
+        }
+        total
+    }
+
     /// Handle IndexReloaded notification - refresh all handlers.
     async fn handle_index_reloaded(&mut self) {
         crate::log_event!("watcher", "index reloaded, refreshing");
@@ -933,12 +1271,12 @@ impl UnifiedWatcher {
 
         // Config reload can add or drop roots. Register roots first so macOS
         // can cover a large new tree with one recursive FSEvents path.
-        let previous_roots = self.handler_roots.clone();
+        let previous_roots = self.batch_sync_roots.clone();
         if let Err(error) = self.register_handler_roots().await {
             tracing::error!("[watcher] root registration incomplete: {error}");
         }
         let added_roots: Vec<_> = self
-            .handler_roots
+            .batch_sync_roots
             .iter()
             .filter(|root| !previous_roots.contains(root))
             .cloned()
@@ -953,7 +1291,10 @@ impl UnifiedWatcher {
             tracing::error!("[watcher] ignore-policy watch registration incomplete: {error}");
         }
 
-        // Close the index-then-register race: a file can land after config
+        // Close the index-then-register race for code roots only. Document
+        // roots include policy-watch parents outside the configured code
+        // inventory and must never expand code indexing as a side effect.
+        // A file can land after config
         // indexing completes but before the new native root is committed.
         // With the watch active, one incremental truth scan catches that gap;
         // later writes are queued by the native watcher.
@@ -1072,6 +1413,12 @@ impl UnifiedWatcherBuilder {
         let index_path = self
             .index_path
             .unwrap_or_else(|| workspace_root.join(".codanna/index"));
+        let index_path = if index_path.is_absolute() {
+            index_path
+        } else {
+            workspace_root.join(index_path)
+        };
+        let index_path = crate::documents::store::normalize_source_path(&index_path);
 
         // Keep the callback queue bounded, but never block notify's native event
         // thread. Blocking here can deadlock with watch registration on Linux.
@@ -1095,6 +1442,7 @@ impl UnifiedWatcherBuilder {
             broadcaster,
             facade,
             document_store: self.document_store,
+            document_reconciliations: RwLock::new(DocumentReconciliations::new(self.debounce_ms)),
             chunking_config: self.chunking_config,
             index_path,
             workspace_root,
@@ -1365,13 +1713,28 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "document_batching_tests.rs"]
+mod document_batching_tests;
+
+#[cfg(test)]
 mod document_collection_tests {
     use super::*;
     use crate::documents::{CollectionConfig, DocumentsConfig};
     use crate::vector::VectorDimension;
     use crate::watcher::handlers::DocumentFileHandler;
 
-    fn fixture(root: &Path, documents: &Path) -> (UnifiedWatcher, Arc<RwLock<DocumentStore>>) {
+    pub(super) fn fixture(
+        root: &Path,
+        documents: &Path,
+    ) -> (UnifiedWatcher, Arc<RwLock<DocumentStore>>) {
+        fixture_with_embeddings(root, documents, None)
+    }
+
+    pub(super) fn fixture_with_embeddings(
+        root: &Path,
+        documents: &Path,
+        generator: Option<Box<dyn crate::vector::EmbeddingGenerator>>,
+    ) -> (UnifiedWatcher, Arc<RwLock<DocumentStore>>) {
         let mut settings = crate::Settings {
             index_path: root.join("code-index"),
             workspace_root: Some(root.to_path_buf()),
@@ -1379,13 +1742,15 @@ mod document_collection_tests {
         };
         settings.semantic_search.enabled = false;
         let facade = Arc::new(RwLock::new(IndexFacade::new(Arc::new(settings)).unwrap()));
-        let store = Arc::new(RwLock::new(
-            DocumentStore::new(
-                root.join("documents-index"),
-                VectorDimension::new(2).unwrap(),
-            )
-            .unwrap(),
-        ));
+        let mut store = DocumentStore::new(
+            root.join("documents-index"),
+            VectorDimension::new(2).unwrap(),
+        )
+        .unwrap();
+        if let Some(generator) = generator {
+            store = store.with_embeddings(generator).unwrap();
+        }
+        let store = Arc::new(RwLock::new(store));
         let mut config = DocumentsConfig {
             defaults: ChunkingConfig {
                 min_chunk_chars: 1,
@@ -1411,6 +1776,7 @@ mod document_collection_tests {
             .workspace_root(root.to_path_buf())
             .broadcaster(Arc::new(NotificationBroadcaster::new(8)))
             .handler(handler)
+            .debounce_ms(0)
             .build()
             .unwrap();
         (watcher, store)
@@ -1431,6 +1797,7 @@ mod document_collection_tests {
         assert!(watcher.handlers[0].matches(&file));
         let action = watcher.handlers[0].on_modify(&file).await.unwrap();
         watcher.execute_action(action, "document").await.unwrap();
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1443,6 +1810,7 @@ mod document_collection_tests {
         std::fs::remove_file(&file).unwrap();
         let action = watcher.handlers[0].on_delete(&file).await.unwrap();
         watcher.execute_action(action, "document").await.unwrap();
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1456,6 +1824,7 @@ mod document_collection_tests {
         assert!(watcher.handlers[0].matches(&file));
         let action = watcher.handlers[0].on_modify(&file).await.unwrap();
         watcher.execute_action(action, "document").await.unwrap();
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1478,7 +1847,13 @@ mod document_collection_tests {
         let nested = docs.join("moved-in");
         std::fs::create_dir(&nested).unwrap();
         std::fs::write(nested.join("guide.md"), "alpha").unwrap();
-        watcher.handle_created_directory(&nested).await.unwrap();
+        watcher
+            .handle_event(
+                Event::new(EventKind::Create(notify::event::CreateKind::Folder))
+                    .add_path(nested.clone()),
+            )
+            .await;
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1493,6 +1868,7 @@ mod document_collection_tests {
         assert!(watcher.handlers[0].matches(&policy));
         let action = watcher.handlers[0].on_modify(&policy).await.unwrap();
         watcher.execute_action(action, "document").await.unwrap();
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1505,6 +1881,7 @@ mod document_collection_tests {
         std::fs::remove_file(&policy).unwrap();
         let action = watcher.handlers[0].on_delete(&policy).await.unwrap();
         watcher.execute_action(action, "document").await.unwrap();
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1515,7 +1892,13 @@ mod document_collection_tests {
             1
         );
         std::fs::remove_dir_all(&nested).unwrap();
-        watcher.process_wave_residual(&nested, false, true).await;
+        watcher
+            .handle_event(
+                Event::new(EventKind::Remove(notify::event::RemoveKind::Folder))
+                    .add_path(nested.clone()),
+            )
+            .await;
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()
@@ -1530,10 +1913,22 @@ mod document_collection_tests {
             "the configured root's parent must be watched before the root vanishes"
         );
         std::fs::remove_dir(&docs).unwrap();
-        watcher.process_wave_residual(&docs, false, true).await;
+        watcher
+            .handle_event(
+                Event::new(EventKind::Remove(notify::event::RemoveKind::Folder))
+                    .add_path(docs.clone()),
+            )
+            .await;
+        watcher.flush_document_reconciliations(Instant::now()).await;
         std::fs::create_dir(&docs).unwrap();
         std::fs::write(docs.join("restored.md"), "restored root").unwrap();
-        watcher.handle_created_directory(&docs).await.unwrap();
+        watcher
+            .handle_event(
+                Event::new(EventKind::Create(notify::event::CreateKind::Folder))
+                    .add_path(docs.clone()),
+            )
+            .await;
+        watcher.flush_document_reconciliations(Instant::now()).await;
         assert_eq!(
             store
                 .read()

@@ -113,6 +113,8 @@ Every result carries `file:line` coordinates the agent can open directly, `symbo
 
 Codanna runs on your machine. The repository index lives on disk under `.codanna/`. The embedding model downloads once on first use, then runs locally. No source code, symbols, or queries are sent to a remote API by default. Remote OpenAI-compatible embeddings are opt-in: `remote_url` under `[semantic_search]` in `settings.toml`, or `CODANNA_EMBED_*` environment variables; the API key is environment-only.
 
+Embedding inputs are validated in full, including document headings, and oversized inputs fail without truncation. Configure the provider's token budget, optional local tokenizer file, and explicit model revision as described in [Embedding input limits and revisions](contributing/embedding-inputs.md).
+
 <h3 align="left"></h3>
 
 ## Quick Start
@@ -175,8 +177,11 @@ collections' source tracking. A source can belong to one collection; overlapping
 collections fail explicitly. Changed content and chunking settings invalidate the
 stored chunks even when modification timestamps are unchanged. Persisted vectors
 record their backend/model identity; changing that identity requires a fresh
-document index. See [the document embedding review](contributing/retrieval/adversarial/document-embedding-review.md)
-for regression scenarios, migration limits and remaining improvements.
+document index. Document updates publish recoverable generations and compact
+obsolete vectors while existing queries retain their original snapshots. See the
+[embedding and lexical retrieval results](contributing/retrieval/embedding-improvements/README.md)
+for the fixture checklist, measured storage growth, migration limits and remaining
+improvements.
 
 Inspect indexing from another terminal without loading an embedding model:
 
@@ -184,6 +189,7 @@ Inspect indexing from another terminal without loading an embedding model:
 codanna documents status
 codanna documents status --json
 codanna documents stats docs
+codanna documents stats docs --json
 ```
 
 Document indexing records its phase, collection, current file, completed embedding
@@ -196,8 +202,11 @@ This indicates a missing heartbeat, not proof of a deadlock. A fresh heartbeat a
 does not prove the embedding batch is advancing; check the progress age and count.
 Completed runs describe only the collections selected for that run and whether
 embeddings were enabled. Older indexes have no run record. Collection statistics
-report stored metadata counts, which do not establish embedding completeness after
-an interrupted run. These diagnostics currently cover CLI document indexing.
+report stored metadata counts; the additive `embedding_index` diagnostics describe
+the shared document index across all collections, including live/stored vectors,
+chunks without embeddings, active generation and backend/input identity. These
+counts describe committed evidence and do not establish freshness against current
+source files. Run-progress diagnostics currently cover CLI document indexing.
 
 ## What It Does
 
