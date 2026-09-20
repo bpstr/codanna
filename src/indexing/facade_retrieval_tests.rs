@@ -217,6 +217,9 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
     }
     index.commit_batch().unwrap();
     let mut semantic = SimpleSemanticSearch::new_empty(2, "fixture");
+    semantic
+        .set_embedding_identity(backend.identity(None))
+        .unwrap();
     semantic.store_embeddings(vec![
         (SymbolId::new(1).unwrap(), vec![1., 0.], "rust".into()),
         (SymbolId::new(2).unwrap(), vec![0.8, 0.6], "rust".into()),

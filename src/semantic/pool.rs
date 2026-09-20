@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::SemanticSearchError;
 use super::remote::{RemoteEmbedder, run_async};
+use crate::embedding_input::InputBudget;
 
 // ── EmbeddingBackend ───────────────────────────────────────────────────────
 
@@ -30,6 +31,20 @@ impl EmbeddingBackend {
         match self {
             EmbeddingBackend::Local(pool) => pool.dimensions(),
             EmbeddingBackend::Remote(r) => r.dim(),
+        }
+    }
+
+    /// Full backend/model/preprocessing scope used by code and document vectors.
+    pub(crate) fn identity(&self, revision: Option<&str>) -> String {
+        match self {
+            Self::Remote(remote) => remote.identity(revision),
+            Self::Local(pool) => crate::embedding_input::backend_identity(
+                "local",
+                pool.model_name(),
+                None,
+                revision,
+                &pool.input_budget,
+            ),
         }
     }
 
@@ -67,8 +82,7 @@ impl EmbeddingBackend {
     }
 
     /// Embed multiple items in parallel (local) or batched async (remote).
-    /// Local pool exhaustion surfaces as an error; remote failures keep their
-    /// existing log-and-degrade semantics.
+    /// Input-budget and provider failures propagate to the indexing transaction.
     pub fn embed_parallel(
         &self,
         items: &[(SymbolId, &str, &str)],
@@ -101,7 +115,7 @@ impl EmbeddingBackend {
                         .collect()),
                     Err(e) => {
                         tracing::error!(target: "semantic", "Remote embed_parallel failed: {e}");
-                        Ok(Vec::new())
+                        Err(e)
                     }
                 }
             }
@@ -210,6 +224,7 @@ pub struct EmbeddingPool {
     embed_workers: rayon::ThreadPool,
     dimensions: usize,
     model_name: String,
+    input_budget: InputBudget,
     usage_counters: Vec<AtomicUsize>,
 }
 
@@ -233,6 +248,14 @@ impl EmbeddingPool {
     ///
     /// Each model instance uses ~86MB of memory for AllMiniLML6V2.
     pub fn new(pool_size: usize, model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
+        Self::with_input_limit(pool_size, model, None)
+    }
+
+    pub(crate) fn with_input_limit(
+        pool_size: usize,
+        model: EmbeddingModel,
+        max_input_tokens: Option<usize>,
+    ) -> Result<Self, SemanticSearchError> {
         let pool_size = pool_size.max(1);
 
         let cache_dir = crate::init::models_dir();
@@ -247,6 +270,7 @@ impl EmbeddingPool {
         let usage_counters: Vec<AtomicUsize> =
             (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
         let mut models = Vec::with_capacity(pool_size);
+        let mut input_budget = None;
 
         for i in 0..pool_size {
             let mut text_model = TextEmbedding::try_new(
@@ -263,6 +287,10 @@ impl EmbeddingPool {
             })?;
 
             if i == 0 {
+                input_budget = Some(
+                    InputBudget::local(&text_model.tokenizer, max_input_tokens)
+                        .map_err(SemanticSearchError::ModelInitError)?,
+                );
                 let test_embedding = text_model
                     .embed(vec!["test"], None)
                     .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
@@ -291,6 +319,7 @@ impl EmbeddingPool {
             embed_workers,
             dimensions,
             model_name,
+            input_budget: input_budget.expect("pool initializes at least one model"),
             usage_counters,
         })
     }
@@ -330,6 +359,10 @@ impl EmbeddingPool {
                 "Empty text".to_string(),
             ));
         }
+
+        self.input_budget
+            .validate([text])
+            .map_err(SemanticSearchError::EmbeddingError)?;
 
         let mut instance = self.acquire()?;
         let result = instance
@@ -375,6 +408,10 @@ impl EmbeddingPool {
         use rayon::prelude::*;
 
         const MAX_BATCH_SIZE: usize = 64;
+
+        self.input_budget
+            .validate(items.iter().map(|(_, text, _)| *text))
+            .map_err(SemanticSearchError::EmbeddingError)?;
 
         let valid_items: Vec<_> = items
             .iter()

@@ -407,6 +407,79 @@ impl MmapVectorStorage {
         Ok(vectors)
     }
 
+    /// Remove IDs present in this segment without decoding or scoring vectors.
+    pub(crate) fn retain_missing_ids(
+        &mut self,
+        remaining: &mut HashSet<VectorId>,
+    ) -> Result<(), VectorStorageError> {
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        self.ensure_mapped()?;
+        let mmap = self.mmap.as_ref().ok_or_else(|| {
+            VectorStorageError::InvalidFormat("Vector storage is not mapped".into())
+        })?;
+        let record_size = BYTES_PER_ID + self.dimension.get() * BYTES_PER_F32;
+        for record in mmap[HEADER_SIZE..].chunks_exact(record_size) {
+            let id = VectorId::from_bytes(record[..BYTES_PER_ID].try_into().expect("record ID"))
+                .ok_or_else(|| VectorStorageError::InvalidFormat("Invalid vector ID".into()))?;
+            remaining.remove(&id);
+            if remaining.is_empty() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy selected live records into a private compaction segment, retaining
+    /// only one small batch in memory. Removing IDs also deduplicates legacy
+    /// records across successive source segments.
+    pub(crate) fn copy_selected_to(
+        &mut self,
+        remaining: &mut HashSet<VectorId>,
+        destination: &mut Self,
+    ) -> Result<usize, VectorStorageError> {
+        self.ensure_mapped()?;
+        let mmap = self.mmap.as_ref().ok_or_else(|| {
+            VectorStorageError::InvalidFormat("Vector storage is not mapped".into())
+        })?;
+        let record_size = BYTES_PER_ID + self.dimension.get() * BYTES_PER_F32;
+        let mut batch = Vec::with_capacity(64);
+        let mut copied = 0;
+        for record in mmap[HEADER_SIZE..].chunks_exact(record_size) {
+            if remaining.is_empty() {
+                break;
+            }
+            let id = VectorId::from_bytes(record[..BYTES_PER_ID].try_into().expect("record ID"))
+                .ok_or_else(|| VectorStorageError::InvalidFormat("Invalid vector ID".into()))?;
+            if !remaining.remove(&id) {
+                continue;
+            }
+            let vector: Vec<f32> = record[BYTES_PER_ID..]
+                .chunks_exact(BYTES_PER_F32)
+                .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("f32 record")))
+                .collect();
+            batch.push((id, vector));
+            copied += 1;
+            if batch.len() == 64 {
+                let borrowed: Vec<_> = batch
+                    .iter()
+                    .map(|(id, vector)| (*id, vector.as_slice()))
+                    .collect();
+                destination.write_batch(&borrowed)?;
+                batch.clear();
+            }
+        }
+        if !batch.is_empty() {
+            let borrowed: Vec<_> = batch
+                .iter()
+                .map(|(id, vector)| (*id, vector.as_slice()))
+                .collect();
+            destination.write_batch(&borrowed)?;
+        }
+        Ok(copied)
+    }
+
     /// Score requested vectors directly from the memory map without allocating
     /// an owned `Vec<f32>` for every candidate. The first persisted occurrence
     /// of an ID wins, matching `read_vectors` and legacy point lookup behavior.
@@ -452,6 +525,11 @@ impl MmapVectorStorage {
                         mmap[bytes_offset + 2],
                         mmap[bytes_offset + 3],
                     ]);
+                    if !value.is_finite() {
+                        return Err(VectorStorageError::InvalidFormat(
+                            "Non-finite value in persisted vector".into(),
+                        ));
+                    }
                     dot += query_value * value;
                     vector_norm_sq += value * value;
                 }

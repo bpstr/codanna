@@ -94,6 +94,7 @@ pub fn input(root: &Path, repo: &str, dump: Option<&Path>) -> Result<Input> {
     input.revision = revision(&root);
     let mut paths: std::collections::BTreeSet<String> =
         input.symbols.iter().map(|s| s.path.clone()).collect();
+    let mut configurations = std::collections::BTreeSet::new();
     // Honor .gitignore and .codannaignore without following symlink directories.
     for entry in ignore::WalkBuilder::new(&root)
         .hidden(false)
@@ -119,13 +120,17 @@ pub fn input(root: &Path, repo: &str, dump: Option<&Path>) -> Result<Input> {
         }
         if links::is_document(&relative) {
             paths.insert(relative);
+        } else if links::is_configuration(&relative) {
+            // Only explicit references may ingest these symbol-free sources, and
+            // a reference cannot bypass the walk's ignore or symlink policy.
+            configurations.insert(relative);
         }
         if paths.len() > 20_000 {
             return Err("too many source files".into());
         }
     }
     let mut total = 0usize;
-    for path in paths {
+    while let Some(path) = paths.pop_first() {
         let text = String::from_utf8(read_bounded(
             &source_path(&root, &path)?,
             MAX_FILE_BYTES as u64,
@@ -136,7 +141,20 @@ pub fn input(root: &Path, repo: &str, dump: Option<&Path>) -> Result<Input> {
         if total > MAX_GRAPH_BYTES as usize {
             return Err("source byte budget exceeded".into());
         }
+        for link in links::source_links(&path, &text) {
+            if let Some((target, _)) = links::local_target(&path, &link.target) {
+                if configurations.contains(&target)
+                    && target != path
+                    && !input.files.contains_key(&target)
+                {
+                    paths.insert(target);
+                }
+            }
+        }
         input.files.insert(path, text);
+        if input.files.len() + paths.len() > 20_000 {
+            return Err("too many source files".into());
+        }
     }
     Ok(input)
 }

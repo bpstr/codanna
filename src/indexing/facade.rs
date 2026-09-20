@@ -219,7 +219,7 @@ impl IndexFacade {
         // session with the default pool, multiplying CoreML/ORT native memory.
         let is_remote = self.settings.semantic_search.remote_url.is_some()
             || std::env::var("CODANNA_EMBED_URL").is_ok();
-        let semantic = if is_remote {
+        let mut semantic = if is_remote {
             SimpleSemanticSearch::new_empty(
                 backend.dimensions(),
                 &resolve_remote_model_name(&self.settings.semantic_search),
@@ -228,10 +228,17 @@ impl IndexFacade {
             let model = &self.settings.semantic_search.model;
             SimpleSemanticSearch::new_empty_local(backend.dimensions(), model)
         };
+        semantic.set_embedding_identity(
+            backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+        )?;
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
         self.semantic_metadata_snapshot = self.get_semantic_metadata();
+        // Explicit re-enabling starts a fresh vector generation and must install
+        // the backend that produced its identity, including after incompatibility.
+        let _ = self.embedding_pool.take();
         let _ = self.embedding_pool.set(backend);
+        self.semantic_incompatible = false;
 
         Ok(())
     }
@@ -243,17 +250,31 @@ impl IndexFacade {
 
     /// Whether semantic vectors and their query embedding backend are both ready.
     pub(crate) fn is_semantic_query_ready(&self) -> bool {
-        self.semantic_search.is_some() && self.embedding_pool.get().is_some()
+        !self.semantic_incompatible
+            && self.semantic_search.is_some()
+            && self.embedding_pool.get().is_some()
     }
 
-    /// Returns true if a previous load_semantic_search call failed with
-    /// DimensionMismatch, meaning retrying would always fail until re-indexed.
+    /// Returns true after a dimension, backend, revision or input-policy mismatch.
+    /// Queries remain blocked until a compatible generation is explicitly loaded
+    /// or semantic indexing is enabled with a fresh generation.
     pub fn is_semantic_incompatible(&self) -> bool {
         self.semantic_incompatible
     }
 
+    fn check_semantic_state(&self) -> FacadeResult<()> {
+        if self.semantic_incompatible {
+            return Err(IndexError::SemanticSearch(SemanticSearchError::StorageError {
+                message: "Semantic index is incompatible with the configured embedding backend; a failed reload cannot reuse the previous vector generation".into(),
+                suggestion: "Reload a compatible semantic index or re-index with codanna index <path> --force before querying".into(),
+            }));
+        }
+        Ok(())
+    }
+
     /// Save semantic search data to disk.
     pub fn save_semantic_search(&self, path: &Path) -> FacadeResult<()> {
+        self.check_semantic_state()?;
         if let Some(ref semantic) = self.semantic_search {
             let save = semantic
                 .lock()
@@ -276,8 +297,31 @@ impl IndexFacade {
             let load_result = SimpleSemanticSearch::load_without_model(path);
             match load_result {
                 Ok(semantic) => {
+                    // A hot reload can replace the persisted vector generation
+                    // while this facade already owns a query backend.
+                    if let Some(backend) = self.embedding_pool.get() {
+                        if backend.dimensions() != semantic.dimensions() {
+                            self.semantic_incompatible = true;
+                            return Err(IndexError::SemanticSearch(
+                                SemanticSearchError::DimensionMismatch {
+                                    expected: backend.dimensions(),
+                                    actual: semantic.dimensions(),
+                                    suggestion: "Re-index with codanna index <path> --force before semantic querying".into(),
+                                },
+                            ));
+                        }
+                        let identity = backend
+                            .identity(self.settings.semantic_search.model_revision.as_deref());
+                        if let Err(error) = semantic.validate_embedding_identity(&identity) {
+                            self.semantic_incompatible = true;
+                            return Err(IndexError::SemanticSearch(error));
+                        }
+                    }
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
                     self.semantic_metadata_snapshot = self.get_semantic_metadata();
+                    // Existing backends were checked above. Without a backend,
+                    // queries still require ensure_embedding_pool to validate it.
+                    self.semantic_incompatible = false;
                     return Ok(true);
                 }
                 Err(SemanticSearchError::DimensionMismatch {
@@ -329,13 +373,13 @@ impl IndexFacade {
     ///
     /// Called lazily by methods that need to compute embeddings (reindexing, watcher).
     pub fn ensure_embedding_pool(&mut self) -> FacadeResult<()> {
-        if self.embedding_pool.get().is_some() {
-            return Ok(());
-        }
-
-        let backend = Arc::new(build_embedding_backend(&self.settings.semantic_search)?);
+        self.check_semantic_state()?;
+        let backend = match self.embedding_pool.get() {
+            Some(backend) => Arc::clone(backend),
+            None => Arc::new(build_embedding_backend(&self.settings.semantic_search)?),
+        };
         if let Some(semantic) = &self.semantic_search {
-            let semantic = semantic.lock().map_err(|_| IndexError::lock_error())?;
+            let mut semantic = semantic.lock().map_err(|_| IndexError::lock_error())?;
             let backend_dim = backend.dimensions();
             let index_dim = semantic.dimensions();
             if backend_dim != index_dim {
@@ -352,15 +396,11 @@ impl IndexFacade {
                 ));
             }
 
-            let index_is_remote = semantic.is_remote_index();
-            let backend_is_remote = matches!(backend.as_ref(), EmbeddingBackend::Remote(_));
-            if index_is_remote != backend_is_remote {
-                tracing::warn!(
-                    target: "semantic",
-                    "Backend kind changed (index={}, current={}); re-index with --force",
-                    if index_is_remote { "remote" } else { "local" },
-                    if backend_is_remote { "remote" } else { "local" },
-                );
+            let identity =
+                backend.identity(self.settings.semantic_search.model_revision.as_deref());
+            if let Err(error) = semantic.set_embedding_identity(identity) {
+                self.semantic_incompatible = true;
+                return Err(IndexError::SemanticSearch(error));
             }
         }
         let _ = self.embedding_pool.set(backend);
@@ -918,6 +958,7 @@ impl IndexFacade {
         limit: usize,
         language_filter: Option<&str>,
     ) -> FacadeResult<Vec<(Symbol, f32)>> {
+        self.check_semantic_state()?;
         let semantic = self
             .semantic_search
             .as_ref()
@@ -1342,8 +1383,57 @@ impl IndexFacade {
     pub fn remove_file(&mut self, path: impl AsRef<std::path::Path>) -> crate::IndexResult<()> {
         let path = &Self::canonical_or_raw(path.as_ref());
         self.check_network_source(path)?;
-        let semantic_path = self.settings.index_path.join("semantic");
+        // The pipeline stores workspace-relative source keys. Boundary checks
+        // above use the resolved filesystem path, including a vanished file's
+        // surviving ancestor; cleanup must address the same key as indexing.
+        let indexed_path = self
+            .settings
+            .workspace_root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(path)
+            .to_path_buf();
+        self.cleanup_indexed_files(std::slice::from_ref(&indexed_path))?;
+        Ok(())
+    }
 
+    /// Clean a directory whose removal was observed by the watcher, but only
+    /// after confirming that it is absent. Ordinary discovery still rejects a
+    /// missing or unreadable root instead of inferring deletion from an error.
+    pub(crate) fn remove_observed_directory(&mut self, path: &Path) -> crate::IndexResult<bool> {
+        let path = Self::canonical_or_raw(path);
+        self.check_network_source(&path)?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(IndexError::General(format!(
+                    "Cannot verify removed directory {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+        let indexed_root = self
+            .settings
+            .workspace_root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(&path);
+        let paths: Vec<_> = self
+            .document_index
+            .get_all_indexed_paths()?
+            .into_iter()
+            .filter(|path| path.starts_with(indexed_root))
+            .collect();
+        self.cleanup_indexed_files(&paths)?;
+        Ok(true)
+    }
+
+    fn cleanup_indexed_files(&self, paths: &[PathBuf]) -> crate::IndexResult<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let semantic_path = self.settings.index_path.join("semantic");
         use crate::indexing::pipeline::stages::CleanupStage;
         let cleanup_stage = if let Some(ref sem) = self.semantic_search {
             CleanupStage::new(Arc::clone(&self.document_index), &semantic_path)
@@ -1351,8 +1441,7 @@ impl IndexFacade {
         } else {
             CleanupStage::new(Arc::clone(&self.document_index), &semantic_path)
         };
-
-        cleanup_stage.cleanup_files(std::slice::from_ref(path))?;
+        cleanup_stage.cleanup_files(paths)?;
         Ok(())
     }
 
@@ -1723,6 +1812,9 @@ pub fn format_semantic_status(cfg: &crate::config::SemanticSearchConfig) -> Stri
 pub fn build_embedding_backend(
     cfg: &crate::config::SemanticSearchConfig,
 ) -> FacadeResult<EmbeddingBackend> {
+    if let Some(limit) = cfg.max_input_tokens {
+        crate::embedding_input::InputBudget::validate_limit(limit).map_err(IndexError::General)?;
+    }
     // Env vars override config file
     let remote_url = std::env::var("CODANNA_EMBED_URL")
         .ok()
@@ -1730,6 +1822,11 @@ pub fn build_embedding_backend(
 
     if let Some(url) = remote_url {
         let model = resolve_remote_model_name(cfg);
+        let input_budget = crate::embedding_input::InputBudget::remote(
+            cfg.max_input_tokens,
+            cfg.tokenizer_path.as_deref(),
+        )
+        .map_err(IndexError::General)?;
 
         let dim: Option<usize> = match std::env::var("CODANNA_EMBED_DIM") {
             Ok(s) => {
@@ -1759,11 +1856,11 @@ pub fn build_embedding_backend(
 
         let url_owned = url.clone();
         let model_owned = model.clone();
-        let embedder =
-            run_async(
-                async move { RemoteEmbedder::new(&url_owned, &model_owned, dim, api_key).await },
-            )
-            .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
+        let embedder = run_async(async move {
+            RemoteEmbedder::with_input_budget(&url_owned, &model_owned, dim, api_key, input_budget)
+                .await
+        })
+        .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
 
         return Ok(EmbeddingBackend::Remote(Arc::new(embedder)));
     }
@@ -1784,7 +1881,12 @@ pub fn build_embedding_backend(
     }
     let embedding_model = crate::vector::parse_embedding_model(&cfg.model)
         .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
-    let pool = EmbeddingPool::new(pool_size, embedding_model)
+    if cfg.tokenizer_path.is_some() {
+        return Err(IndexError::General(
+            "semantic_search.tokenizer_path applies to remote backends; local models use their actual tokenizer".into(),
+        ));
+    }
+    let pool = EmbeddingPool::with_input_limit(pool_size, embedding_model, cfg.max_input_tokens)
         .map_err(|e| IndexError::General(format!("Local embedding pool init failed: {e}")))?;
 
     Ok(EmbeddingBackend::Local(pool))

@@ -39,13 +39,11 @@ use thiserror::Error;
 
 use super::chunker::{Chunker, HybridChunker, RawChunk};
 use super::config::{ChunkingConfig, CollectionConfig, ValidatedChunkingConfig};
+use super::generation::{self, Generation, SegmentedVectors, StagedVectors};
 use super::schema::DocumentSchema;
 use super::types::{ChunkId, CollectionId, FileState};
 use crate::indexing::file_info::{calculate_hash, get_utc_timestamp};
-use crate::vector::{
-    ClusterId, EmbeddingGenerator, MmapVectorStorage, SegmentOrdinal, VectorDimension, VectorId,
-    VectorStorageError,
-};
+use crate::vector::{ClusterId, EmbeddingGenerator, VectorDimension, VectorId, VectorStorageError};
 
 /// Errors from document storage operations.
 #[derive(Error, Debug)]
@@ -92,6 +90,21 @@ pub struct IndexStats {
     pub chunks_created: usize,
     /// Number of chunks removed (from changed/deleted files).
     pub chunks_removed: usize,
+}
+
+/// Persisted document embedding health and the last publication's vector cost.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EmbeddingDiagnostics {
+    pub generation: Option<String>,
+    pub identity: Option<String>,
+    pub vector_segments: usize,
+    pub physical_vectors: usize,
+    pub live_vectors: usize,
+    pub unembedded_chunks: usize,
+    /// Payload bytes written for newly embedded chunks, excluding file headers.
+    pub new_vector_bytes: u64,
+    /// Payload bytes copied during compaction, excluding file headers.
+    pub compacted_vector_bytes: u64,
 }
 
 /// Query parameters for document search.
@@ -345,6 +358,7 @@ pub struct DocumentStore {
 
     /// Index reader for queries.
     reader: IndexReader,
+    pinned_searcher: Option<tantivy::Searcher>,
 
     /// Schema fields for documents.
     schema: DocumentSchema,
@@ -353,9 +367,11 @@ pub struct DocumentStore {
     writer: Mutex<Option<IndexWriter<Document>>>,
 
     /// Vector storage for chunk embeddings.
-    vector_storage: Option<MmapVectorStorage>,
-    vector_staging: Option<tempfile::TempDir>,
-    original_vectors: Option<MmapVectorStorage>,
+    vector_storage: Option<SegmentedVectors>,
+    vector_staging: Option<StagedVectors>,
+    current_generation: Option<String>,
+    new_vector_bytes: u64,
+    compacted_vector_bytes: u64,
 
     /// Cluster assignments for IVFFlat search.
     cluster_assignments: HashMap<VectorId, ClusterId>,
@@ -377,6 +393,7 @@ pub struct DocumentStore {
 
     /// Next chunk ID counter.
     next_chunk_id: u64,
+    id_reservation_end: u64,
 
     /// Chunker implementation.
     chunker: Box<dyn Chunker>,
@@ -395,6 +412,9 @@ pub struct DocumentStore {
 
     /// Optional immutable local source boundary, shared by query snapshots.
     workspace_root: Option<Arc<Path>>,
+
+    /// Additional managed index root excluded from document source discovery.
+    source_exclusion: Option<Arc<Path>>,
 }
 
 impl std::fmt::Debug for DocumentStore {
@@ -422,6 +442,7 @@ impl DocumentStore {
     pub fn new(base_path: impl AsRef<Path>, dimension: VectorDimension) -> StoreResult<Self> {
         let base_path = base_path.as_ref().to_path_buf();
         std::fs::create_dir_all(&base_path)?;
+        let _publication_lock = generation::publication_lock(&base_path)?;
 
         let index_path = base_path.join("tantivy");
         std::fs::create_dir_all(&index_path)?;
@@ -438,7 +459,7 @@ impl DocumentStore {
 
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
 
         // If opening existing index, reload to get latest segments
@@ -446,23 +467,60 @@ impl DocumentStore {
             reader.reload()?;
         }
 
-        // Load persisted state if available
-        let state_path = base_path.join("state.json");
-        let state = if state_path.exists() {
-            Self::load_state(&state_path)?
+        // Tantivy publishes the generation pointer atomically with its metadata.
+        // A killed process may leave state.json stale or absent; it is not used
+        // when a committed immutable generation exists.
+        let committed = generation::load(&base_path, index.load_metas()?.payload.as_deref())?;
+        let (current_generation, state, vector_names, new_vector_bytes, compacted_vector_bytes) =
+            if let Some((name, generation)) = committed {
+                if let Err(error) = generation::repair_state_mirror(&base_path, &generation.state) {
+                    tracing::warn!(target: "documents", %error, "committed generation loaded; state mirror repair deferred");
+                }
+                (
+                    Some(name),
+                    generation.state,
+                    generation.vectors,
+                    generation.new_vector_bytes,
+                    generation.compacted_vector_bytes,
+                )
+            } else {
+                let state_path = base_path.join("state.json");
+                let state = if state_path.exists() {
+                    Self::load_state(&state_path)?
+                } else {
+                    PersistedState::default()
+                };
+                let names = if base_path.join("vectors/segment_0.vec").exists() {
+                    vec!["legacy".into()]
+                } else {
+                    Vec::new()
+                };
+                (None, state, names, 0, 0)
+            };
+        let vectors = SegmentedVectors::open(&base_path, &vector_names)?;
+        let reservation_path = base_path.join("next-chunk-id.json");
+        let reserved = if reservation_path.exists() {
+            generation::read_json::<u64>(&reservation_path, 64)?
         } else {
-            PersistedState::default()
+            1
         };
+        let next_chunk_id = state.next_chunk_id.max(reserved).max(1);
+        if let Some(_generation_lock) = generation::try_lock(&base_path)? {
+            generation::collect_obsolete(&base_path, current_generation.as_deref(), &vector_names);
+        }
 
         Ok(Self {
             base_path,
             index,
             reader,
+            pinned_searcher: None,
             schema: document_schema,
             writer: Mutex::new(None),
-            vector_storage: None,
+            vector_storage: Some(vectors),
             vector_staging: None,
-            original_vectors: None,
+            current_generation,
+            new_vector_bytes,
+            compacted_vector_bytes,
             cluster_assignments: HashMap::new(),
             centroids: Vec::new(),
             file_states: state
@@ -487,14 +545,23 @@ impl DocumentStore {
                 .into_iter()
                 .filter_map(|(name, id)| CollectionId::from_u32(id).map(|id| (name, id)))
                 .collect(),
-            next_chunk_id: state.next_chunk_id.max(1),
+            next_chunk_id,
+            id_reservation_end: next_chunk_id,
             chunker: Box::new(HybridChunker::new()),
             embedding_generator: None,
             embedding_cache: None,
             dimension,
             heap_size: 50_000_000, // 50MB default
             workspace_root: None,
+            source_exclusion: None,
         })
+    }
+
+    /// Exclude the shared code/document index root from source discovery.
+    /// The store's own directory is always excluded, including explicit paths.
+    pub(crate) fn with_source_exclusion(mut self, path: &Path) -> Self {
+        self.source_exclusion = Some(Arc::from(normalize_source_path(path)));
+        self
     }
 
     /// Bind an already opened store to one canonical workspace. Validate existing
@@ -526,28 +593,33 @@ impl DocumentStore {
                 )));
             }
         }
-        // Initialize vector storage
-        let vector_path = self.base_path.join("vectors");
-        std::fs::create_dir_all(&vector_path)?;
-
-        let vector_storage = MmapVectorStorage::open_or_create(
-            &vector_path,
-            SegmentOrdinal::new(0),
-            self.dimension,
-        )?;
+        let vector_storage = self
+            .vector_storage
+            .as_ref()
+            .expect("opened document vectors");
+        if let Some(stored) = vector_storage.dimension()? {
+            if stored != self.dimension {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "Stored document vector dimension {} does not match configured dimension {}",
+                    stored.get(),
+                    self.dimension.get()
+                )));
+            }
+        }
 
         if self.embedding_identity.is_none() && vector_storage.vector_count() > 0 {
             return Err(DocumentStoreError::Embedding(
                 "Legacy document vectors have no model identity. Rebuild documents in a new index directory before semantic search; the existing index is still available for lexical search.".into()
             ));
         }
-        let expected_vectors: usize = self
+        let expected_ids: HashSet<_> = self
             .file_states
             .iter()
             .filter(|(path, _)| self.embedded_files.contains_key(*path))
-            .map(|(_, state)| state.chunk_ids.len())
-            .sum();
-        if vector_storage.vector_count() < expected_vectors {
+            .flat_map(|(_, state)| state.chunk_ids.iter())
+            .filter_map(|id| VectorId::new(id.get()))
+            .collect();
+        if !vector_storage.missing_ids(&expected_ids)?.is_empty() {
             self.embedded_files.clear();
         }
         self.embedding_identity = Some(identity.clone());
@@ -558,7 +630,6 @@ impl DocumentStore {
             &identity,
             self.dimension.get(),
         ));
-        self.vector_storage = Some(vector_storage);
         self.embedding_generator = Some(generator);
 
         // Load cluster data if available
@@ -689,7 +760,11 @@ impl DocumentStore {
         let mut embedding_spool = self
             .embedding_generator
             .as_ref()
-            .map(|_| tempfile::NamedTempFile::new_in(&self.base_path))
+            .map(|_| {
+                tempfile::Builder::new()
+                    .prefix(".document-spool-")
+                    .tempfile_in(&self.base_path)
+            })
             .transpose()?;
         let mut pending_embedding_count = 0usize;
         let total_files = changed.len();
@@ -708,7 +783,7 @@ impl DocumentStore {
             let mut chunk_ids = Vec::new();
 
             for raw_chunk in raw_chunks {
-                let chunk_id = self.allocate_chunk_id();
+                let chunk_id = self.allocate_chunk_id()?;
                 chunk_ids.push(chunk_id);
 
                 // Store chunk metadata in tantivy
@@ -829,7 +904,7 @@ impl DocumentStore {
         let mut pending_embeddings: Vec<(ChunkId, String)> = Vec::new();
 
         for raw_chunk in raw_chunks {
-            let chunk_id = self.allocate_chunk_id();
+            let chunk_id = self.allocate_chunk_id()?;
             chunk_ids.push(chunk_id);
 
             // Store chunk metadata in tantivy
@@ -931,11 +1006,14 @@ impl DocumentStore {
             base_path: self.base_path.clone(),
             index: self.index.clone(),
             reader: self.reader.clone(),
+            pinned_searcher: Some(self.searcher()),
             schema: self.schema,
             writer: Mutex::new(None),
-            vector_storage: None,
+            vector_storage: self.vector_storage.clone(),
             vector_staging: None,
-            original_vectors: None,
+            current_generation: self.current_generation.clone(),
+            new_vector_bytes: self.new_vector_bytes,
+            compacted_vector_bytes: self.compacted_vector_bytes,
             cluster_assignments: HashMap::new(),
             centroids: Vec::new(),
             file_states: HashMap::new(),
@@ -945,12 +1023,14 @@ impl DocumentStore {
             forced_collections: HashSet::new(),
             collection_ids: HashMap::new(),
             next_chunk_id: self.next_chunk_id,
+            id_reservation_end: self.id_reservation_end,
             chunker: Box::new(HybridChunker::new()),
             embedding_generator: self.embedding_generator.clone(),
             embedding_cache: None,
             dimension: self.dimension,
             heap_size: self.heap_size,
             workspace_root: self.workspace_root.clone(),
+            source_exclusion: self.source_exclusion.clone(),
         })
     }
 
@@ -985,20 +1065,30 @@ impl DocumentStore {
         // Score candidates by vector similarity
         let mut scored_candidates = self.score_by_similarity(&candidates, &query_vec)?;
 
-        retain_top_chunks(&mut scored_candidates, query.limit);
+        // Retain bounded lookahead for complementary sources. Eligible candidates
+        // must reach 90% of the original kth positive cosine; this is a score
+        // margin, not a relevance probability or a bound on each displaced hit.
+        // A nonpositive cutoff is never broadened for additional source variety.
+        retain_top_chunks(&mut scored_candidates, query.limit.saturating_mul(4));
+        if let Some((_, cutoff)) = scored_candidates.get(query.limit - 1) {
+            let floor = if *cutoff > 0.0 { cutoff * 0.9 } else { *cutoff };
+            scored_candidates.retain(|(_, score)| *score >= floor);
+        }
 
         // Enrich with full metadata and KWIC preview
         self.build_search_results(scored_candidates, &query)
     }
 
     fn search_lexical(&self, query: &SearchQuery) -> StoreResult<Vec<SearchResult>> {
+        use tantivy::query::QueryClone;
+
         // Natural-language input is analyzed as literal terms, never parsed as
         // Tantivy query syntax. Headings contribute without excluding body hits.
         let mut analyzer = self.index.tokenizers().get("default").ok_or_else(|| {
             DocumentStoreError::Index("Document text tokenizer is unavailable".into())
         })?;
         let mut stream = analyzer.token_stream(&query.text);
-        let mut terms = HashSet::new();
+        let mut terms = std::collections::BTreeSet::new();
         while stream.advance() {
             terms.insert(stream.token().text.clone());
         }
@@ -1021,16 +1111,74 @@ impl DocumentStore {
                 )));
             }
         }
+        let text_query = BooleanQuery::union(text_queries);
         let mut clauses = self.filter_clauses(query);
-        clauses.push((Occur::Must, Box::new(BooleanQuery::union(text_queries))));
-        let searcher = self.reader.searcher();
+        clauses.push((Occur::Must, text_query.box_clone()));
+        let searcher = self.searcher();
+        if searcher.num_docs() == 0 {
+            return Ok(Vec::new());
+        }
+        // The initial lookahead and source probes retain at most 6 * limit
+        // candidates. A very long matching source cannot hide every other
+        // source by occupying a fixed global overfetch window.
+        let candidate_limit = query
+            .limit
+            .saturating_mul(4)
+            .min(searcher.num_docs() as usize);
         let hits = searcher.search(
             &BooleanQuery::new(clauses),
-            &TopDocs::with_limit(query.limit).order_by_score(),
+            &TopDocs::with_limit(candidate_limit).order_by_score(),
         )?;
         let mut scored = Vec::with_capacity(hits.len());
+        let mut sources = std::collections::BTreeSet::new();
         for (score, address) in hits {
             let doc: Document = searcher.doc(address)?;
+            if let Some(path) = doc
+                .get_first(self.schema.source_path)
+                .and_then(|value| value.as_str())
+            {
+                sources.insert(path.to_owned());
+            }
+            if let Some(id) = doc
+                .get_first(self.schema.chunk_id)
+                .and_then(|value| value.as_u64())
+                .and_then(|id| u32::try_from(id).ok())
+                .and_then(ChunkId::from_u32)
+            {
+                scored.push((id, score));
+            }
+        }
+        let source_budget = query.limit.saturating_mul(2);
+        while query.document.is_none() && !scored.is_empty() && sources.len() < source_budget {
+            let mut clauses = self.filter_clauses(query);
+            clauses.push((Occur::Must, text_query.box_clone()));
+            clauses.push((
+                Occur::MustNot,
+                Box::new(TermSetQuery::new(sources.iter().map(|path| {
+                    Term::from_field_text(self.schema.source_path, path)
+                }))),
+            ));
+            let hits = searcher.search(
+                &BooleanQuery::new(clauses),
+                &TopDocs::with_limit(1).order_by_score(),
+            )?;
+            let Some((score, address)) = hits.into_iter().next() else {
+                break;
+            };
+            let doc: Document = searcher.doc(address)?;
+            let Some(path) = doc
+                .get_first(self.schema.source_path)
+                .and_then(|value| value.as_str())
+            else {
+                return Err(DocumentStoreError::Index(
+                    "Document result has no source provenance".into(),
+                ));
+            };
+            if !sources.insert(path.to_owned()) {
+                return Err(DocumentStoreError::Index(
+                    "Document source exclusion did not advance".into(),
+                ));
+            }
             if let Some(id) = doc
                 .get_first(self.schema.chunk_id)
                 .and_then(|value| value.as_u64())
@@ -1045,49 +1193,37 @@ impl DocumentStore {
 
     /// Delete all chunks from a collection.
     pub fn delete_collection(&mut self, name: &str) -> StoreResult<usize> {
-        let searcher = self.reader.searcher();
-
-        // Find all chunks in collection
-        let term = Term::from_field_text(self.schema.collection_name, name);
-        let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
-
-        let count = searcher.search(&query, &tantivy::collector::Count)?;
-
-        // Delete from tantivy
-        {
-            let mut writer_guard = self
-                .writer
-                .lock()
-                .map_err(|_| DocumentStoreError::LockPoisoned)?;
-            let writer = self.ensure_writer(&mut writer_guard)?;
-
-            let term = Term::from_field_text(self.schema.collection_name, name);
-            writer.delete_term(term);
-            writer.commit()?;
-        }
-
-        self.reader.reload()?;
-
-        // Each state records its collection; preserve every other collection,
-        // including empty files and legacy states with an unknown collection.
-        self.file_states.retain(|_, state| state.collection != name);
-        self.chunking_fingerprints
-            .retain(|path, _| self.file_states.contains_key(path));
-        self.embedded_files
-            .retain(|path, _| self.file_states.contains_key(path));
-        self.forced_collections.remove(name);
-
-        // Remove collection ID
-        self.collection_ids.remove(name);
-
-        self.save_state()?;
-
-        Ok(count)
+        self.transaction(|store| {
+            let term = Term::from_field_text(store.schema.collection_name, name);
+            let query = TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
+            let count = store
+                .searcher()
+                .search(&query, &tantivy::collector::Count)?;
+            {
+                let mut guard = store
+                    .writer
+                    .lock()
+                    .map_err(|_| DocumentStoreError::LockPoisoned)?;
+                store.ensure_writer(&mut guard)?.delete_term(term);
+            }
+            store
+                .file_states
+                .retain(|_, state| state.collection != name);
+            store
+                .chunking_fingerprints
+                .retain(|path, _| store.file_states.contains_key(path));
+            store
+                .embedded_files
+                .retain(|path, _| store.file_states.contains_key(path));
+            store.forced_collections.remove(name);
+            store.collection_ids.remove(name);
+            Ok(count)
+        })
     }
 
     /// Get statistics about a collection.
     pub fn collection_stats(&self, name: &str) -> StoreResult<CollectionStats> {
-        let searcher = self.reader.searcher();
+        let searcher = self.searcher();
 
         let term = Term::from_field_text(self.schema.collection_name, name);
         let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
@@ -1112,16 +1248,54 @@ impl DocumentStore {
         self.collection_ids.keys().cloned().collect()
     }
 
+    /// Inspect active backend identity, completeness, storage growth and write
+    /// cost without loading a model or generating query embeddings.
+    pub fn embedding_diagnostics(&self) -> EmbeddingDiagnostics {
+        let all_chunks: usize = self
+            .file_states
+            .values()
+            .map(|state| state.chunk_ids.len())
+            .sum();
+        let live_vectors: usize = self
+            .file_states
+            .iter()
+            .filter(|(path, _)| self.embedded_files.contains_key(*path))
+            .map(|(_, state)| state.chunk_ids.len())
+            .sum();
+        let vectors = self.vector_storage.as_ref();
+        EmbeddingDiagnostics {
+            generation: self.current_generation.clone(),
+            identity: self.embedding_identity.clone(),
+            vector_segments: vectors.map_or(0, |vectors| vectors.names().len()),
+            physical_vectors: vectors.map_or(0, SegmentedVectors::vector_count),
+            live_vectors,
+            unembedded_chunks: all_chunks.saturating_sub(live_vectors),
+            new_vector_bytes: self.new_vector_bytes,
+            compacted_vector_bytes: self.compacted_vector_bytes,
+        }
+    }
+
     // Private helper methods
 
-    fn allocate_chunk_id(&mut self) -> ChunkId {
-        let id = self.next_chunk_id;
+    fn allocate_chunk_id(&mut self) -> StoreResult<ChunkId> {
+        let id = u32::try_from(self.next_chunk_id)
+            .ok()
+            .and_then(ChunkId::from_u32)
+            .ok_or_else(|| {
+                DocumentStoreError::Index(
+                    "Document chunk IDs exhausted; rebuild into a new index directory".into(),
+                )
+            })?;
+        if self.next_chunk_id >= self.id_reservation_end {
+            let reservation_end = self
+                .next_chunk_id
+                .saturating_add(4096)
+                .min(u32::MAX as u64 + 1);
+            generation::atomic_json(&self.base_path, "next-chunk-id.json", &reservation_end)?;
+            self.id_reservation_end = reservation_end;
+        }
         self.next_chunk_id += 1;
-        ChunkId::from_u32(id as u32).unwrap_or_else(|| {
-            // Wrap around if we hit zero
-            self.next_chunk_id = 2;
-            ChunkId::from_u32(1).expect("1 is not zero")
-        })
+        Ok(id)
     }
 
     fn get_or_create_collection_id(&mut self, name: &str) -> CollectionId {
@@ -1136,11 +1310,16 @@ impl DocumentStore {
     }
 
     fn collect_files(&self, config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
-        Self::discover_files(config)
+        let mut excluded = vec![normalize_source_path(&self.base_path)];
+        excluded.extend(self.source_exclusion.iter().map(|path| path.to_path_buf()));
+        Self::discover_files(config, excluded.into())
     }
 
     /// Shared collection discovery for indexing and watcher reconciliation.
-    pub(crate) fn discover_files(config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
+    fn discover_files(
+        config: &CollectionConfig,
+        excluded: Arc<[PathBuf]>,
+    ) -> StoreResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         let patterns = config
             .effective_patterns()
@@ -1152,8 +1331,9 @@ impl DocumentStore {
             })
             .collect::<StoreResult<Vec<_>>>()?;
 
-        for base_path in &config.paths {
-            if !base_path.exists() {
+        for configured_path in &config.paths {
+            let base_path = normalize_source_path(configured_path);
+            if !base_path.exists() || excluded.iter().any(|root| base_path.starts_with(root)) {
                 continue;
             }
 
@@ -1166,7 +1346,7 @@ impl DocumentStore {
             // not Git's tracking policy. A user may intentionally index local
             // knowledge that is excluded from version control, while dependency
             // and generated trees belong in `.codannaignore`.
-            let mut walker = ignore::WalkBuilder::new(base_path);
+            let mut walker = ignore::WalkBuilder::new(&base_path);
             walker
                 .hidden(false)
                 .ignore(false)
@@ -1175,6 +1355,12 @@ impl DocumentStore {
                 .git_exclude(false)
                 .follow_links(false);
             walker.add_custom_ignore_filename(".codannaignore");
+            let excluded_roots = Arc::clone(&excluded);
+            walker.filter_entry(move |entry| {
+                !excluded_roots
+                    .iter()
+                    .any(|root| entry.path().starts_with(root))
+            });
 
             for entry in walker.build() {
                 let entry = entry.map_err(|error| {
@@ -1188,7 +1374,7 @@ impl DocumentStore {
                     continue;
                 }
 
-                let relative = path.strip_prefix(base_path).unwrap_or(path);
+                let relative = path.strip_prefix(&base_path).unwrap_or(path);
                 if patterns
                     .iter()
                     .any(|pattern| pattern.matches_path(relative))
@@ -1202,6 +1388,8 @@ impl DocumentStore {
             .into_iter()
             .map(|path| path.canonicalize())
             .collect::<Result<Vec<_>, _>>()?;
+        // Explicit files and file symlinks cannot bypass the managed-root rule.
+        files.retain(|path| !excluded.iter().any(|root| path.starts_with(root)));
         files.sort();
         files.dedup();
         Ok(files)
@@ -1348,110 +1536,174 @@ impl DocumentStore {
         Ok(writer_guard.as_mut().unwrap())
     }
 
+    fn searcher(&self) -> tantivy::Searcher {
+        self.pinned_searcher
+            .clone()
+            .unwrap_or_else(|| self.reader.searcher())
+    }
+
     fn commit(&mut self) -> StoreResult<()> {
-        let mut writer_guard = self
-            .writer
-            .lock()
-            .map_err(|_| DocumentStoreError::LockPoisoned)?;
-
-        if let Some(ref mut writer) = *writer_guard {
-            writer.commit()?;
+        let _publication_lock = generation::publication_lock(&self.base_path)?;
+        let mut vectors = self.vector_storage.clone().unwrap_or_default();
+        generation::publication_boundary("before_vector_publication");
+        let new_vector_bytes = if let Some(staging) = self.vector_staging.take() {
+            vectors.append(staging)?
+        } else {
+            0
+        };
+        let live: HashSet<_> = self
+            .file_states
+            .iter()
+            .filter(|(path, _)| self.embedded_files.contains_key(*path))
+            .flat_map(|(_, state)| state.chunk_ids.iter())
+            .filter_map(|id| VectorId::new(id.get()))
+            .collect();
+        let compacted_vector_bytes = vectors.compact(&self.base_path, &live)?;
+        generation::sync_directory(&self.base_path)?;
+        generation::publication_boundary("after_vector_publication");
+        let prepared = Generation {
+            state: self.persisted_state(),
+            vectors: vectors.names().to_vec(),
+            new_vector_bytes,
+            compacted_vector_bytes,
+        };
+        let name = generation::prepare(&self.base_path, &prepared)?;
+        let payload = generation::payload(&name);
+        generation::publication_boundary("before_metadata_commit");
+        {
+            let mut guard = self
+                .writer
+                .lock()
+                .map_err(|_| DocumentStoreError::LockPoisoned)?;
+            let mut commit = self.ensure_writer(&mut guard)?.prepare_commit()?;
+            commit.set_payload(&payload);
+            commit.commit()?;
         }
-
+        generation::publication_boundary("after_metadata_commit");
         self.reader.reload()?;
-
+        self.vector_storage = Some(vectors);
+        self.current_generation = Some(name);
+        self.new_vector_bytes = new_vector_bytes;
+        self.compacted_vector_bytes = compacted_vector_bytes;
+        generation::publication_boundary("before_state_publication");
+        self.save_state()?;
+        generation::publication_boundary("after_state_publication");
         Ok(())
     }
 
-    /// Keep metadata mutations private until every embedding batch succeeds.
-    /// Vectors are copied lazily to a sibling staging inode, so failed batches
-    /// and active mmap readers cannot observe partially appended records.
+    /// Stage only new vectors and bind them to source state through Tantivy's
+    /// atomic commit payload. Failed batches never publish metadata or vectors.
     fn transaction<T>(
         &mut self,
         action: impl FnOnce(&mut Self) -> StoreResult<T>,
     ) -> StoreResult<T> {
+        let _generation_lock = generation::lock(&self.base_path)?;
+        let expected = self.current_generation.as_deref().map(generation::payload);
+        if self.index.load_metas()?.payload != expected {
+            return Err(DocumentStoreError::Index(
+                "Document generation changed in another writer; reopen the document store before indexing".into()
+            ));
+        }
         let file_states = self.file_states.clone();
         let chunking_fingerprints = self.chunking_fingerprints.clone();
         let embedded_files = self.embedded_files.clone();
         let collection_ids = self.collection_ids.clone();
         let forced_collections = self.forced_collections.clone();
-        let result = action(self).and_then(|value| {
-            self.publish_staged_vectors()?;
+        let previous_generation = self.current_generation.clone();
+        let mut result = action(self).and_then(|value| {
             self.commit()?;
             Ok(value)
         });
-        match result {
-            Ok(value) => {
-                // State publication is atomic. If this write fails after the
-                // Tantivy commit, retain the committed in-memory generation so
-                // a retry can persist it without duplicating document chunks.
-                self.save_state()?;
-                Ok(value)
-            }
-            Err(error) => {
-                if let Ok(mut guard) = self.writer.lock() {
-                    if let Some(writer) = guard.as_mut() {
-                        if let Err(rollback_error) = writer.rollback() {
-                            tracing::error!(target: "documents", %rollback_error, "document metadata rollback failed");
-                        }
+        let mut recovered = true;
+        if result.is_err() {
+            if let Ok(mut guard) = self.writer.lock() {
+                if let Some(writer) = guard.as_mut() {
+                    if let Err(error) = writer.rollback() {
+                        tracing::error!(target: "documents", %error, "document metadata rollback failed");
                     }
                 }
-                if let Some(original) = self.original_vectors.take() {
-                    self.vector_storage = Some(original);
-                }
-                self.vector_staging = None;
+            }
+            self.vector_staging = None;
+            if self.current_generation == previous_generation {
                 self.file_states = file_states;
                 self.chunking_fingerprints = chunking_fingerprints;
                 self.embedded_files = embedded_files;
                 self.collection_ids = collection_ids;
                 self.forced_collections = forced_collections;
-                // IDs are deliberately not reused after a failed attempt.
-                if let Err(state_error) = self.save_state() {
-                    tracing::warn!(target: "documents", %state_error, "failed to persist document retry state");
+                // A metadata commit may have succeeded even if its subsequent
+                // reader reload failed. Reload that authoritative generation;
+                // never republish the previous mirror over a committed change.
+                let recovery = (|| -> StoreResult<()> {
+                    let payload = self.index.load_metas()?.payload;
+                    if payload != expected {
+                        self.recover_generation(payload.as_deref())?;
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = recovery {
+                    recovered = false;
+                    result = Err(error);
                 }
-                Err(error)
             }
         }
+        // Release Tantivy's writer so another process can advance the store.
+        if let Ok(mut guard) = self.writer.lock() {
+            guard.take();
+        }
+        if recovered {
+            generation::collect_obsolete(
+                &self.base_path,
+                self.current_generation.as_deref(),
+                self.vector_storage
+                    .as_ref()
+                    .map_or(&[], SegmentedVectors::names),
+            );
+        }
+        result
+    }
+
+    fn recover_generation(&mut self, payload: Option<&str>) -> StoreResult<()> {
+        let (name, generation) = generation::load(&self.base_path, payload)?.ok_or_else(|| {
+            DocumentStoreError::Index(
+                "Committed document generation is missing; reopen the store".into(),
+            )
+        })?;
+        let vectors = SegmentedVectors::open(&self.base_path, &generation.vectors)?;
+        self.reader.reload()?;
+        let state = generation.state;
+        self.file_states = state
+            .file_states
+            .into_iter()
+            .map(|(path, state)| (PathBuf::from(path), state))
+            .collect();
+        self.chunking_fingerprints = state
+            .chunking_fingerprints
+            .into_iter()
+            .map(|(path, value)| (PathBuf::from(path), value))
+            .collect();
+        self.embedded_files = state
+            .embedded_files
+            .into_iter()
+            .map(|(path, value)| (PathBuf::from(path), value))
+            .collect();
+        self.collection_ids = state
+            .collection_ids
+            .into_iter()
+            .filter_map(|(name, id)| CollectionId::from_u32(id).map(|id| (name, id)))
+            .collect();
+        self.next_chunk_id = self.next_chunk_id.max(state.next_chunk_id);
+        self.embedding_identity = state.embedding_identity;
+        self.vector_storage = Some(vectors);
+        self.current_generation = Some(name);
+        self.new_vector_bytes = generation.new_vector_bytes;
+        self.compacted_vector_bytes = generation.compacted_vector_bytes;
+        self.save_state()
     }
 
     fn stage_vector_writes(&mut self) -> StoreResult<()> {
-        if self.vector_staging.is_some() {
-            return Ok(());
+        if self.vector_staging.is_none() {
+            self.vector_staging = Some(StagedVectors::new(&self.base_path, self.dimension)?);
         }
-        let Some(original) = self.vector_storage.take() else {
-            return Ok(());
-        };
-        self.original_vectors = Some(original);
-        let staging = tempfile::Builder::new()
-            .prefix(".document-vectors-")
-            .tempdir_in(&self.base_path)?;
-        let active = self.base_path.join("vectors/segment_0.vec");
-        if active.exists() {
-            std::fs::copy(active, staging.path().join("segment_0.vec"))?;
-        }
-        self.vector_storage = Some(MmapVectorStorage::open_or_create(
-            staging.path(),
-            SegmentOrdinal::new(0),
-            self.dimension,
-        )?);
-        self.vector_staging = Some(staging);
-        Ok(())
-    }
-
-    fn publish_staged_vectors(&mut self) -> StoreResult<()> {
-        let Some(staging) = self.vector_staging.take() else {
-            return Ok(());
-        };
-        let parent = self.base_path.join("vectors");
-        let temporary = tempfile::NamedTempFile::new_in(&parent)?.into_temp_path();
-        self.vector_storage = None;
-        std::fs::rename(staging.path().join("segment_0.vec"), &temporary)?;
-        std::fs::File::open(&temporary)?.sync_all()?;
-        temporary
-            .persist(parent.join("segment_0.vec"))
-            .map_err(|error| error.error)?;
-        self.vector_storage = Some(MmapVectorStorage::open(&parent, SegmentOrdinal::new(0))?);
-        self.original_vectors = None;
         Ok(())
     }
 
@@ -1571,10 +1823,12 @@ impl DocumentStore {
             })
             .collect();
         self.stage_vector_writes()?;
-        self.vector_storage
+        self.vector_staging
             .as_mut()
-            .expect("checked above")
+            .expect("staged vector segment")
+            .storage
             .write_batch(&vector_pairs)?;
+        generation::publication_boundary("after_embedding_batch");
 
         Ok(())
     }
@@ -1711,7 +1965,7 @@ impl DocumentStore {
     }
 
     fn get_filtered_candidates(&self, query: &SearchQuery) -> StoreResult<Vec<ChunkId>> {
-        let searcher = self.reader.searcher();
+        let searcher = self.searcher();
         let filter_query = BooleanQuery::new(self.filter_clauses(query));
 
         // Enumerate the complete filtered set. A TopDocs limit here used to
@@ -1756,6 +2010,12 @@ impl DocumentStore {
             .filter_map(|chunk_id| VectorId::new(chunk_id.get()))
             .collect();
         let scored = vector_storage.score_vectors(&ids, query_vec)?;
+        if let Some((id, _)) = scored.iter().find(|(_, score)| !score.is_finite()) {
+            return Err(DocumentStoreError::Embedding(format!(
+                "Non-finite cosine similarity for document chunk {}: embedding vector magnitudes overflowed scoring. Suggestion: verify the backend returns normalized vectors, then rebuild the document index.",
+                id.get()
+            )));
+        }
         Ok(scored
             .into_iter()
             .filter_map(|(id, score)| ChunkId::from_u32(id.get()).map(|chunk| (chunk, score)))
@@ -1767,7 +2027,7 @@ impl DocumentStore {
         scored: Vec<(ChunkId, f32)>,
         query: &SearchQuery,
     ) -> StoreResult<Vec<SearchResult>> {
-        let searcher = self.reader.searcher();
+        let searcher = self.searcher();
         let mut results = Vec::new();
 
         if scored.is_empty() {
@@ -1799,6 +2059,23 @@ impl DocumentStore {
         // Get preview config (use defaults if not provided)
         let default_config = super::config::SearchConfig::default();
         let preview_config = query.preview_config.as_ref().unwrap_or(&default_config);
+        let mut coverage = if self.embedding_generator.is_none() {
+            let tokenizers = self.index.tokenizers();
+            let literal = tokenizers.get("default").ok_or_else(|| {
+                DocumentStoreError::Index("Document text tokenizer is unavailable".into())
+            })?;
+            let stemmed = tokenizers.get("en_stem").ok_or_else(|| {
+                DocumentStoreError::Index("Document stem tokenizer is unavailable".into())
+            })?;
+            Some(super::ranking::LexicalCoverage::new(
+                &query.text,
+                literal,
+                stemmed,
+            ))
+        } else {
+            None
+        };
+        let mut relevance = HashMap::new();
 
         for (chunk_id, similarity) in scored {
             if let Some(doc) = documents.get(&chunk_id) {
@@ -1837,6 +2114,12 @@ impl DocumentStore {
                     .get_first(self.schema.content)
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                if let Some(coverage) = coverage.as_mut() {
+                    relevance.insert(
+                        chunk_id,
+                        coverage.score(&format!("{heading_json}\n{full_content}")),
+                    );
+                }
 
                 // Generate preview with KWIC and highlighting
                 let content_preview = generate_preview(full_content, &query.text, preview_config);
@@ -1863,19 +2146,23 @@ impl DocumentStore {
             }
         }
 
-        Ok(results)
+        if coverage.is_some() {
+            results.sort_by(|a, b| {
+                relevance[&b.chunk_id]
+                    .cmp(&relevance[&a.chunk_id])
+                    .then_with(|| b.similarity.total_cmp(&a.similarity))
+                    .then_with(|| a.chunk_id.get().cmp(&b.chunk_id.get()))
+            });
+        }
+        Ok(super::ranking::diversify(results, query.limit))
     }
 
     fn load_state(path: &Path) -> StoreResult<PersistedState> {
-        let content = std::fs::read_to_string(path)?;
-        let state: PersistedState = serde_json::from_str(&content)
-            .map_err(|e| DocumentStoreError::Index(format!("Failed to parse state: {e}")))?;
-
-        Ok(state)
+        generation::read_json(path, 128 * 1024 * 1024)
     }
 
-    fn save_state(&self) -> StoreResult<()> {
-        let state = PersistedState {
+    fn persisted_state(&self) -> PersistedState {
+        PersistedState {
             file_states: self
                 .file_states
                 .iter()
@@ -1898,24 +2185,16 @@ impl DocumentStore {
                 .map(|(path, value)| (path.to_string_lossy().to_string(), value.clone()))
                 .collect(),
             embedding_identity: self.embedding_identity.clone(),
-        };
+        }
+    }
 
-        let content = serde_json::to_string_pretty(&state)
-            .map_err(|e| DocumentStoreError::Index(format!("Failed to serialize state: {e}")))?;
-
-        let state_path = self.base_path.join("state.json");
-        let mut staging = tempfile::NamedTempFile::new_in(&self.base_path)?;
-        staging.write_all(content.as_bytes())?;
-        staging.flush()?;
-        staging.as_file().sync_all()?;
-        staging.persist(state_path).map_err(|error| error.error)?;
-
+    fn save_state(&self) -> StoreResult<()> {
+        generation::atomic_json(&self.base_path, "state.json", &self.persisted_state())?;
         if let Some(cache) = &self.embedding_cache {
             if let Err(error) = cache.save(&self.base_path.join("embedding-cache.json")) {
                 tracing::warn!(target: "embedding_cache", %error, "failed to persist document embedding cache");
             }
         }
-
         Ok(())
     }
 
@@ -1983,10 +2262,12 @@ fn retain_top_chunks(scored: &mut Vec<(ChunkId, f32)>, limit: usize) {
         return;
     }
     if scored.len() > limit {
-        scored.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));
+        scored.select_nth_unstable_by(limit, |a, b| {
+            b.1.total_cmp(&a.1).then_with(|| a.0.get().cmp(&b.0.get()))
+        });
         scored.truncate(limit);
     }
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.get().cmp(&b.0.get())));
 }
 
 /// Statistics about a collection.
@@ -2002,7 +2283,7 @@ pub struct CollectionStats {
 
 /// Persisted state for the document store.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-struct PersistedState {
+pub(super) struct PersistedState {
     file_states: HashMap<String, FileState>,
     collection_ids: HashMap<String, u32>,
     next_chunk_id: u64,
@@ -2025,15 +2306,13 @@ struct ClusterData {
 pub(crate) struct DocumentQuery(DocumentStore);
 impl DocumentQuery {
     pub(crate) fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
-        if self.0.embedding_generator.is_some() {
-            self.0.vector_storage = Some(MmapVectorStorage::open(
-                self.0.base_path.join("vectors"),
-                SegmentOrdinal::new(0),
-            )?);
-        }
         self.0.search(query)
     }
 }
+
+#[cfg(test)]
+#[path = "generation_tests.rs"]
+mod generation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2333,9 +2612,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mut store = DocumentStore::new(temp_dir.path(), test_dimension()).unwrap();
 
-        let id1 = store.allocate_chunk_id();
-        let id2 = store.allocate_chunk_id();
-        let id3 = store.allocate_chunk_id();
+        let id1 = store.allocate_chunk_id().unwrap();
+        let id2 = store.allocate_chunk_id().unwrap();
+        let id3 = store.allocate_chunk_id().unwrap();
 
         // IDs should be unique and sequential
         assert_ne!(id1.get(), id2.get());
@@ -2352,8 +2631,8 @@ mod tests {
         {
             let mut store = DocumentStore::new(temp_dir.path(), test_dimension()).unwrap();
             store.get_or_create_collection_id("persist-test");
-            let _id1 = store.allocate_chunk_id();
-            let _id2 = store.allocate_chunk_id();
+            let _id1 = store.allocate_chunk_id().unwrap();
+            let _id2 = store.allocate_chunk_id().unwrap();
             store.save_state().unwrap();
         }
 
@@ -2590,19 +2869,28 @@ mod workspace_tests {
             .unwrap();
         writer.restrict_workspace(&root).unwrap();
         let mut snapshot = writer.query_snapshot();
-        // Simulate a later external writer that does not observe this reader's
-        // in-memory scope. A shallow query snapshot must retain its boundary.
+        // Simulate a later writer that does not observe this reader's in-memory
+        // scope. The existing query keeps its original safe generation; a fresh
+        // query must still reject any foreign provenance it encounters.
         writer
             .index_collection("foreign", &config(&foreign), &ChunkingConfig::default())
             .unwrap();
+        let query = SearchQuery {
+            text: "PRIVATE_WORKSPACE_TOPIC".into(),
+            ..SearchQuery::default()
+        };
+        let original = snapshot.search(query.clone()).unwrap();
         assert!(
-            snapshot
-                .search(SearchQuery {
-                    text: "PRIVATE_WORKSPACE_TOPIC".into(),
-                    ..SearchQuery::default()
-                })
-                .is_err()
+            original
+                .iter()
+                .all(|hit| hit.source_path.starts_with(&root))
         );
+        assert!(
+            original
+                .iter()
+                .all(|hit| !hit.content_preview.contains("PRIVATE"))
+        );
+        assert!(writer.query_snapshot().search(query).is_err());
         let mut reopened =
             DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
         assert!(reopened.restrict_workspace(&root).is_err());
