@@ -205,6 +205,53 @@ comparison needs an explicit public surface that runs both modes over the same
 candidate set, query vectors, index generation, and budget, or a separately
 justified instrumented experiment with its own provenance.
 
+## Evaluator fixture checklist
+
+The complete [36-fixture catalog](semantic-evaluation/fixtures.json) maps each
+entry below to its exact unittest name, source file, scenario, and asserted
+oracle. All 36 entries passed the final-source rerun. The catalog includes
+source hashes and the [complete contract test log](semantic-evaluation/contract-tests.txt). This records evaluator-contract evidence separately
+from the unchanged [unrun semantic status](semantic-evaluation/status.json).
+
+| ID | Contract |
+| --- | --- |
+| SE01 | Graded nDCG arithmetic |
+| SE02 | Repeated source budget |
+| SE03 | Original ranks after duplicates |
+| SE04 | Partial relevance threshold |
+| SE05 | Empty positive retrieval |
+| SE06 | All-zero judgments |
+| SE07 | Unjudged source rejection |
+| SE08 | Failed-query denominator |
+| SE09 | Prepared unrun state |
+| SE10 | Index and label separation |
+| SE11 | Query leakage and extra files |
+| SE12 | Judgment completeness and types |
+| SE13 | Equal-score order |
+| SE14 | Empty result versus error |
+| SE15 | Envelope and cosine validation |
+| SE16 | Source identity and containment |
+| SE17 | Coordinates and response scope |
+| SE18 | Required diagnostic identity |
+| SE19 | Isolated collection environment |
+| SE20 | Manual opt-in boundary |
+| SE21 | Live output bounds |
+| SE22 | Process timeout |
+| SE23 | Imported output bounds |
+| SE24 | Cache preflight rejection |
+| SE25 | Supported cache layouts |
+| SE26 | Mocked collection workflow |
+| SE27 | Model-free captured scoring |
+| SE28 | Missing captured query |
+| SE29 | Query error versus global drift |
+| SE30 | Stable generation with count drift |
+| SE31 | Invalid model provenance |
+| SE32 | Stopped collection denominator |
+| SE33 | Recorded command mismatch |
+| SE34 | Changed manifest or model bytes |
+| SE35 | Malformed capture report |
+| SE36 | Strict JSON parsing |
+
 ## Qualification checklist
 
 - [x] Keep historical retrieval corpus, oracles, and runner unchanged.
