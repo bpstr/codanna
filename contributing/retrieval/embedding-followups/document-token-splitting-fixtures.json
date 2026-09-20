@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
   "baseline_revision": "1d97efb5685a5cd5d599494bf0f66aac155ca5c6",
-  "verification_scope": "Exactly sixteen newly added test functions and one revised existing test for document token-budget splitting. Result status awaits final-source root verification and provenance; preliminary or broad-target totals are not used as fixture pass counts.",
+  "verification_scope": "Final-source focused local verification: every one of the 16 new and 1 revised document splitting fixtures passed. Nine unchanged backend controls also passed and are counted separately. Full repository gates are recorded in the validation report when complete.",
   "counting_rules": [
     "Count each new or revised executable Rust test function once, independently of repeated invocations and parameterized subcases.",
     "Names match Cargo test-harness names exactly. Root-level integration names are qualified by their --test target; --lib names include their full module path.",
     "Unchanged tests selected by broad root filters remain retained controls and are not included as newly added fixtures.",
     "Non-test helpers such as assert_document_partition, recording models, and mock transports are not independent executable fixtures.",
-    "All entries remain pending/root-verification until the root records the final-source log result and provenance; documentation inventory creation does not establish a test pass."
+    "Passed means the final-source root-run log records ok for that exact test name; broad target totals are not added-fixture counts."
   ],
   "summary": {
     "new_tests": 16,
     "revised_tests": 1,
     "helpers": 0,
-    "new_or_revised_passed_in_observed_logs": 0,
-    "new_or_revised_pending": 17
+    "new_or_revised_passed_in_observed_logs": 17,
+    "new_or_revised_pending": 0
   },
   "fixtures": [
     {
@@ -26,11 +26,12 @@
       "scenario": "Split multilingual body bytes under a 12-byte budget with breadcrumbs; also try an empty body, undersized scalar budget, and oversized heading.",
       "oracle": "Exact ranges 0..6, 6..15, 15..22 cover the original UTF-8 body and validate; impossible byte capacities fail explicitly.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -42,11 +43,12 @@
       "scenario": "Refine NFKC-expanding Arabic text with heading context and model special tokens, then try a one-token budget.",
       "oracle": "The original input exceeds the budget, every nonempty source slice validates, and the tiny budget returns a bounded-search diagnostic naming special tokens.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -58,11 +60,12 @@
       "scenario": "Use local NFKC plus BPE where the first scalar expands to three tokens but a longer prefix merges to one.",
       "oracle": "The singleton fails, the longer prefix passes, and exact ranges 0..4 and 4..5 cover the source without relying on monotonic counts.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -74,11 +77,12 @@
       "scenario": "Use local BPE merges across the heading separator into the body.",
       "oracle": "The standalone heading exceeds the budget while the composed heading/body passes and remains one exact body range.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -90,11 +94,12 @@
       "scenario": "Exhaust exact-tokenizer work, request too many byte-proxy parts, and amplify a large heading beside tiny bodies.",
       "oracle": "Each case returns its specific tokenizer-work, part-count, or repeated-heading output allowance error.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -106,11 +111,12 @@
       "scenario": "Refine one unbroken token longer than the 1 MiB byte ceiling.",
       "oracle": "Two exact source ranges cover the entire body and each complete input passes the normal budget validator.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-budget.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
       }
     },
     {
@@ -122,11 +128,12 @@
       "scenario": "Index multilingual text, emoji, combining marks, CRLF, fenced code, tables, and a long line under a 64-byte budget.",
       "oracle": "Stored chunks equal their source slices; per-byte coverage matches original overlap multiplicity; headings match parent chunks and complete recorded inputs fit the budget.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -138,11 +145,12 @@
       "scenario": "Replace the same source through collection and watcher indexing, repeat unchanged indexing, and reopen both stores.",
       "oracle": "Both paths produce equal evidence; unchanged runs preserve IDs and avoid embedding calls; reopened chunks match the persisted results.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -154,11 +162,12 @@
       "scenario": "Place an impossible heading after many otherwise valid replacement chunks; exercise collection and watcher updates.",
       "oracle": "No new embedding calls occur; original IDs, bodies, vector scores, file state, generation, and the other collection survive failure and reopen.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -170,11 +179,12 @@
       "scenario": "Fail the second embedding batch of a large replacement through collection and watcher paths.",
       "oracle": "Both prior collections and reopen state remain exact after failure; retry restores full source coverage and leaves no unembedded chunks.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -186,11 +196,12 @@
       "scenario": "Return invalid UTF-8 boundaries, gaps, overlap, or a missing tail from the public generator hook through both indexing paths.",
       "oracle": "Each range error occurs before embedding calls; prior evidence, IDs, vector scores, the other collection, and reopened state remain intact.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -202,11 +213,12 @@
       "scenario": "Replace a stored semantic fingerprint with the previous character-only fingerprint without changing the source.",
       "oracle": "One run reprocesses with new IDs and compatible cache reuse; the new fingerprint persists and the reopened next run skips without new embeddings.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -218,11 +230,12 @@
       "scenario": "Return many valid tiny ranges from a custom hook beneath a large heading.",
       "oracle": "The store rejects repeated-heading output amplification before embedding, while preserving prior evidence and the other collection.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -234,11 +247,12 @@
       "scenario": "Refine a large overlapping heading and a separate source that needs too many tiny fragments.",
       "oracle": "The aggregate 64 MiB or 65,536-chunk guard fails before embedding; the prior generation remains exact both immediately and after reopening.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-store.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
       }
     },
     {
@@ -250,11 +264,12 @@
       "scenario": "Partition an unheaded body into byte-budget slices that include whitespace-only fragments, then apply local batch selection.",
       "oracle": "Document selection retains every nonempty source slice and reconstructs the original body; code selection retains only nonblank items, and empty document inputs remain excluded.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-dispatch.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "c18aff51fd33fccd07197d3ea2783a20d4ba03ee99e657a7dbf4c9852e84e30b"
       }
     },
     {
@@ -266,11 +281,12 @@
       "scenario": "Index a headed document against a loopback mock backend with an 80-byte configured budget.",
       "oracle": "Four complete inputs keep the full breadcrumb prefix, each fits 80 bytes, and removing prefixes reconstructs the original heading body and paragraph body.",
       "new_or_revised": "new",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-backend.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
       }
     },
     {
@@ -282,12 +298,18 @@
       "scenario": "Revise the previous heading-budget fixture to a 40-byte budget that leaves no body capacity after full breadcrumbs.",
       "oracle": "The actionable error identifies budget, heading breadcrumbs, and no truncation; no indexed evidence or document-embedding transport request is published.",
       "new_or_revised": "revised",
-      "status": "pending",
+      "status": "passed",
       "verification": {
-        "status": "pending/root-verification",
-        "log": null,
-        "observed_result": null
+        "status": "passed",
+        "log": "document-token-splitting-results/splitting-final-backend.txt",
+        "observed_result": "ok",
+        "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
       }
     }
-  ]
+  ],
+  "source_identity": {
+    "source_tree_sha256": "1582e38f3e71985f507e257482cbbd8e96be4f82bb93ccca4c93899f2e40b4a9",
+    "source_file_count": 636,
+    "hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests"
+  }
 }
