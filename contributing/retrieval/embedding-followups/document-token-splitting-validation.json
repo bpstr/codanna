@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "base_revision": "1d97efb5685a5cd5d599494bf0f66aac155ca5c6",
+  "implementation_checkpoint": "94ad41a13ddc3a7ef0e7c863f7fee35317a6b6e6",
+  "source_tree_sha256": "1582e38f3e71985f507e257482cbbd8e96be4f82bb93ccca4c93899f2e40b4a9",
+  "source_file_count": 636,
+  "hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests",
+  "embedding_inference": false,
+  "fixture_summary": {
+    "new_tests": 16,
+    "revised_tests": 1,
+    "helpers": 0,
+    "new_or_revised_passed_in_observed_logs": 17,
+    "new_or_revised_pending": 0
+  },
+  "gates": {
+    "default": {
+      "name": "default",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/cargo",
+        "test",
+        "--locked",
+        "--no-fail-fast",
+        "--",
+        "--test-threads=2",
+        "--skip",
+        "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 86.004,
+      "log": "splitting-default.log",
+      "log_sha256": "27ea2f1177796c39b1e3ad935d4b7dd6fff658f18ebee5c66be8e0c478431374",
+      "completed_test_targets": 37,
+      "passed": 2354,
+      "failed": 0,
+      "ignored": 62,
+      "measured": 0,
+      "filtered_out": 1
+    },
+    "all-features": {
+      "name": "all-features",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/cargo",
+        "test",
+        "--locked",
+        "--all-features",
+        "--no-fail-fast",
+        "--",
+        "--test-threads=2",
+        "--skip",
+        "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 152.666,
+      "log": "splitting-all-features.log",
+      "log_sha256": "e94d4e2dce0079d33d527a6c070a4da7aa593114fbd33b31fc9d10a0369a4f97",
+      "completed_test_targets": 37,
+      "passed": 2356,
+      "failed": 0,
+      "ignored": 62,
+      "measured": 0,
+      "filtered_out": 1
+    },
+    "docs": {
+      "name": "docs",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/cargo",
+        "doc",
+        "--locked",
+        "--no-deps",
+        "--all-features"
+      ],
+      "extra_environment": {
+        "RUSTDOCFLAGS": "-D warnings"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 18.149,
+      "log": "splitting-docs.log",
+      "log_sha256": "d538f96d22087a10173ced688310d396bfca62195457e98d672464f6262ea7bf"
+    },
+    "cli-mcp": {
+      "name": "cli-mcp",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "bash",
+        "/workspace/scratch/aafac310ccab/investigation/cli-smoke.sh"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 0.205,
+      "log": "splitting-cli-mcp.log",
+      "log_sha256": "25c8732c9732f026b0a2742ce58efb747b6c449bace523ebd3054e4fdda4ca9a"
+    },
+    "lexical-manifest": {
+      "name": "lexical-manifest",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "python3",
+        "contributing/retrieval/run.py",
+        "--check"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 0.068,
+      "log": "splitting-lexical-manifest.log",
+      "log_sha256": "8a142cbcf9983e11152d43845cb540ed6636b82648885da896e56f463b7b274b"
+    },
+    "lexical-contracts": {
+      "name": "lexical-contracts",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "contributing/retrieval",
+        "-p",
+        "test_run.py"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 0.267,
+      "log": "splitting-lexical-contracts.log",
+      "log_sha256": "fa378b197a9ef54bdd213e89fc978f5f8dbe96fea9b7e1f58227576cb9d4393d"
+    },
+    "lexical": {
+      "name": "lexical",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "python3",
+        "contributing/retrieval/run.py",
+        "--profile",
+        "lexical",
+        "--codanna",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--knowledge",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "--out",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical"
+      ],
+      "extra_environment": {},
+      "exit_code": 0,
+      "elapsed_seconds": 1.493,
+      "log": "splitting-lexical.log",
+      "log_sha256": "81259a4bd84dabe7acf3fed2c4dfe7bb408bb4b31bc690b1de14562746a7d5dd"
+    },
+    "quick_check": {
+      "name": "splitting-quick-check",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "bash",
+        "contributing/scripts/quick-check.sh"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 22.507,
+      "log": "splitting-quick-check.log",
+      "log_sha256": "68aa6752bd8a4a9c16012dc5543ff8f847d1214af1572131e89a3e365161b84c"
+    },
+    "unmodified_full_script": {
+      "name": "splitting-full-script",
+      "command": [
+        "/workspace/scratch/aafac310ccab/runtime/bin/run-safe",
+        "bash",
+        "contributing/scripts/full-test.sh"
+      ],
+      "exit_code": 101,
+      "elapsed_seconds": 74.845,
+      "log": "splitting-full-script.log",
+      "observed_failures": [
+        "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+        "watcher::debouncer::tests::test_debouncer_resets_on_new_change"
+      ],
+      "notes": "Formatting, strict Clippy and no-default-feature check passed. Unix socket creation was denied with EPERM; that unchanged fixture alone was excluded from the complete reruns. The unchanged debounce timing assertion failed once and then passed in both complete reruns, without exclusion or test changes.",
+      "log_sha256": "a82fa9a8efd1823248f347cde540632d5a290ade92d2a4c5a679c3a8d716339f"
+    }
+  },
+  "lexical_acceptance": {
+    "previous_passed": 29,
+    "passed": 29,
+    "failed": 0,
+    "invariants_passed": 18,
+    "invariants_total": 18,
+    "metrics": {
+      "invariant_pass_rate": 1.0,
+      "hit_at_5": 1.0,
+      "mrr_at_5": 1.0,
+      "mean_required_evidence_recall_at_5": 1.0,
+      "forbidden_evidence": 0
+    },
+    "corpus_peer_cases_runner_tests_and_historical_reports_unchanged": true,
+    "report": "document-token-splitting-results/lexical-report.json",
+    "report_sha256": "96159db10a2ca4a7476245c45c7f1925f0dc1215368dda083c067201f47edd9f",
+    "binary_sha256": "ba1aec428284132763f87339b1366aec45e09f3b95cb520cf760b8171fb6cd1b",
+    "knowledge_binary_sha256": "93059afb5faeb67edd823101ad1e5b1c21d622aa4ff9d274482fa2cd7f03f315"
+  },
+  "scope": {
+    "new_or_revised_tests_excluded": 0,
+    "preexisting_ignored_tests": 62,
+    "unchanged_local_environment_exclusions": [
+      "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking"
+    ],
+    "semantic_relevance_measured": false,
+    "full_product_qualification": false,
+    "ci": "Separate unfiltered CI is required; its completed witness is linked from PR39. This file records local verification."
+  },
+  "notes": [
+    "Source identity covers all src/** and tests/** files plus Cargo.toml and Cargo.lock, independently of subsequent documentation commits.",
+    "The raw acceptance report retains inspected_main from the historical fixture manifest; it is not the current tested revision. The tested implementation checkpoint and source digest above identify this run.",
+    "The acceptance report references disposable raw CLI capture paths; the committed report records every command, exit code, binary and corpus identity, result and oracle.",
+    "Complete default/all-feature logs and all focused fixture logs are committed in document-token-splitting-results. No models, credentials, caches or generated indexes are included."
+  ]
+}

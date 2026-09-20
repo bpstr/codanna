@@ -5,11 +5,12 @@
   "fixture_count": 17,
   "commands": [
     "cargo test --lib collection_reload -- --test-threads=1",
-    "cargo test --lib watcher::unified::document_ -- --test-threads=1"
+    "cargo test --lib watcher::unified::document_ -- --test-threads=1",
+    "cargo test --lib documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding -- --exact"
   ],
   "isolation": "Temporary local sources, settings and indexes; injected watcher events and dispatch times; fixed local two-dimensional mock embeddings; no provider transport, credentials or model downloads.",
   "validation": {
-    "status": "17-fixture snapshot awaiting the focused rerun after the specific-file read correction",
+    "status": "17 new reload fixtures plus one revised retained workspace fixture; combined rerun pending after the retained-fixture setup correction",
     "previous_snapshot": "All 16 reload fixtures and all 18 retained watcher::unified::document_ tests passed before the final specific-file read regression was added."
   },
   "fixtures": [
@@ -191,6 +192,23 @@
       "oracles": [
         "Recovery remains pending and accepted settings stay unchanged.",
         "The foreign source does not enter the live store state or live query results."
+      ]
+    }
+  ],
+  "revised_fixture_count": 1,
+  "total_fixture_count": 18,
+  "revised_fixtures": [
+    {
+      "name": "hardening_workspace_document_snapshots_reject_foreign_hits_after_binding",
+      "test": "documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding",
+      "source": "src/documents/store.rs",
+      "platform": "all",
+      "scenario": "Open a separate workspace-bound reader after an unscoped writer publishes local data, pin its query, then use the original unscoped writer to publish foreign data and explicitly reload the scoped reader.",
+      "oracles": [
+        "The bound reader rejects a foreign-source indexing attempt with the specific workspace-boundary error before the unscoped writer publishes it.",
+        "An unscoped query confirms that the foreign row is present and contains the private fixture text.",
+        "The old pinned scoped snapshot returns no foreign paths or private text after reader reload.",
+        "A fresh scoped snapshot rejects the foreign query, and binding a newly reopened store rejects its foreign provenance."
       ]
     }
   ]

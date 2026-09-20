@@ -48,6 +48,13 @@ impl EmbeddingBackend {
         }
     }
 
+    pub(crate) fn input_budget(&self) -> &InputBudget {
+        match self {
+            Self::Local(pool) => &pool.input_budget,
+            Self::Remote(remote) => remote.input_budget(),
+        }
+    }
+
     /// Log usage statistics (no-op for remote backend).
     pub fn log_usage_stats(&self) {
         if let EmbeddingBackend::Local(pool) = self {
@@ -405,6 +412,23 @@ impl EmbeddingPool {
         &self,
         items: &[(SymbolId, &str, &str)],
     ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
+        self.embed_parallel_inputs(items, false)
+    }
+
+    /// Document source partitions can contain only whitespace. Retain nonempty
+    /// partitions so the returned vector list still covers the complete source.
+    pub(crate) fn embed_document_batch(
+        &self,
+        items: &[(SymbolId, &str, &str)],
+    ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
+        self.embed_parallel_inputs(items, true)
+    }
+
+    fn embed_parallel_inputs(
+        &self,
+        items: &[(SymbolId, &str, &str)],
+        preserve_whitespace: bool,
+    ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
         use rayon::prelude::*;
 
         const MAX_BATCH_SIZE: usize = 64;
@@ -413,10 +437,7 @@ impl EmbeddingPool {
             .validate(items.iter().map(|(_, text, _)| *text))
             .map_err(SemanticSearchError::EmbeddingError)?;
 
-        let valid_items: Vec<_> = items
-            .iter()
-            .filter(|(_, doc, _)| !doc.trim().is_empty())
-            .collect();
+        let valid_items = batch_inputs(items, preserve_whitespace);
 
         if valid_items.is_empty() {
             return Ok(Vec::new());
@@ -473,11 +494,57 @@ impl EmbeddingPool {
     }
 }
 
+fn batch_inputs<'a, 'text>(
+    items: &'a [(SymbolId, &'text str, &'text str)],
+    preserve_whitespace: bool,
+) -> Vec<&'a (SymbolId, &'text str, &'text str)> {
+    items
+        .iter()
+        .filter(|(_, text, _)| {
+            if preserve_whitespace {
+                !text.is_empty()
+            } else {
+                !text.trim().is_empty()
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn document_batch_retains_whitespace_partitions_without_changing_code_filtering() {
+        let body = "a               b";
+        let budget = InputBudget::remote(Some(3), None).unwrap();
+        let ranges = budget.document_ranges("", body).unwrap();
+        let items: Vec<_> = ranges
+            .iter()
+            .enumerate()
+            .map(|(index, range)| {
+                (
+                    SymbolId::new(index as u32 + 1).unwrap(),
+                    &body[range.clone()],
+                    "document",
+                )
+            })
+            .collect();
+        assert!(items.iter().any(|(_, text, _)| text.trim().is_empty()));
+        let documents = batch_inputs(&items, true);
+        assert_eq!(documents.len(), items.len());
+        assert_eq!(
+            documents
+                .iter()
+                .map(|(_, text, _)| *text)
+                .collect::<String>(),
+            body
+        );
+        assert_eq!(batch_inputs(&items, false).len(), 2);
+        let empty = [(SymbolId::new(1).unwrap(), "", "document")];
+        assert!(batch_inputs(&empty, true).is_empty());
+    }
     #[test]
     fn parallel_batches_fill_workers_without_exceeding_item_budget() {
         assert_eq!(parallel_batch_size(64, 4, 64), 16);

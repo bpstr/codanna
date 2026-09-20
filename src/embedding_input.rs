@@ -5,6 +5,7 @@
 //! deliberately conservative for common tokenizers, not a universal token bound.
 
 use std::io::Read;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -13,6 +14,29 @@ pub(crate) const INPUT_POLICY_VERSION: &str = "complete-input-v2";
 const DEFAULT_REMOTE_BUDGET: usize = 8192;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_TOKENIZER_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const DOCUMENT_SPLITTING_POLICY: &str = "document-budget-splits-v1";
+const MAX_DOCUMENT_SPLIT_PROBES: usize = 128;
+const MAX_DOCUMENT_SPLIT_PARTS: usize = 65_536;
+
+/// Check amplification before a document store clones headings for public hook output.
+pub(crate) fn document_output_bytes(
+    prefix_bytes: usize,
+    body_bytes: usize,
+    parts: usize,
+) -> Result<usize, String> {
+    if parts > MAX_DOCUMENT_SPLIT_PARTS {
+        return Err("Document splitting exceeded the 65536-part safety limit for one character chunk; increase the input budget or reduce heading context.".into());
+    }
+    let allowance = prefix_bytes
+        .saturating_add(body_bytes)
+        .saturating_mul(64)
+        .max(16 * 1024);
+    let bytes = parts.checked_mul(prefix_bytes).and_then(|n| n.checked_add(body_bytes))
+        .filter(|n| *n <= allowance).ok_or_else(||
+            "Document splitting exceeded its bounded output-size allowance for repeated heading breadcrumbs; increase the input budget or shorten heading context. No input was truncated.".to_string()
+        )?;
+    Ok(bytes)
+}
 
 #[derive(Clone)]
 pub(crate) struct InputBudget {
@@ -104,6 +128,170 @@ impl InputBudget {
         &self.identity
     }
 
+    /// Partition a document body into independently valid complete inputs.
+    ///
+    /// Breadcrumbs remain intact, and ranges partition the original UTF-8 bytes
+    /// without adding overlap. Search is bounded and conservative: token counts
+    /// need not increase with prefix length, and no optimal partition is promised.
+    pub(crate) fn document_ranges(
+        &self,
+        prefix: &str,
+        body: &str,
+    ) -> Result<Vec<Range<usize>>, String> {
+        if body.is_empty() {
+            self.validate([prefix])?;
+            return Ok(Vec::new());
+        }
+        if self.tokenizer.is_none() {
+            return self.document_byte_ranges(prefix, body);
+        }
+        let capacity = MAX_INPUT_BYTES.checked_sub(prefix.len()).filter(|n| *n > 0)
+            .ok_or_else(|| "Document heading breadcrumbs leave no body capacity within the embedding byte safety limit; shorten the heading context.".to_string())?;
+        // Bound repeated normalization/tokenization, including repeated heading
+        // text. Large inputs get a linear allowance, while small inputs can still
+        // explore nonmonotonic prefixes. Each probe also obeys MAX_INPUT_BYTES.
+        let mut work_left = prefix
+            .len()
+            .saturating_add(body.len())
+            .saturating_mul(64)
+            .max(16 * 1024);
+        let mut input = String::new();
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        let mut window = capacity;
+        while start < body.len() {
+            if ranges.len() == MAX_DOCUMENT_SPLIT_PARTS {
+                return Err("Document splitting exceeded the 65536-part safety limit for one character chunk; increase the input budget or reduce heading context.".into());
+            }
+            let remaining = &body[start..];
+            let mut end = remaining.len().min(window).min(capacity);
+            while !remaining.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == 0 {
+                return Err("Document heading breadcrumbs leave no capacity for the next complete UTF-8 character; increase the input budget or shorten the heading context.".into());
+            }
+            let search_end = end;
+            let mut tested = Vec::new();
+            let mut fit = None;
+            // Halving is only a probe order, never a monotonicity assumption.
+            loop {
+                tested.push(end);
+                if self.document_probe(prefix, &remaining[..end], &mut input, &mut work_left)? {
+                    fit = Some(end);
+                    break;
+                }
+                if end == remaining.chars().next().expect("nonempty body").len_utf8() {
+                    break;
+                }
+                end /= 2;
+                while !remaining.is_char_boundary(end) {
+                    end -= 1;
+                }
+                end = end.max(remaining.chars().next().expect("nonempty body").len_utf8());
+            }
+            // A single character may expand during normalization, yet a longer
+            // prefix can merge into fewer tokens. Try other bounded candidates
+            // before failing; never equate a failed singleton with impossibility.
+            if fit.is_none() {
+                for (offset, ch) in remaining[..search_end].char_indices() {
+                    let candidate = offset + ch.len_utf8();
+                    if tested.contains(&candidate) {
+                        continue;
+                    }
+                    if tested.len() == MAX_DOCUMENT_SPLIT_PROBES {
+                        break;
+                    }
+                    tested.push(candidate);
+                    if self.document_probe(
+                        prefix,
+                        &remaining[..candidate],
+                        &mut input,
+                        &mut work_left,
+                    )? {
+                        fit = Some(candidate);
+                        break;
+                    }
+                }
+            }
+            let end = fit.ok_or_else(|| format!(
+                "Could not find a complete document split at body byte {start} within the bounded input-budget search (budget {}). The full heading breadcrumbs and model special tokens are included; increase max_input_tokens or shorten heading context. No input was truncated.", self.limit
+            ))?;
+            ranges.push(start..start + end);
+            start += end;
+            // Carry the observed scale forward instead of repeatedly tokenizing
+            // a large remainder when only a small body fits beside the headings.
+            window = end.saturating_mul(2).max(4).min(capacity);
+        }
+        Ok(ranges)
+    }
+
+    /// The byte proxy has an exact additive size, so fill its capacity directly.
+    fn document_byte_ranges(&self, prefix: &str, body: &str) -> Result<Vec<Range<usize>>, String> {
+        let capacity = self.limit.min(MAX_INPUT_BYTES).checked_sub(prefix.len())
+            .filter(|n| *n > 0).ok_or_else(||
+                "Document heading breadcrumbs leave no body budget under the UTF-8 byte-budget proxy; increase max_input_tokens or shorten heading context. No input was truncated.".to_string()
+            )?;
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        let mut output_left = prefix
+            .len()
+            .saturating_add(body.len())
+            .saturating_mul(64)
+            .max(16 * 1024);
+        while start < body.len() {
+            if ranges.len() == MAX_DOCUMENT_SPLIT_PARTS {
+                return Err("Document splitting exceeded the 65536-part safety limit for one character chunk; increase the input budget or reduce heading context.".into());
+            }
+            let mut end = start.saturating_add(capacity).min(body.len());
+            while !body.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                return Err("Document heading breadcrumbs leave insufficient budget for the next complete UTF-8 character under the byte-budget proxy; increase max_input_tokens or shorten heading context. No input was truncated.".into());
+            }
+            // Range count alone does not bound repeated heading allocations.
+            output_left = output_left.checked_sub(prefix.len() + end - start)
+                .ok_or_else(|| "Document splitting exceeded its bounded output-size allowance for repeated heading breadcrumbs; increase the input budget or shorten heading context. No input was truncated.".to_string())?;
+            ranges.push(start..end);
+            start = end;
+        }
+        Ok(ranges)
+    }
+
+    fn document_probe(
+        &self,
+        prefix: &str,
+        body: &str,
+        input: &mut String,
+        work_left: &mut usize,
+    ) -> Result<bool, String> {
+        let bytes = prefix.len() + body.len();
+        *work_left = work_left.checked_sub(bytes.max(1)).ok_or_else(||
+            "Document splitting exhausted its bounded tokenizer-work allowance; increase the input budget or shorten heading context. No input was truncated.".to_string()
+        )?;
+        input.clear();
+        input.push_str(prefix);
+        input.push_str(body);
+        Ok(self.count(input)?.0 <= self.limit)
+    }
+
+    fn count(&self, text: &str) -> Result<(usize, &'static str), String> {
+        match &self.tokenizer {
+            Some(tokenizer) => Ok((
+                tokenizer
+                    .encode(text, true)
+                    .map_err(|error| error.to_string())?
+                    .len(),
+                "tokens (including special tokens)",
+            )),
+            None => Ok((
+                text.len(),
+                "UTF-8 bytes (token-budget proxy; exact tokenizer unavailable)",
+            )),
+        }
+    }
+
     /// Preflight the entire batch before the first provider request or inference.
     pub(crate) fn validate<'a>(
         &self,
@@ -116,21 +304,9 @@ impl InputBudget {
                     text.len()
                 ));
             }
-            let (count, unit) = match &self.tokenizer {
-                Some(tokenizer) => (
-                    tokenizer
-                        .encode(text, true)
-                        .map_err(|error| {
-                            format!("Cannot tokenize complete embedding input {index}: {error}")
-                        })?
-                        .len(),
-                    "tokens (including special tokens)",
-                ),
-                None => (
-                    text.len(),
-                    "UTF-8 bytes (token-budget proxy; exact tokenizer unavailable)",
-                ),
-            };
+            let (count, unit) = self.count(text).map_err(|error| {
+                format!("Cannot tokenize complete embedding input {index}: {error}")
+            })?;
             if count > self.limit {
                 return Err(format!(
                     "Embedding input {index} uses {count} {unit}, exceeding the configured budget of {}; input was not truncated. The budget includes heading breadcrumbs. Reduce document chunk size or heading length, or configure the provider's tokenizer_path and max_input_tokens.",
@@ -252,5 +428,156 @@ mod tests {
         let error = policy.validate([text.as_str()]).unwrap_err();
         assert!(error.contains("byte safety limit"), "{error}");
         assert!(error.contains("not truncated"));
+    }
+
+    fn assert_document_partition(
+        budget: &InputBudget,
+        prefix: &str,
+        body: &str,
+    ) -> Vec<Range<usize>> {
+        let ranges = budget.document_ranges(prefix, body).unwrap();
+        let mut covered = 0;
+        for range in &ranges {
+            assert_eq!(range.start, covered);
+            assert!(range.end > range.start);
+            assert!(body.is_char_boundary(range.start));
+            assert!(body.is_char_boundary(range.end));
+            budget
+                .validate([format!("{prefix}{}", &body[range.clone()]).as_str()])
+                .unwrap();
+            covered = range.end;
+        }
+        assert_eq!(covered, body.len());
+        ranges
+    }
+
+    #[test]
+    fn document_byte_splits_fill_budget_and_preserve_utf8() {
+        let budget = InputBudget::remote(Some(12), None).unwrap();
+        let body = "你好🙂é漢字🙂";
+        let ranges = assert_document_partition(&budget, "A\n\n", body);
+        assert_eq!(ranges, vec![0..6, 6..15, 15..22]);
+        assert!(budget.document_ranges("A\n\n", "").unwrap().is_empty());
+        assert!(
+            InputBudget::remote(Some(3), None)
+                .unwrap()
+                .document_ranges("", "🙂")
+                .is_err()
+        );
+        let error = budget
+            .document_ranges("oversized heading\n\n", body)
+            .unwrap_err();
+        assert!(error.contains("heading breadcrumbs"), "{error}");
+        assert!(error.contains("No input was truncated"), "{error}");
+    }
+
+    #[test]
+    fn document_splits_count_normalization_and_special_tokens_in_every_input() {
+        let budget = InputBudget::exact(tokenizer(), 8).unwrap();
+        let body = "ﷺ one two three four \nﷺ six seven";
+        assert!(
+            budget
+                .validate([format!("heading\n\n{body}").as_str()])
+                .is_err()
+        );
+        assert!(assert_document_partition(&budget, "heading\n\n", body).len() > 1);
+        let tiny = InputBudget::exact(tokenizer(), 1).unwrap();
+        let error = tiny.document_ranges("", "x").unwrap_err();
+        assert!(error.contains("bounded input-budget search"), "{error}");
+        assert!(error.contains("special tokens"), "{error}");
+    }
+
+    #[test]
+    fn document_splits_try_nonmonotonic_normalized_prefixes() {
+        let model = tokenizers::models::bpe::BPE::builder()
+            .vocab_and_merges(
+                [
+                    ("f", 0),
+                    ("i", 1),
+                    ("x", 2),
+                    ("q", 3),
+                    ("ix", 4),
+                    ("fix", 5),
+                    ("ffix", 6),
+                ]
+                .map(|(text, id)| (text.to_string(), id)),
+                [("i", "x"), ("f", "ix"), ("f", "fix")]
+                    .into_iter()
+                    .map(|(left, right)| (left.to_string(), right.to_string()))
+                    .collect(),
+            )
+            .build()
+            .unwrap();
+        let mut tokenizer = Tokenizer::new(model);
+        tokenizer.with_normalizer(Some(NFKC));
+        let budget = InputBudget::exact(tokenizer, 1).unwrap();
+        assert!(
+            budget.validate(["ﬃ"]).is_err(),
+            "singleton expands to three tokens"
+        );
+        budget.validate(["ﬃx"]).unwrap();
+        assert_eq!(
+            assert_document_partition(&budget, "", "ﬃxq"),
+            vec![0..4, 4..5]
+        );
+    }
+
+    #[test]
+    fn document_splits_validate_composed_heading_instead_of_prefix_alone() {
+        let model = tokenizers::models::bpe::BPE::builder()
+            .vocab_and_merges(
+                [
+                    ("a", 0),
+                    ("\n", 1),
+                    ("x", 2),
+                    ("\nx", 3),
+                    ("\n\nx", 4),
+                    ("a\n\nx", 5),
+                ]
+                .map(|(text, id)| (text.to_string(), id)),
+                [("\n", "x"), ("\n", "\nx"), ("a", "\n\nx")]
+                    .into_iter()
+                    .map(|(left, right)| (left.to_string(), right.to_string()))
+                    .collect(),
+            )
+            .build()
+            .unwrap();
+        let budget = InputBudget::exact(Tokenizer::new(model), 1).unwrap();
+        assert!(budget.validate(["a\n\n"]).is_err());
+        assert_eq!(
+            assert_document_partition(&budget, "a\n\n", "x"),
+            std::iter::once(0..1).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn document_splitting_bounds_tokenizer_work_and_output_parts() {
+        let budget = InputBudget::exact(tokenizer(), 1).unwrap();
+        let prefix = format!("{}\n\n", "a".repeat(10_000));
+        let error = budget
+            .document_ranges(&prefix, &"x".repeat(256))
+            .unwrap_err();
+        assert!(error.contains("tokenizer-work allowance"), "{error}");
+        let byte_budget = InputBudget::remote(Some(1), None).unwrap();
+        let error = byte_budget
+            .document_ranges("", &"x".repeat(MAX_DOCUMENT_SPLIT_PARTS + 1))
+            .unwrap_err();
+        assert!(error.contains("part safety limit"), "{error}");
+        let heading_budget = InputBudget::remote(Some(16_384), None).unwrap();
+        let error = heading_budget
+            .document_ranges(&"h".repeat(16_383), &"x".repeat(256))
+            .unwrap_err();
+        assert!(error.contains("output-size allowance"), "{error}");
+    }
+
+    #[test]
+    fn document_splitting_handles_long_unbroken_inputs_above_byte_ceiling() {
+        let budget = InputBudget::exact(tokenizer(), 5).unwrap();
+        let body = "x".repeat(MAX_INPUT_BYTES + 7);
+        let ranges = assert_document_partition(&budget, "", &body);
+        assert_eq!(
+            ranges,
+            vec![0..MAX_INPUT_BYTES, MAX_INPUT_BYTES..body.len()]
+        );
     }
 }

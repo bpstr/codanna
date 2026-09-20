@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized] target(s) in 0.82s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 8 tests
+test documents::store::token_splitting_tests::document_budget_bounds_custom_generator_heading_amplification_before_cloning ... ok
+test documents::store::token_splitting_tests::document_budget_bounds_total_file_refinement_before_publication ... ok
+test documents::store::token_splitting_tests::document_budget_late_heading_failure_preserves_both_collections_and_reopen ... ok
+test documents::store::token_splitting_tests::document_budget_invalid_generator_ranges_reject_without_publishing_partial_evidence ... ok
+test documents::store::token_splitting_tests::document_budget_later_embedding_failure_rolls_back_splits_and_can_retry ... ok
+test documents::store::token_splitting_tests::document_budget_policy_migration_reprocesses_unchanged_source_once ... ok
+test documents::store::token_splitting_tests::document_budget_splitting_preserves_source_bytes_headings_and_existing_overlap ... ok
+test documents::store::token_splitting_tests::document_budget_splitting_matches_collection_and_watcher_and_skips_unchanged_files ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1410 filtered out; finished in 0.82s
+

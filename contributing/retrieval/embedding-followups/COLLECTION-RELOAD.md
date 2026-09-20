@@ -30,9 +30,9 @@ Embedding backend settings, tokenizer configuration, model identity, workspace r
 
 ## Exact fixture inventory
 
-[COLLECTION-RELOAD.json](COLLECTION-RELOAD.json) provides the same 17 fixtures with exact test names, scenarios and machine-readable oracles.
+[COLLECTION-RELOAD.json](COLLECTION-RELOAD.json) provides 17 new reload fixtures and one revised retained workspace fixture (18 cataloged fixtures total), with exact test names, scenarios and machine-readable oracles.
 
-Every fixture below is defined in `src/watcher/collection_reload_tests.rs`. The fixture workspace contains only temporary local source files, settings, and derived indexes. `ReloadModel` returns fixed two-dimensional vectors and optionally a deterministic failure; it does not open a provider transport or load a model. Assertions inspect actual persisted documents and the running facade's settings snapshot.
+The 17 new fixtures in the first table are defined in `src/watcher/collection_reload_tests.rs`. The fixture workspace contains only temporary local source files, settings, and derived indexes. `ReloadModel` returns fixed two-dimensional vectors and optionally a deterministic failure; it does not open a provider transport or load a model. Assertions inspect actual persisted documents and the running facade's settings snapshot.
 
 | Fixture | Evidence |
 | --- | --- |
@@ -53,6 +53,12 @@ Every fixture below is defined in `src/watcher/collection_reload_tests.rs`. The 
 | `collection_reload_missing_or_directory_settings_never_apply_defaults` | A missing settings file or directory replacement produces an error through the real configuration handler; a newer event cancels the queued disable proposal and preserves settings, durable chunk ID and source. |
 | `collection_reload_recovers_a_committed_generation_before_a_reverted_proposal` | An external durable publication with a temporarily missing manifest keeps recovery pending; restoring it followed by invalid source bytes preserves the old live query generation across failed reconciliation and a superseding no-op proposal; a later idle retry enforces the latest policy and honors another writer's reserved chunk IDs. |
 | `collection_reload_recovery_checks_workspace_before_exposing_foreign_sources` | Recovered foreign provenance is rejected before it reaches the live reader or cleanup transaction. |
+
+The retained fixture below is defined in `src/documents/store.rs`. Its setup now uses a distinct unscoped writer and workspace-bound reader of the same local index. This preserves the original query-boundary oracles while allowing the scoped source-discovery guard to reject unauthorized writes normally.
+
+| Revised retained fixture | Evidence |
+| --- | --- |
+| `documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding` | The original unscoped writer publishes foreign data and an unscoped query confirms it exists; after explicitly reloading the separate scoped reader, its old pinned query exposes no foreign path or private text, its fresh query rejects the foreign row, and binding a reopened store rejects the foreign provenance. |
 
 The two Unix symlink fixtures are conditionally compiled on Unix platforms. The fixtures do not rely on native notification delivery or real retry sleeps: they inject settings/source events and advance the dispatch clock directly. Native watch registration is still exercised against temporary local directories.
 

@@ -1,0 +1,19 @@
+   Compiling codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-splitting)
+    Finished `test` profile [unoptimized] target(s) in 50.69s
+     Running tests/document_backend_regressions.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/document_backend_regressions-252cb0c0a81e5d0c)
+
+running 11 tests
+test configured_remote_documents_use_model_dimension_and_heading_input_consistently ... ok
+test code_revision_change_rejects_reopened_vectors_before_query_embedding ... ok
+test configured_tokenizer_counts_complete_remote_input_and_special_tokens ... ok
+test disabled_document_embeddings_never_initialize_configured_backend ... ok
+test configured_remote_splits_document_bodies_to_the_effective_budget ... ok
+test explicit_remote_revision_rejects_equal_dimension_document_vectors ... ok
+test failed_code_hot_reload_blocks_direct_and_mcp_queries_without_transport ... ok
+test remote_document_budget_includes_heading_breadcrumbs_and_rolls_back ... ok
+test remote_embedding_preserves_relevant_evidence_beyond_old_character_limit ... ok
+test remote_preflights_all_batches_and_preserves_multilingual_inputs ... ok
+test one_shot_document_search_reads_index_without_reembedding_changed_sources ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
