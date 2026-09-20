@@ -1,0 +1,25 @@
+   Compiling codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-reload)
+    Finished `test` profile [unoptimized] target(s) in 56.03s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 17 tests
+test watcher::unified::collection_reload_tests::collection_reload_add_remove_disable_and_reenable_publish_query_settings ... ok
+test watcher::unified::collection_reload_tests::collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary ... ok
+test watcher::unified::collection_reload_tests::collection_reload_committed_generation_wins_over_failed_state_mirror ... ok
+test watcher::unified::collection_reload_tests::collection_reload_default_and_collection_chunking_replace_only_affected_chunks ... ok
+test watcher::unified::collection_reload_tests::collection_reload_failed_batch_preserves_all_collections_then_retries_without_event ... ok
+test watcher::unified::collection_reload_tests::collection_reload_globs_and_roots_preserve_retained_embeddings ... ok
+test watcher::unified::collection_reload_tests::collection_reload_invalid_settings_and_identity_changes_keep_working_policy ... ok
+test watcher::unified::collection_reload_tests::collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission ... ok
+test watcher::unified::collection_reload_tests::collection_reload_missing_or_directory_settings_never_apply_defaults ... ok
+test watcher::unified::collection_reload_tests::collection_reload_observed_settings_edits_cancel_retries_before_debounce ... ok
+test watcher::unified::collection_reload_tests::collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings ... ok
+test watcher::unified::collection_reload_tests::collection_reload_recovers_a_committed_generation_before_a_reverted_proposal ... ok
+test watcher::unified::collection_reload_tests::collection_reload_recovery_checks_workspace_before_exposing_foreign_sources ... ok
+test watcher::unified::collection_reload_tests::collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions ... ok
+test watcher::unified::collection_reload_tests::collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots ... ok
+test watcher::unified::collection_reload_tests::collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries ... ok
+test watcher::unified::collection_reload_tests::collection_reload_without_attached_store_requires_restart_without_loading_a_model ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1418 filtered out; finished in 1.91s
+

@@ -1,5 +1,23 @@
 # Live document collection reload
 
+Final combined local verification passes **17 new reload fixtures and one revised
+workspace fixture**, together with all **17 splitting fixtures** and **18 retained
+watcher controls**. The complete default/all-feature suites pass **2,371 / 2,373
+tests** across 37 targets, with 62 preexisting ignored tests and one unchanged Unix
+socket fixture excluded because local AF_UNIX creation is denied. The revised
+workspace-isolation fixture passes in both full suites. Formatting, strict Clippy,
+no-default-feature compilation, strict docs, CLI/MCP smoke and 25 lexical evaluator
+contracts pass.
+
+The unchanged lexical acceptance corpus remains **29/29**, with **18/18 invariants**,
+mean required-evidence recall@5 **1.0**, and zero forbidden evidence. See the
+[combined validation report](COLLECTION-RELOAD-VALIDATION.json),
+[all 35 changed Rust fixtures](COMBINED-RUST-FIXTURES.json),
+[complete test and gate logs](collection-reload-results/), and
+[lexical report](collection-reload-results/lexical-report.json). Real-model
+relevance remains unmeasured; this packet records deterministic implementation
+and lexical acceptance evidence.
+
 The persistent server's watcher now applies document collection settings edits without waiting for a source file event. This follow-up extends the collection watcher and durable document generations introduced before it. Earlier embedding reports remain historical records.
 
 ## Behavior
