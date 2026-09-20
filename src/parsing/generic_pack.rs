@@ -124,6 +124,7 @@ pub fn parse(
         module_path,
         raw_symbols,
         raw_imports,
+        raw_exports: None,
         raw_relationships: Vec::new(),
         variable_bindings: Vec::new(),
         this_barrier_spans: Vec::new(),
@@ -133,7 +134,7 @@ pub fn parse(
 fn collect_structure(
     item: &StructureItem,
     output: &mut Vec<RawSymbol>,
-    seen: &mut HashSet<(String, CodannaSymbolKind, u32, u16)>,
+    seen: &mut HashSet<(String, CodannaSymbolKind, u32, u32)>,
 ) {
     if let (Some(name), Some(kind)) = (item.name.as_deref(), map_structure_kind(&item.kind)) {
         if !name.trim().is_empty() {
@@ -194,9 +195,9 @@ fn map_structure_kind(kind: &StructureKind) -> Option<CodannaSymbolKind> {
 fn map_span(span: &tree_sitter_language_pack::Span) -> Range {
     Range::new(
         saturating_u32(span.start_line),
-        saturating_u16(span.start_column),
+        saturating_u32(span.start_column),
         saturating_u32(span.end_line),
-        saturating_u16(span.end_column),
+        saturating_u32(span.end_column),
     )
 }
 
@@ -204,11 +205,7 @@ fn saturating_u32(value: usize) -> u32 {
     value.min(u32::MAX as usize) as u32
 }
 
-fn saturating_u16(value: usize) -> u16 {
-    value.min(u16::MAX as usize) as u16
-}
-
-fn symbol_key(raw: &RawSymbol) -> (String, CodannaSymbolKind, u32, u16) {
+fn symbol_key(raw: &RawSymbol) -> (String, CodannaSymbolKind, u32, u32) {
     (
         raw.name.to_string(),
         raw.kind,

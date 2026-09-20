@@ -18,15 +18,22 @@ impl CodeIntelligenceServer {
     #[tool(description = "Find a symbol by name in the indexed codebase")]
     pub async fn find_symbol(
         &self,
-        Parameters(FindSymbolRequest { name, lang }): Parameters<FindSymbolRequest>,
+        Parameters(FindSymbolRequest {
+            name,
+            lang,
+            limit,
+            offset,
+        }): Parameters<FindSymbolRequest>,
     ) -> Result<CallToolResult, McpError> {
         use crate::symbol::context::ContextIncludes;
+        crate::mcp::requests::validate_search_limit(limit)?;
 
         crate::runtime::read(&self.facade, move |indexer| {
             // symbol_id:XXX (from semantic search results and ambiguity hints)
             // resolves by direct id lookup; policy shared with the CLI JSON path.
             let (symbols, label) =
-                match service::resolve_find_symbol_target(&indexer, &name, lang.as_deref()) {
+                match service::try_resolve_find_symbol_target(&indexer, &name, lang.as_deref())
+                    .map_err(|error| McpError::internal_error(format!("Symbol lookup failed: {error}"), None))? {
                     service::FindSymbolTarget::Symbols { symbols, label } => (symbols, label),
                     service::FindSymbolTarget::InvalidId(id_str) => {
                         return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
@@ -35,7 +42,8 @@ impl CodeIntelligenceServer {
                     }
                 };
 
-            if symbols.is_empty() {
+            let (symbols, page) = service::page_symbols(symbols, offset, limit);
+            if page.total == 0 {
                 let mut output = format!("No symbols found with name: {name}");
                 // Add guidance for no results
                 if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "find_symbol", 0)
@@ -44,10 +52,15 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                response.structured_content = Some(serde_json::json!({ "pagination": page }));
+                return Ok(response);
             }
 
-            let mut result = format!("Found {} symbol(s) named '{label}':\n\n", symbols.len());
+            let mut result = format!("Found {} symbol(s) named '{label}':\n\n", page.total);
+            if page.returned != page.total {
+                result.push_str(&format!("Showing {} result(s), offset {} (limit {}).\n\n", page.returned, page.offset, page.limit));
+            }
 
             for (idx, symbol) in symbols.iter().enumerate() {
                 if idx > 0 {
@@ -140,6 +153,16 @@ impl CodeIntelligenceServer {
                     if let Some(callers) = &ctx.relationships.called_by {
                         if !callers.is_empty() {
                             result.push_str(&format!("Called by: {} function(s)\n", callers.len()));
+                            has_relationships = true;
+                        }
+                    }
+
+                    for (label, edges) in [
+                        ("References", &ctx.relationships.references),
+                        ("Referenced by", &ctx.relationships.referenced_by),
+                    ] {
+                        if let Some(edges) = edges.as_ref().filter(|edges| !edges.is_empty()) {
+                            result.push_str(&format!("{label}: {} symbol(s)\n", edges.len()));
                             has_relationships = true;
                         }
                     }
@@ -249,7 +272,12 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+            if let Some(next_offset) = page.next_offset {
+                result.push_str(&format!("\nMore matching symbols: repeat this query with offset:{next_offset} limit:{limit}.\n"));
+            }
+            let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+            response.structured_content = Some(serde_json::json!({ "pagination": page }));
+            Ok(response)
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -472,7 +500,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Analyze complete impact of changing a symbol. Shows ALL relationships: function calls, type usage, composition.\n\nShows:\n- What CALLS this function\n- What USES this as a type (fields, parameters, returns)\n- What RENDERS/COMPOSES this (JSX: <Component>, Rust: struct fields, etc.)\n- Full dependency graph across files\n\nUse this when: You need to see everything that depends on a symbol."
+        description = "Analyze indexed dependents of a symbol within the requested depth and graph budget. Includes function calls, callback argument references, type usage, inheritance, and composition across files. Callback registrations remain References edges, with their own direct dependent count; they do not imply an immediate call. Budget exhaustion is reported explicitly."
     )]
     pub async fn analyze_impact(
         &self,
@@ -537,7 +565,10 @@ impl CodeIntelligenceServer {
             // Show the specific symbol being analyzed
             if let Some(ctx) = indexer.get_symbol_context(
                 symbol.id,
-                ContextIncludes::CALLERS | ContextIncludes::EXTENDS | ContextIncludes::USES,
+                ContextIncludes::CALLERS
+                    | ContextIncludes::EXTENDS
+                    | ContextIncludes::USES
+                    | ContextIncludes::REFERENCES,
             ) {
                 // Name-matched doc, not the id-keyed context (see find_symbol).
                 let location = crate::symbol::context::SymbolContext::location(&symbol);
@@ -595,9 +626,27 @@ impl CodeIntelligenceServer {
                     String::new()
                 };
 
+                let reference_info = ctx
+                    .relationships
+                    .referenced_by
+                    .as_ref()
+                    .filter(|edges| !edges.is_empty())
+                    .map(|edges| {
+                        format!(
+                            ", referenced by: {} (including callback arguments)",
+                            edges.len()
+                        )
+                    })
+                    .unwrap_or_default();
+
                 result.push_str(&format!(
-                    "Symbol: {:?} at {} (direct callers: {}{}{})\n\n",
-                    symbol.kind, location, direct_callers, inheritance_info, uses_info
+                    "Symbol: {:?} at {} (direct callers: {}{}{}{})\n\n",
+                    symbol.kind,
+                    location,
+                    direct_callers,
+                    inheritance_info,
+                    uses_info,
+                    reference_info
                 ));
             }
 

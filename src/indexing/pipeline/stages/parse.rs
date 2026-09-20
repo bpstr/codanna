@@ -287,6 +287,9 @@ fn parse_with_parser(
         })
         .collect();
 
+    // Export surfaces are persisted even for declaration-free barrels.
+    let raw_exports = parser.find_exports(&content.content);
+
     // Extract relationships
     let raw_relationships = extract_relationships(parser, &content.content);
 
@@ -313,6 +316,7 @@ fn parse_with_parser(
         module_path,
         raw_symbols,
         raw_imports,
+        raw_exports,
         raw_relationships,
         variable_bindings,
         this_barrier_spans,
@@ -428,40 +432,34 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
         );
     }
 
-    // Method-channel records end here; the bare-segment absorb below is
-    // scoped to them — plain-vs-plain must not absorb (a nested
-    // `foo(Bar::foo())` keeps both records).
-    let mut exact_calls: HashSet<(Arc<str>, u32, Arc<str>)> = relationships
+    // Merge extraction channels by physical span. A name and line are not
+    // enough: `make(Boxed.make())` contains two different call sites. Keep
+    // the richer receiver-bearing record only when both passes saw the
+    // same expression, including its end position.
+    let mut exact_calls: HashSet<(Arc<str>, crate::Range, Arc<str>)> = relationships
         .iter()
         .map(|relationship| {
             (
                 Arc::clone(&relationship.from_name),
-                relationship.to_range.start_line,
+                relationship.to_range,
                 Arc::clone(&relationship.to_name),
             )
         })
         .collect();
-    let method_calls: HashSet<(Arc<str>, u32, Arc<str>)> = exact_calls.clone();
+    let method_calls = exact_calls.clone();
 
     // Plain function calls (legacy - no caller_range available)
     for (caller, called, call_site) in parser.find_calls(content) {
-        // Method-call records absorb their plain-call twins. Parsers that
-        // visit a scoped call (`Type::method`) in both find_calls (full
-        // path) and find_method_calls (bare name + receiver) emit two
-        // records for one site; verbatim comparison alone misses the
-        // qualified form, so the method-call record also absorbs on
-        // last-`::`-segment match at the same call-site line.
+        // The legacy pass may spell a member as `Type::method` or
+        // `object.method`; the method pass stores its receiver separately.
         let bare = called.rsplit_once("::").map_or(called, |(_, tail)| tail);
+        let bare = bare.rsplit_once('.').map_or(bare, |(_, tail)| tail);
         let exact_key = (
             Arc::<str>::from(caller),
-            call_site.start_line,
+            call_site,
             Arc::<str>::from(called),
         );
-        let method_key = (
-            Arc::<str>::from(caller),
-            call_site.start_line,
-            Arc::<str>::from(bare),
-        );
+        let method_key = (Arc::<str>::from(caller), call_site, Arc::<str>::from(bare));
         let already_exists = exact_calls.contains(&exact_key) || method_calls.contains(&method_key);
         if !already_exists {
             // from_range = call_site triggers fallback to name-only lookup in COLLECT
@@ -478,7 +476,7 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
             );
             exact_calls.insert((
                 Arc::clone(&relationship.from_name),
-                relationship.to_range.start_line,
+                relationship.to_range,
                 Arc::clone(&relationship.to_name),
             ));
             relationships.push(relationship);
@@ -496,15 +494,22 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
         ));
     }
 
-    // Inheritance (extends) - range is the class definition site
+    // Inheritance (extends): preserve each base's source position so ordered
+    // parent identities can be recovered from persisted relationship rows.
     for (derived, base, class_range) in parser.find_extends(content) {
-        relationships.push(RawRelationship::new(
-            derived,
-            class_range, // from_range = where derived is defined
-            base,
-            class_range, // to_range = where base is referenced
-            crate::RelationKind::Extends,
-        ));
+        relationships.push(
+            RawRelationship::new(
+                derived,
+                class_range, // from_range = where derived is defined
+                base,
+                class_range, // to_range = where base is referenced
+                crate::RelationKind::Extends,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(class_range.start_line, class_range.start_column),
+            ),
+        );
     }
 
     // Type usage - range is the usage site
@@ -516,6 +521,23 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
             usage_range, // to_range = where type is used
             crate::RelationKind::Uses,
         ));
+    }
+
+    for reference in parser.find_references(content) {
+        relationships.push(
+            RawRelationship::new(
+                reference.source_name,
+                reference.source_range,
+                reference.target_name,
+                reference.range,
+                crate::RelationKind::References,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(reference.range.start_line, reference.range.start_column)
+                    .with_context(reference.context),
+            ),
+        );
     }
 
     // Method definitions (Defines relationships)

@@ -1,0 +1,1434 @@
+{
+  "schema_version": 1,
+  "review_base": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+  "scope": "99 newly added tests and 2 revised existing fixtures from implementation; the original 62-case inventory remains separate.",
+  "document_baseline": {
+    "target": "document_embedding_regressions",
+    "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+    "test_count": 16,
+    "passed": 1,
+    "failed": 15,
+    "ignored": 0,
+    "log_sha256": "2313858765ffb7e3fded08b191c2ff21164111be081953a04a5ec9525ddabe06"
+  },
+  "cases": [
+    {
+      "id": "ADX001",
+      "target": "lib",
+      "test": "documents::chunker::tests::heading_scopes_stay_in_source_order_across_crlf_and_small_sections",
+      "source": "src/documents/chunker.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "CRLF input and small paragraphs preserve source order, keep three heading scopes separate, and retain exact byte slices.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX002",
+      "target": "lib",
+      "test": "documents::chunker::tests::fenced_indented_and_quoted_hashes_do_not_change_document_context",
+      "source": "src/documents/chunker.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Backtick and tilde fences of different lengths, indented code, hashtags, and quoted headings cannot replace the real heading.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX003",
+      "target": "lib",
+      "test": "documents::chunker::tests::headings_keep_skipped_levels_and_strip_only_separated_closing_hashes",
+      "source": "src/documents/chunker.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Skipped heading levels preserve hierarchy, separated closing hashes are removed, and a title such as C# remains intact.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX004",
+      "target": "lib",
+      "test": "documents::chunker::tests::whitespace_merging_and_unicode_windows_reproduce_exact_source_ranges",
+      "source": "src/documents/chunker.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Merged whitespace and multi-byte Unicode sliding windows preserve exact source slices and ten-character overlaps.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX005",
+      "target": "lib",
+      "test": "documents::embedding::tests::identity_tracks_endpoint_and_model_without_persisting_url_credentials",
+      "source": "src/documents/embedding.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Embedding identity distinguishes endpoint and model while keeping URL credentials out of the persisted identity.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX006",
+      "target": "lib",
+      "test": "documents::store::preview_tests::unicode_expansion_before_match_keeps_kwic_and_highlight_source_positions",
+      "source": "src/documents/store.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "KWIC centering and highlights point to the original accented character after an earlier lowercase expansion.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX007",
+      "target": "lib",
+      "test": "documents::store::preview_tests::expanded_or_shrunk_keywords_highlight_whole_original_characters",
+      "source": "src/documents/store.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Lowercase expansions and shrinking characters map back to whole original characters during highlighting.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX008",
+      "target": "lib",
+      "test": "documents::store::preview_tests::unicode_adjacent_highlights_merge_without_crossing_newlines",
+      "source": "src/documents/store.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Unicode keyword matches merge across spaces, remain separate across newlines, and handle overlap and empty input.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX009",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::exact_lookup_boundaries_filter_before_pagination",
+      "source": "src/indexing/facade_retrieval_tests.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "At 99, 100, 101, and 1001 collisions, language/owner filters precede pagination and stable pages contain no gaps.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX010",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::symbol_listing_reports_total_and_empty_page_without_false_absence",
+      "source": "src/indexing/facade_retrieval_tests.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "MCP symbol pages over 101 matches expose accurate totals and continuation; an end page is empty success, not false symbol absence.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX011",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::invalid_retrieve_search_limit_remains_an_error",
+      "source": "src/indexing/facade_retrieval_tests.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "Text and JSON retrieval reject limits 0 and 1001 as errors while a genuine absent symbol remains NotFound.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX012",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::semantic_context_preserves_results_when_one_impact_exceeds_budget",
+      "source": "src/indexing/facade_retrieval_tests.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "A local mock embedding transport retrieves a popular utility plus an isolated match; impact overflow preserves both hits with accurate per-result completeness status.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX013",
+      "target": "lib",
+      "test": "indexing::pipeline::dependencies::tests::package_entry_and_regular_module_have_distinct_dependency_keys",
+      "source": "src/indexing/pipeline/dependencies.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "Package entry and regular module dependency identities remain distinct so removal/restoration invalidates the correct consumers.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX014",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::cleanup::tests::rebound_targets_keep_recorded_local_parent_and_namespace_identity",
+      "source": "src/indexing/pipeline/stages/cleanup.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "Rebinding synthetic persisted symbols preserves recorded local parent and namespace identity instead of selecting another owner.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX015",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::discover::tests::legacy_second_valued_mtime_is_verified_with_a_hash",
+      "source": "src/indexing/pipeline/stages/discover.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "Old second-valued persisted timestamps require a content hash before treating a file as unchanged.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX016",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::discover::tests::equal_coarse_or_future_mtime_still_checks_changed_bytes",
+      "source": "src/indexing/pipeline/stages/discover.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "Coarse or future timestamps do not hide changed source bytes.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX017",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_distinguish_pointer_value_and_embedded_receivers",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Go implementation evidence distinguishes pointer-only Socket/value embedding from pointer embedding, and excludes a wrong parameter signature.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX018",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_preserve_ambiguity_and_field_shadowing",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Two promoted same-name methods remain ambiguous; a field blocks promotion, while a direct method resolves it.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX019",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_compare_signatures_and_merge_interface_requirements",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Grouped and unnamed parameters normalize to the same signature; embedded interface requirements merge, while arity and variadic/slice differences remain distinct.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX020",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_keep_private_names_and_shadowed_builtins_package_specific",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Private method names and shadowed builtin type names remain package-specific.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX021",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_do_not_equate_unresolved_array_constants",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Same-spelled array constants from different packages do not prove equal parameter types; equivalent numeric literal radices do match.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX022",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_empty_interfaces_cover_all_complete_types_without_a_cap",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "All 128 complete local structs are discoverable as empty-interface implementers without a hidden result cap.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX023",
+      "target": "lib",
+      "test": "storage::tantivy::codec::tests::long_source_columns_survive_storage_and_reload",
+      "source": "src/storage/tantivy/codec.rs",
+      "group": "Source position persistence",
+      "scope": "unit-or-service",
+      "scenario": "Large UTF-8 byte columns survive storage encoding and reader reload without narrowing.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX024",
+      "target": "lib",
+      "test": "storage::tantivy::query::review_budget_tests::literal_code_fallback_uses_analyzed_phrase_and_rejects_decoys",
+      "source": "src/storage/tantivy/query.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "A malformed qualified code query matches the containing analyzed phrase while rejecting wrong namespaces and nonadjacent token decoys.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX025",
+      "target": "lib",
+      "test": "watcher::unified::tests::nested_ignore_policy_reconciles_exclusion_and_reinclusion",
+      "source": "src/watcher/unified.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "The real watcher reconciles a nested policy-only exclusion and reinclusion without a source-file touch.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX026",
+      "target": "lib",
+      "test": "watcher::unified::tests::preparation_watches_policy_in_an_initially_excluded_code_directory",
+      "source": "src/watcher/unified.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "unit-or-service",
+      "scenario": "Watcher preparation tracks a policy file inside an initially excluded directory so a future inclusion can be observed.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX027",
+      "target": "callback_references",
+      "test": "registered_route_handler_is_a_reference_with_source_evidence",
+      "source": "tests/callback_references.rs",
+      "group": "Callback and registration references",
+      "scope": "full-local-integration",
+      "scenario": "A literal route registration keeps the handler as a References edge with an exact source span, without inventing immediate execution.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX028",
+      "target": "callback_references",
+      "test": "imported_callback_alias_retains_provider_identity",
+      "source": "tests/callback_references.rs",
+      "group": "Callback and registration references",
+      "scope": "full-local-integration",
+      "scenario": "A passed imported callback alias resolves to its actual provider declaration.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX029",
+      "target": "callback_references",
+      "test": "parameter_shadow_does_not_reference_same_named_global_handler",
+      "source": "tests/callback_references.rs",
+      "group": "Callback and registration references",
+      "scope": "full-local-integration",
+      "scenario": "A parameter or destructured parameter shadow prevents a callback reference to the same-named global function.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX030",
+      "target": "callback_references",
+      "test": "passing_strings_or_members_does_not_invent_callback_targets",
+      "source": "tests/callback_references.rs",
+      "group": "Callback and registration references",
+      "scope": "full-local-integration",
+      "scenario": "String arguments and unsupported member expressions do not turn into guessed bare callback targets.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX031",
+      "target": "document_embedding_regressions",
+      "test": "force_reindex_preserves_one_live_chunk_per_source",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Forcing a previously indexed document replaces its generation and leaves exactly one live chunk for the source.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX032",
+      "target": "document_embedding_regressions",
+      "test": "force_selected_collection_preserves_other_collection_tracking",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Forcing collection A preserves collection B file ownership and freshness state.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX033",
+      "target": "document_embedding_regressions",
+      "test": "overlapping_collections_are_indexed_or_rejected_explicitly",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "A source included by two collections is either indexed in the second collection or rejected explicitly; success cannot silently omit it.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX034",
+      "target": "document_embedding_regressions",
+      "test": "overlapping_roots_deduplicate_discovered_files",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "A directory plus its explicit child file indexes that source once.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX035",
+      "target": "document_embedding_regressions",
+      "test": "equal_second_mtime_does_not_hide_content_edits",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Content changes under an identical historical mtime replace the old document preview.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX036",
+      "target": "document_embedding_regressions",
+      "test": "chunking_config_changes_invalidate_unchanged_file_state",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Changing max chunk size from 256 to 50 rechunks an unchanged 200-character document into four chunks.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX037",
+      "target": "document_embedding_regressions",
+      "test": "enabling_embeddings_populates_existing_metadata_only_chunks",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Enabling a deterministic mock model after metadata-only indexing backfills the missing vectors.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX038",
+      "target": "document_embedding_regressions",
+      "test": "equal_dimension_model_change_rebuilds_or_errors",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Switching between distinct mock models with equal vector dimensions rebuilds or fails explicitly; mixed vector spaces cannot silently return the wrong text.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX039",
+      "target": "document_embedding_regressions",
+      "test": "embedding_failure_can_resume_in_same_store",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "A deterministic first-batch embedding failure can be retried in the same store without falsely accepting a chunk with no vector.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX040",
+      "target": "document_embedding_regressions",
+      "test": "embedding_failure_then_reopen_does_not_duplicate_metadata",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "After an embedding failure and store reopen, retry produces one live metadata chunk.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX041",
+      "target": "document_embedding_regressions",
+      "test": "absent_lexical_terms_do_not_return_arbitrary_chunks",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "With embeddings disabled, a nonexistent literal query returns no chunks.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX042",
+      "target": "document_embedding_regressions",
+      "test": "heading_hierarchy_respects_source_order",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "chunker-contract",
+      "scenario": "A payload beneath Alpha then Beta carries both headings in that order.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX043",
+      "target": "document_embedding_regressions",
+      "test": "fenced_code_comments_do_not_become_document_headings",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "chunker-contract",
+      "scenario": "A shell comment inside a fenced code block cannot replace the surrounding document heading.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX044",
+      "target": "document_embedding_regressions",
+      "test": "chunk_ranges_reproduce_source_after_whitespace_merging",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "chunker-contract",
+      "scenario": "After merging small paragraphs, slicing the original source by the chunk byte range reproduces its content exactly.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX045",
+      "target": "document_embedding_regressions",
+      "test": "unicode_case_expansion_does_not_panic_during_preview",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "A document preview containing dotted capital I before an accented match remains safe under Unicode lowercasing.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "failed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX046",
+      "target": "document_embedding_regressions",
+      "test": "control_unchanged_index_reuses_embeddings_and_deletion_hides_hits",
+      "source": "tests/document_embedding_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Unchanged indexing performs no second mock embedding request, and deleting the file removes its search hits.",
+      "baseline": {
+        "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+        "status": "passed"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX047",
+      "target": "index_lifecycle_regressions",
+      "test": "multi_root_mutations_match_fresh_graph_in_both_orders",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "A multi-root mutation sequence matches a fresh graph after each transition in both caller/callee root orders.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX048",
+      "target": "index_lifecycle_regressions",
+      "test": "unresolved_import_dependencies_survive_reopening",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "After persistence and reopen, creating a previously missing import target repairs the unchanged caller and matches a fresh graph.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX049",
+      "target": "index_lifecycle_regressions",
+      "test": "persisted_dynamic_roots_retarget_import_only_barrels",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "An import-only Python barrel edit after reopening dynamic roots retargets its unchanged consumer to the correct module.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX050",
+      "target": "index_lifecycle_regressions",
+      "test": "unrelated_relative_importers_keep_their_symbol_ids",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "Changing a left package target does not reparse or change IDs in an unrelated right package with the same relative import spelling.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX051",
+      "target": "index_lifecycle_regressions",
+      "test": "max_files_is_global_deterministic_and_zero_is_not_deletion_evidence",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "The file cap applies globally and deterministically across roots, and a zero-file inventory cannot establish a deletion.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX052",
+      "target": "index_lifecycle_regressions",
+      "test": "bounded_barrel_update_invalidates_then_repairs_after_reopen_without_source_edits",
+      "source": "tests/index_lifecycle_regressions.rs",
+      "group": "Incremental indexing and watcher reconciliation",
+      "scope": "full-local-integration",
+      "scenario": "A bounded barrel update followed by persistence and reopen repairs resolution without requiring another source edit.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX053",
+      "target": "language_semantics_regressions",
+      "test": "python_incremental_c3_keeps_unchanged_imported_ancestor_identities",
+      "source": "tests/language_semantics_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "Incremental C3 dispatch retains the exact imported ancestor identities across unchanged files.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX054",
+      "target": "language_semantics_regressions",
+      "test": "go_interface_signature_edit_removes_stale_implementation_without_rebinding_it",
+      "source": "tests/language_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "full-local-integration",
+      "scenario": "Changing an interface signature removes stale structural implementations without rebinding to an unrelated same-name declaration.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX055",
+      "target": "language_semantics_regressions",
+      "test": "go_embedded_method_edit_recomputes_unchanged_wrapper_implementation",
+      "source": "tests/language_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "full-local-integration",
+      "scenario": "Changing an embedded method recomputes implementation evidence for an unchanged wrapper.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX056",
+      "target": "language_semantics_regressions",
+      "test": "go_pointer_only_relationship_retains_receiver_evidence",
+      "source": "tests/language_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "full-local-integration",
+      "scenario": "A pointer-only Go implementation keeps explicit receiver evidence on its stored relationship.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX057",
+      "target": "language_semantics_regressions",
+      "test": "python_annotation_dependencies_do_not_create_eager_call_edges",
+      "source": "tests/language_semantics_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "The full Python graph retains annotation dependencies without inventing eager calls.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX058",
+      "target": "parser_semantics_regressions",
+      "test": "python_postponed_annotation_calls_are_type_uses",
+      "source": "tests/parser_semantics_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "parser",
+      "scenario": "A postponed annotation mentioning compute_type produces Uses evidence and no eager Calls in either extraction pass.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX059",
+      "target": "parser_semantics_regressions",
+      "test": "python_parent_positions_preserve_source_order",
+      "source": "tests/parser_semantics_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "parser",
+      "scenario": "Each Python base retains its own ordered source position rather than sharing the containing class range.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX060",
+      "target": "parser_semantics_regressions",
+      "test": "go_indexed_callable_values_do_not_call_their_container",
+      "source": "tests/parser_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "parser",
+      "scenario": "Invoking a local indexed variadic callable with zero, one, or multiple arguments cannot become a call to a shadowed generic function named handlers, in either extraction pass.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX061",
+      "target": "python_dispatch_regressions",
+      "test": "self_dispatch_uses_the_same_c3_order_as_an_annotated_receiver",
+      "source": "tests/python_dispatch_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "A self.run call chooses A through first base X before the later direct base Y.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX062",
+      "target": "python_dispatch_regressions",
+      "test": "unresolved_imported_parent_never_uses_an_unrelated_same_named_class",
+      "source": "tests/python_dispatch_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "An unresolved explicit Base import blocks a lone global Base decoy for both self and super dispatch.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX063",
+      "target": "python_dispatch_regressions",
+      "test": "inconsistent_c3_order_does_not_choose_an_arbitrary_parent_method",
+      "source": "tests/python_dispatch_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "An inconsistent C3 hierarchy remains unresolved for self, super, and annotated receivers.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX064",
+      "target": "web_export_regressions",
+      "test": "javascript_default_export_and_bare_arrow_keep_definition_identity",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "JavaScript full indexing preserves both the default export identity and bare-arrow caller identity.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX065",
+      "target": "web_export_regressions",
+      "test": "named_and_default_aliases_survive_three_barrels",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Named and default export slots retain the original definition through three aliasing barrel modules.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX066",
+      "target": "web_export_regressions",
+      "test": "import_then_local_export_keeps_the_imported_identity",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Importing an alias and then exporting it locally preserves its provider identity.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX067",
+      "target": "web_export_regressions",
+      "test": "ordinary_import_does_not_implicitly_export_a_binding",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "An ordinary import is not exposed as an export unless the module explicitly exports it.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX068",
+      "target": "web_export_regressions",
+      "test": "star_export_excludes_default_even_with_a_same_named_decoy",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Star re-exports omit the default slot even when a same-named declaration could tempt fallback.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX069",
+      "target": "web_export_regressions",
+      "test": "explicit_export_takes_precedence_over_conflicting_star_export",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "An explicit named export overrides an otherwise conflicting star-export candidate.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX070",
+      "target": "web_export_regressions",
+      "test": "conflicting_star_exports_fail_closed",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Distinct definitions exposed by conflicting star exports remain ambiguous instead of selecting one by order.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX071",
+      "target": "web_export_regressions",
+      "test": "diamond_star_exports_of_the_same_definition_are_unambiguous",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A diamond of star re-exports reaching the same definition remains unambiguous.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX072",
+      "target": "web_export_regressions",
+      "test": "cyclic_barrel_with_reachable_leaf_terminates_and_resolves",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A barrel cycle terminates while preserving a reachable concrete leaf export.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX073",
+      "target": "web_export_regressions",
+      "test": "namespace_import_calls_the_public_member",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A namespace import resolves a public member through its export slot.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX074",
+      "target": "web_export_regressions",
+      "test": "namespace_reexport_calls_the_original_definition",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A namespace re-export resolves through the original provider module.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX075",
+      "target": "web_export_regressions",
+      "test": "namespace_private_member_does_not_fall_through_to_a_decoy",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A private namespace member cannot be replaced by an unrelated public same-name method.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX076",
+      "target": "web_export_regressions",
+      "test": "typescript_js_specifier_resolves_the_typescript_source",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A JavaScript extension in a TypeScript import finds the actual TypeScript source module.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX077",
+      "target": "web_export_regressions",
+      "test": "type_only_barrel_preserves_uses_without_creating_runtime_calls",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "A type-only barrel keeps type Uses evidence and does not create runtime Calls.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX078",
+      "target": "web_export_regressions",
+      "test": "exports_are_persisted_for_a_reopened_partial_index",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Export identities survive persistence and reopening followed by partial indexing.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX079",
+      "target": "web_export_regressions",
+      "test": "php_promoted_and_nullable_declared_fields_resolve_their_own_type",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Promoted and nullable PHP fields dispatch through their own declared type, including same-name decoys.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX080",
+      "target": "web_export_regressions",
+      "test": "php_untyped_and_union_properties_do_not_guess_a_receiver_class",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Untyped or union PHP properties do not guess one concrete receiver class.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX081",
+      "target": "web_export_regressions",
+      "test": "tsconfig_alias_missing_export_is_negative_evidence_for_resolution",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "production-resolver-with-persisted-rules",
+      "scenario": "Actual persisted tsconfig rules and export facts keep a missing internal export unresolved despite a public decoy, while a present export from the same module resolves.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX082",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::reference_context_surfaces_remain_distinct_from_calls",
+      "source": "src/indexing/facade_retrieval_tests.rs",
+      "group": "Retrieval completeness",
+      "scope": "unit-or-service",
+      "scenario": "References appear in dependency, impact, MCP, and source-evidence surfaces while remaining distinct from direct Calls and caller counts.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX083",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_external_test_package_cannot_satisfy_private_methods",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "A Go external test package cannot satisfy a production interface through a same-spelled private method.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX084",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_external_test_package_named_types_have_distinct_identity",
+      "source": "src/parsing/go/method_sets.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "unit-or-service",
+      "scenario": "Named parameter types in an external Go test package remain distinct from production-package types.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX085",
+      "target": "callback_references",
+      "test": "local_bindings_do_not_reference_same_named_global_handler",
+      "source": "tests/callback_references.rs",
+      "group": "Callback and registration references",
+      "scope": "full-local-integration",
+      "scenario": "Local arrows, object/array destructuring, and catch bindings prevent callback references to the same-named global handler.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX086",
+      "target": "python_dispatch_regressions",
+      "test": "undefined_parent_never_uses_an_unimported_global_class",
+      "source": "tests/python_dispatch_regressions.rs",
+      "group": "Python dispatch",
+      "scope": "full-local-integration",
+      "scenario": "A Python base name absent from the file scope cannot select an unimported same-named class in another module.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX087",
+      "target": "web_export_regressions",
+      "test": "typescript_declared_and_constructor_fields_anchor_method_calls",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "Declared and constructor TypeScript fields retain the owner-specific service type through member calls and lexical arrows.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX088",
+      "target": "web_export_regressions",
+      "test": "typescript_field_type_stops_at_an_ordinary_function_this_boundary",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "An ordinary nested function cannot reuse the enclosing class field type through its unrelated this receiver.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX089",
+      "target": "document_backend_regressions",
+      "test": "disabled_document_embeddings_never_initialize_configured_backend",
+      "source": "tests/document_backend_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "Disabling semantic embeddings permits opening and searching document metadata without initializing deliberately invalid local or remote backends.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX090",
+      "target": "document_backend_regressions",
+      "test": "configured_remote_documents_use_model_dimension_and_heading_input_consistently",
+      "source": "tests/document_backend_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "A loopback-only embedding transport verifies the configured model and dimension, heading-enriched embedding input, consistent reopen/query behavior, and absence of raw endpoint URLs in stored state.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX091",
+      "target": "document_backend_regressions",
+      "test": "one_shot_document_search_reads_index_without_reembedding_changed_sources",
+      "source": "tests/document_backend_regressions.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "full-local-integration",
+      "scenario": "The actual one-shot MCP CLI returns the indexed document snapshot after the source changes, without rewriting document state or re-embedding files.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX092",
+      "target": "web_export_regressions",
+      "test": "php_qualified_property_type_does_not_capture_a_bare_named_decoy",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "full-local-integration",
+      "scenario": "An unavailable fully qualified PHP property type cannot capture a local same-tail class method.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX093",
+      "target": "lib",
+      "test": "documents::store::tests::lexical_search_finds_relevant_chunk_after_ten_thousand_nonmatches",
+      "source": "src/documents/store.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Metadata-only lexical search finds a relevant document chunk after more than 10,000 nonmatching candidates.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX094",
+      "target": "lib",
+      "test": "watcher::unified::document_collection_tests::document_watcher_indexes_new_and_recreated_files_with_collection_overrides",
+      "source": "src/watcher/unified.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Deterministic watcher events index newly created and recreated files using their collection-specific chunking configuration.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX095",
+      "target": "lib",
+      "test": "watcher::unified::document_collection_tests::document_watcher_catches_moved_subtrees_and_nested_ignore_changes",
+      "source": "src/watcher/unified.rs",
+      "group": "Document embedding and source evidence",
+      "scope": "unit-or-service",
+      "scenario": "Deterministic watcher events reconcile moved document subtrees, nested ignore changes, and deletion/recreation of the entire configured root; its parent remains watched so the replacement root can recover.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX096",
+      "target": "parser_semantics_regressions",
+      "test": "rust_factory_evidence_does_not_cross_lexical_modules_or_import_aliases",
+      "source": "tests/parser_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "parser",
+      "scenario": "Rust factory-return evidence from a different lexical module cannot override an external import alias with the same owner name.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX097",
+      "target": "parser_semantics_regressions",
+      "test": "rust_factory_evidence_fails_closed_for_duplicate_owner_declarations",
+      "source": "tests/parser_semantics_regressions.rs",
+      "group": "Go and Rust type evidence",
+      "scope": "parser",
+      "scenario": "Duplicate same-name Rust owner declarations cannot supply an arbitrary factory-return type across lexical scopes.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX098",
+      "target": "web_export_regressions",
+      "test": "dense_barrel_diamond_exhaustion_cannot_publish_a_partial_winner",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "production-export-resolver",
+      "scenario": "A dense 20-level export diamond exhausts the visit budget and remains ambiguous even when a cheap first branch reaches a concrete target.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX099",
+      "target": "web_export_regressions",
+      "test": "export_depth_exhaustion_cannot_hide_a_conflicting_target",
+      "source": "tests/web_export_regressions.rs",
+      "group": "Export identity and PHP property receivers",
+      "scope": "production-export-resolver",
+      "scenario": "A cheap first export target cannot conceal a conflicting definition beyond the 64-level export-depth bound; exhaustion remains ambiguous.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "new-test"
+    },
+    {
+      "id": "ADX100",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::resolve::tests::python_self_form_miss_does_not_capture_a_free_function",
+      "source": "src/indexing/pipeline/stages/resolve.rs",
+      "group": "Python dispatch",
+      "scope": "production-resolver-unit",
+      "scenario": "An explicit Python self.helper() call cannot resolve to a module-level helper when its enclosing class has no such member.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "revised-existing-contract",
+      "previous_test": "indexing::pipeline::stages::resolve::tests::self_form_miss_falls_through_to_existing_path",
+      "revision_note": "The former unit expected a free-function fallback for explicit Python self; the corrected language contract requires no resolved edge. This is a changed existing assertion, not a newly measured baseline failure."
+    },
+    {
+      "id": "ADX101",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::resolve::tests::inherited_member_resolves_cross_file_from_parent_identity",
+      "source": "src/indexing/pipeline/stages/resolve.rs",
+      "group": "Python dispatch",
+      "scope": "production-resolver-unit",
+      "scenario": "A scoped Python parent identity plus persisted parent facts permits cross-file inherited-member resolution while excluding an off-chain same-name method.",
+      "baseline": {
+        "revision": null,
+        "status": "not_run"
+      },
+      "change_kind": "revised-existing-fixture",
+      "previous_test": "indexing::pipeline::stages::resolve::tests::inherited_member_resolves_cross_file_without_import",
+      "revision_note": "The positive member target is preserved; the fixture now supplies the required parent identity and persisted class facts. Its name distinguishes a member that needs no direct import from a parent that still needs identity evidence."
+    }
+  ]
+}

@@ -166,9 +166,9 @@ impl CppParser {
                         let doc_comment = self.extract_doc_comment(&node, code);
                         let range = Range::new(
                             node.start_position().row as u32,
-                            node.start_position().column as u16,
+                            node.start_position().column as u32,
                             node.end_position().row as u32,
-                            node.end_position().column as u16,
+                            node.end_position().column as u32,
                         );
 
                         let kind = if is_method {
@@ -201,9 +201,9 @@ impl CppParser {
                     let doc_comment = self.extract_doc_comment(&node, code);
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
 
                     let symbol = self.create_symbol(
@@ -264,9 +264,9 @@ impl CppParser {
                     let doc_comment = self.extract_doc_comment(&node, code);
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
 
                     let symbol = self.create_symbol(
@@ -292,9 +292,9 @@ impl CppParser {
                     let doc_comment = self.extract_doc_comment(&node, code);
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
 
                     let symbol = self.create_symbol(
@@ -329,9 +329,9 @@ impl CppParser {
                                             let doc_comment = self.extract_doc_comment(&node, code);
                                             let range = Range::new(
                                                 node.start_position().row as u32,
-                                                node.start_position().column as u16,
+                                                node.start_position().column as u32,
                                                 node.end_position().row as u32,
-                                                node.end_position().column as u16,
+                                                node.end_position().column as u32,
                                             );
 
                                             let symbol = self.create_symbol(
@@ -428,9 +428,9 @@ impl CppParser {
             if let Some(function_node) = node.child_by_field_name("function") {
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 let caller = function_context.unwrap_or("");
 
@@ -516,9 +516,9 @@ impl CppParser {
                         let method_name = &declarator_text[separator_pos + 2..];
                         let range = Range::new(
                             node.start_position().row as u32,
-                            node.start_position().column as u16,
+                            node.start_position().column as u32,
                             node.end_position().row as u32,
-                            node.end_position().column as u16,
+                            node.end_position().column as u32,
                         );
                         implementations.push((class_name, method_name, range));
                     }
@@ -579,9 +579,9 @@ impl CppParser {
                     let base_class = &code[child.byte_range()];
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     extends.push((derived_class, base_class, range));
                 } else {
@@ -601,9 +601,9 @@ impl CppParser {
             let identifier_name = &code[node.byte_range()];
             let range = Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             );
             // Use empty string for context for now
             uses.push(("", identifier_name, range));
@@ -632,17 +632,17 @@ impl CppParser {
                     let var_name = declarator_text[..equals_pos].trim();
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     defines.push((var_name, "variable", range));
                 } else {
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     defines.push((declarator_text.trim(), "variable", range));
                 }
@@ -654,9 +654,9 @@ impl CppParser {
                 let macro_name = &code[name_node.byte_range()];
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 defines.push((macro_name, "macro", range));
             }
@@ -690,9 +690,9 @@ impl CppParser {
                     };
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     variable_types.push((var_name, type_name, range));
                 }
@@ -760,9 +760,9 @@ impl CppParser {
                             let clean_method_name = method_name[..paren_pos].trim();
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             );
                             inherent_methods.push((
                                 class_name.to_string(),
@@ -772,9 +772,9 @@ impl CppParser {
                         } else {
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             );
                             inherent_methods.push((
                                 class_name.to_string(),
@@ -1028,9 +1028,9 @@ impl CppParser {
 
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
 
                 // Only record call if we have a function context

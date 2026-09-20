@@ -16,6 +16,41 @@ type ImportInfo = (String, Option<String>);
 /// Type alias for module imports: module_path -> list of imports
 type ModuleImports = Vec<(String, Vec<ImportInfo>)>;
 
+/// Ordered static bases from an indexed class header. Dynamic base expressions
+/// cannot establish a complete MRO. Keyword arguments are class configuration.
+pub(crate) fn declared_bases(signature: &str) -> Option<Vec<String>> {
+    let source = format!("{signature} pass\n");
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .ok()?;
+    let tree = parser.parse(&source, None)?;
+    if tree.root_node().has_error() {
+        return None;
+    }
+    let class = tree.root_node().named_child(0)?;
+    if class.kind() != "class_definition" {
+        return None;
+    }
+    let Some(bases) = class.child_by_field_name("superclasses") else {
+        return Some(Vec::new());
+    };
+    let mut result = Vec::new();
+    for base in bases.named_children(&mut bases.walk()) {
+        let base = match base.kind() {
+            "identifier" | "attribute" => base,
+            "subscript" => base.child_by_field_name("value")?,
+            "keyword_argument" | "comment" => continue,
+            _ => return None,
+        };
+        if !matches!(base.kind(), "identifier" | "attribute") {
+            return None;
+        }
+        result.push(source[base.byte_range()].to_string());
+    }
+    Some(result)
+}
+
 /// Python-specific resolution context implementing LEGB scoping rules
 ///
 /// Python has a specific resolution order (LEGB):
@@ -338,30 +373,12 @@ impl PythonInheritanceResolver {
         }
     }
 
-    /// Calculate Method Resolution Order (MRO) using C3 linearization
-    /// This is a simplified version - Python's actual MRO is more complex
+    /// Invalid or cyclic hierarchies have no valid method resolution order.
     fn calculate_mro(&self, class_name: &str) -> Vec<String> {
-        // Check cache first
-        if let Some(mro) = self.mro_cache.get(class_name) {
-            return mro.clone();
-        }
-
-        // Simple MRO: class itself, then bases in order (left-to-right)
-        let mut mro = vec![class_name.to_string()];
-
-        if let Some(bases) = self.class_bases.get(class_name) {
-            for base in bases {
-                // Recursively get MRO of base classes
-                let base_mro = self.calculate_mro(base);
-                for class in base_mro {
-                    if !mro.contains(&class) {
-                        mro.push(class);
-                    }
-                }
-            }
-        }
-
-        mro
+        c3_linearization(class_name.to_string(), |name| {
+            Some(self.class_bases.get(name).cloned().unwrap_or_default())
+        })
+        .unwrap_or_default()
     }
 
     /// Add a class with its base classes
@@ -432,4 +449,69 @@ impl InheritanceResolver for PythonInheritanceResolver {
 
         all_methods
     }
+}
+
+/// C3 linearization shared by the named helper and production identity-based
+/// dispatch. Missing parents, duplicate bases, cycles, and inconsistent orders
+/// fail closed. A bounded recursion depth also handles malformed editor input.
+pub(crate) fn c3_linearization<T, F>(root: T, parents: F) -> Option<Vec<T>>
+where
+    T: Clone + Eq + std::hash::Hash,
+    F: Fn(&T) -> Option<Vec<T>>,
+{
+    fn visit<T, F>(
+        node: &T,
+        parents: &F,
+        active: &mut std::collections::HashSet<T>,
+        memo: &mut HashMap<T, Vec<T>>,
+        depth: usize,
+    ) -> Option<Vec<T>>
+    where
+        T: Clone + Eq + std::hash::Hash,
+        F: Fn(&T) -> Option<Vec<T>>,
+    {
+        if let Some(order) = memo.get(node) {
+            return Some(order.clone());
+        }
+        if depth >= 256 || !active.insert(node.clone()) {
+            return None;
+        }
+        let bases = parents(node)?;
+        if bases.iter().collect::<std::collections::HashSet<_>>().len() != bases.len() {
+            return None;
+        }
+        let mut sequences = Vec::new();
+        for base in &bases {
+            sequences.push(visit(base, parents, active, memo, depth + 1)?);
+        }
+        sequences.push(bases);
+        let mut order = vec![node.clone()];
+        loop {
+            sequences.retain(|s| !s.is_empty());
+            if sequences.is_empty() {
+                break;
+            }
+            let candidate = sequences
+                .iter()
+                .filter_map(|s| s.first())
+                .find(|head| !sequences.iter().any(|s| s[1..].contains(head)))?
+                .clone();
+            order.push(candidate.clone());
+            for sequence in &mut sequences {
+                if sequence.first() == Some(&candidate) {
+                    sequence.remove(0);
+                }
+            }
+        }
+        active.remove(node);
+        memo.insert(node.clone(), order.clone());
+        Some(order)
+    }
+    visit(
+        &root,
+        &parents,
+        &mut std::collections::HashSet::new(),
+        &mut HashMap::new(),
+        0,
+    )
 }

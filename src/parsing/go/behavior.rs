@@ -13,11 +13,12 @@ use super::resolution::{GoInheritanceResolver, GoResolutionContext};
 /// AST descent: `parameter_declaration` matched by name field.
 fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
     if node.kind() == "parameter_declaration" {
-        if let Some(name) = node.child_by_field_name("name") {
-            if &code[name.byte_range()] == var_name {
-                let type_node = node.child_by_field_name("type")?;
-                return reduce_type_to_name(type_node, code);
-            }
+        let mut cursor = node.walk();
+        if node
+            .children_by_field_name("name", &mut cursor)
+            .any(|n| &code[n.byte_range()] == var_name)
+        {
+            return reduce_type_to_name(node.child_by_field_name("type")?, code);
         }
     }
     for child in node.children(&mut node.walk()) {

@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "repository": "bpstr/codanna",
+  "revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+  "test_count": 62,
+  "passed": 10,
+  "failed": 52,
+  "ignored": 0,
+  "status": "completed",
+  "scope": "Native Rust, Go, Python, PHP, TypeScript and JavaScript parsers; resolver, local index and retrieval boundaries. No embeddings or transport qualification.",
+  "limitations": [
+    "Counts include overlapping parser, stage and full-graph checks of the same underlying problem.",
+    "Some assertions specify capability or API-contract improvements; failures are not all independent bugs.",
+    "Multi-root orphan test fails in the callee-first iteration before reaching reverse order.",
+    "Qualified PHP inheritance test reaches its failed Extends assertion before its Implements assertion.",
+    "Malformed ignore test proves accepted discovery, not subsequent deletion.",
+    "TypeScript formatting changes raw extraction records, but its normalized full graph control passes.",
+    "Semantic expansion limits, nested ignore freshness and barrel-export extraction proposals remain source-only."
+  ],
+  "original_test_source_sha256": {
+    "root/adversarial_root.rs": "127d8fc0ed137a71ab723270efe6c7bfc25b56896a6d561874694e004024b100",
+    "rust_go_python/parser_edge_cases.rs": "7086b58ec4b372309ccbf80c5509047d117fc666faa4ac46f2e2a5b51708c713",
+    "index_lifecycle/review_index_lifecycle.rs": "2373d09e4c9c99fce77e76e32d7445d249f837e5c9442b59a2d3473044a2c4e9",
+    "search_graph/search_graph_review.rs": "681c1cfd16d857e8c32004287152d7532bedbf9c19e167debbea9a3ba0d893d1",
+    "ts_php/regressions.rs": "44d7535ac006e3bc19005fb4ee7c11282bc86d9e08eb5b03e6d497d152902389",
+    "rust_go_python/pipeline_edge_cases.rs": "7b98d79ae4919c96187c26adb222aa5cd709e54ef97c00a267300ea1ad4b5fff",
+    "rust_go_python/end_to_end.rs": "d8cdbeb8d4736570637f56b0a3722518fbe5312dd4617fdb82981d4b06a178df"
+  },
+  "results": [
+    {
+      "id": "ADR001",
+      "test": "index_lifecycle::adding_missing_import_target_repairs_unchanged_caller",
+      "status": "failed"
+    },
+    {
+      "id": "ADR002",
+      "test": "index_lifecycle::batch_discovery_rejects_partial_invalid_ignore_rules",
+      "status": "failed"
+    },
+    {
+      "id": "ADR003",
+      "test": "index_lifecycle::changing_reexport_retargets_unchanged_consumer",
+      "status": "failed"
+    },
+    {
+      "id": "ADR004",
+      "test": "index_lifecycle::delayed_rescan_detects_different_nanoseconds_in_same_mtime_second",
+      "status": "failed"
+    },
+    {
+      "id": "ADR005",
+      "test": "index_lifecycle::deleting_then_restoring_target_recovers_unchanged_caller",
+      "status": "failed"
+    },
+    {
+      "id": "ADR006",
+      "test": "index_lifecycle::max_files_limits_real_indexing_as_well_as_preview",
+      "status": "failed"
+    },
+    {
+      "id": "ADR007",
+      "test": "index_lifecycle::multi_root_edits_never_resurrect_old_caller_ids",
+      "status": "failed"
+    },
+    {
+      "id": "ADR008",
+      "test": "index_lifecycle::removing_alpha_member_does_not_rebind_its_caller_to_beta_member",
+      "status": "failed"
+    },
+    {
+      "id": "ADR009",
+      "test": "language_end_to_end::end_to_end_go_generic_calls_preserve_every_arity",
+      "status": "failed"
+    },
+    {
+      "id": "ADR010",
+      "test": "language_end_to_end::end_to_end_go_structural_implementations_are_discoverable",
+      "status": "failed"
+    },
+    {
+      "id": "ADR011",
+      "test": "language_end_to_end::end_to_end_python_dispatch_uses_c3_not_nearest_ancestor",
+      "status": "failed"
+    },
+    {
+      "id": "ADR012",
+      "test": "language_end_to_end::end_to_end_python_field_annotation_does_not_change_local_receiver",
+      "status": "failed"
+    },
+    {
+      "id": "ADR013",
+      "test": "language_end_to_end::end_to_end_python_super_resolves_first_bases_inherited_method",
+      "status": "failed"
+    },
+    {
+      "id": "ADR014",
+      "test": "language_end_to_end::end_to_end_rust_annotation_prevents_factory_owner_false_edge",
+      "status": "failed"
+    },
+    {
+      "id": "ADR015",
+      "test": "parser_edge_cases::go_every_name_in_grouped_parameter_gets_the_type",
+      "status": "failed"
+    },
+    {
+      "id": "ADR016",
+      "test": "parser_edge_cases::go_generic_composite_literal_provides_receiver_type",
+      "status": "failed"
+    },
+    {
+      "id": "ADR017",
+      "test": "parser_edge_cases::go_inferred_var_and_short_declaration_have_equal_evidence",
+      "status": "failed"
+    },
+    {
+      "id": "ADR018",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_conversion_shaped_ast",
+      "status": "failed"
+    },
+    {
+      "id": "ADR019",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_index_shaped_ast",
+      "status": "failed"
+    },
+    {
+      "id": "ADR020",
+      "test": "parser_edge_cases::go_package_initializer_has_a_caller",
+      "status": "failed"
+    },
+    {
+      "id": "ADR021",
+      "test": "parser_edge_cases::go_shadowed_package_name_is_an_instance_receiver",
+      "status": "failed"
+    },
+    {
+      "id": "ADR022",
+      "test": "parser_edge_cases::go_two_type_arguments_control_is_already_extracted",
+      "status": "passed"
+    },
+    {
+      "id": "ADR023",
+      "test": "parser_edge_cases::python_annotated_attribute_does_not_rebind_bare_local",
+      "status": "failed"
+    },
+    {
+      "id": "ADR024",
+      "test": "parser_edge_cases::python_bare_decorator_application_is_recorded",
+      "status": "failed"
+    },
+    {
+      "id": "ADR025",
+      "test": "parser_edge_cases::python_default_argument_call_belongs_to_definition_environment",
+      "status": "failed"
+    },
+    {
+      "id": "ADR026",
+      "test": "parser_edge_cases::python_inheritance_helper_uses_c3_not_depth_first_deduplication",
+      "status": "failed"
+    },
+    {
+      "id": "ADR027",
+      "test": "parser_edge_cases::rust_explicit_local_annotation_outranks_factory_owner",
+      "status": "failed"
+    },
+    {
+      "id": "ADR028",
+      "test": "parser_edge_cases::rust_factory_owner_is_not_proof_of_return_type",
+      "status": "failed"
+    },
+    {
+      "id": "ADR029",
+      "test": "parser_edge_cases::rust_turbofish_preserves_free_call",
+      "status": "failed"
+    },
+    {
+      "id": "ADR030",
+      "test": "parser_edge_cases::rust_turbofish_preserves_method_call_and_receiver",
+      "status": "failed"
+    },
+    {
+      "id": "ADR031",
+      "test": "resolver_stages::python_field_annotation_cannot_overwrite_local_receiver_type",
+      "status": "failed"
+    },
+    {
+      "id": "ADR032",
+      "test": "resolver_stages::python_receiver_resolution_follows_mro_instead_of_shortest_distance",
+      "status": "failed"
+    },
+    {
+      "id": "ADR033",
+      "test": "resolver_stages::python_super_visits_inherited_method_of_first_base",
+      "status": "failed"
+    },
+    {
+      "id": "ADR034",
+      "test": "resolver_stages::rust_factory_receiver_must_target_return_type_not_associated_owner",
+      "status": "failed"
+    },
+    {
+      "id": "ADR035",
+      "test": "root_probes::different_line_control_preserves_both_calls",
+      "status": "passed"
+    },
+    {
+      "id": "ADR036",
+      "test": "root_probes::generated_line_after_64k_keeps_exact_source_column",
+      "status": "failed"
+    },
+    {
+      "id": "ADR037",
+      "test": "root_probes::same_line_free_and_associated_function_both_survive",
+      "status": "passed"
+    },
+    {
+      "id": "ADR038",
+      "test": "root_probes::separate_repeated_call_sites_keep_both_columns",
+      "status": "passed"
+    },
+    {
+      "id": "ADR039",
+      "test": "root_probes::typescript_formatting_does_not_change_resolved_graph",
+      "status": "passed"
+    },
+    {
+      "id": "ADR040",
+      "test": "root_probes::typescript_same_line_free_and_static_calls_both_survive",
+      "status": "failed"
+    },
+    {
+      "id": "ADR041",
+      "test": "root_probes::typescript_split_line_calls_have_no_duplicate_channel_record",
+      "status": "failed"
+    },
+    {
+      "id": "ADR042",
+      "test": "search_graph::class_qualification_does_not_lose_a_symbol_after_global_candidate_limiting",
+      "status": "failed"
+    },
+    {
+      "id": "ADR043",
+      "test": "search_graph::dense_graph_preserves_complete_local_enumeration_and_reports_network_budget_failure",
+      "status": "passed"
+    },
+    {
+      "id": "ADR044",
+      "test": "search_graph::exact_code_fragment_survives_query_parser_fallback",
+      "status": "failed"
+    },
+    {
+      "id": "ADR045",
+      "test": "search_graph::exact_name_lookup_reports_every_same_named_symbol",
+      "status": "failed"
+    },
+    {
+      "id": "ADR046",
+      "test": "search_graph::id_lookup_keeps_language_filter_consistent_with_name_lookup",
+      "status": "failed"
+    },
+    {
+      "id": "ADR047",
+      "test": "search_graph::impact_handles_a_diamond_cycle_and_self_recursion",
+      "status": "passed"
+    },
+    {
+      "id": "ADR048",
+      "test": "web_parser::full_graph_typescript_arrow_keeps_caller_identity",
+      "status": "failed"
+    },
+    {
+      "id": "ADR049",
+      "test": "web_parser::full_graph_typescript_default_import_calls_default_definition",
+      "status": "failed"
+    },
+    {
+      "id": "ADR050",
+      "test": "web_parser::full_graph_typescript_explicit_named_import_control",
+      "status": "passed"
+    },
+    {
+      "id": "ADR051",
+      "test": "web_parser::javascript_bare_arrow_parameter_is_not_the_caller_name",
+      "status": "failed"
+    },
+    {
+      "id": "ADR052",
+      "test": "web_parser::php_alias_import_retains_visible_name",
+      "status": "failed"
+    },
+    {
+      "id": "ADR053",
+      "test": "web_parser::php_grouped_imports_expand_prefix_and_alias",
+      "status": "failed"
+    },
+    {
+      "id": "ADR054",
+      "test": "web_parser::php_nullsafe_call_is_still_a_call_site",
+      "status": "failed"
+    },
+    {
+      "id": "ADR055",
+      "test": "web_parser::php_ordinary_receiver_control_already_works",
+      "status": "passed"
+    },
+    {
+      "id": "ADR056",
+      "test": "web_parser::php_promoted_dependency_is_a_field",
+      "status": "failed"
+    },
+    {
+      "id": "ADR057",
+      "test": "web_parser::php_property_declaration_emits_every_field",
+      "status": "failed"
+    },
+    {
+      "id": "ADR058",
+      "test": "web_parser::php_qualified_inheritance_is_extracted",
+      "status": "failed"
+    },
+    {
+      "id": "ADR059",
+      "test": "web_parser::php_simple_parameter_type_emits_usage",
+      "status": "failed"
+    },
+    {
+      "id": "ADR060",
+      "test": "web_parser::typescript_bare_arrow_parameter_is_not_the_caller_name",
+      "status": "failed"
+    },
+    {
+      "id": "ADR061",
+      "test": "web_parser::typescript_default_import_does_not_bind_same_named_named_export",
+      "status": "failed"
+    },
+    {
+      "id": "ADR062",
+      "test": "web_parser::typescript_parenthesized_arrow_control_already_works",
+      "status": "passed"
+    }
+  ]
+}

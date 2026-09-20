@@ -143,7 +143,7 @@ impl Pipeline {
         };
 
         // Clone settings for threads
-        let settings = Arc::clone(&self.settings);
+        let settings = Arc::new(self.settings_with_dependency_roots());
         let parse_threads = self.config.parse_threads;
         let read_threads = self.config.read_threads;
         let discover_threads = self.config.discover_threads;

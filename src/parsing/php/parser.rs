@@ -178,9 +178,9 @@ impl PhpParser {
         let end_pos = node.end_position();
         Range {
             start_line: start_pos.row as u32,
-            start_column: start_pos.column as u16,
+            start_column: start_pos.column as u32,
             end_line: end_pos.row as u32,
-            end_column: end_pos.column as u16,
+            end_column: end_pos.column as u32,
         }
     }
 
@@ -337,8 +337,12 @@ impl PhpParser {
             }
             "property_declaration" => {
                 self.register_handled_node(node.kind(), node.kind_id());
-                if let Some(symbol) = self.process_property(node, code, file_id, counter) {
-                    symbols.push(symbol);
+                symbols.extend(self.process_properties(node, code, file_id, counter));
+            }
+            "property_promotion_parameter" => {
+                self.register_handled_node(node.kind(), node.kind_id());
+                if let Some(name) = node.child_by_field_name("name") {
+                    symbols.push(self.property_symbol(node, name, code, file_id, counter));
                 }
             }
             "const_declaration" => {
@@ -667,39 +671,49 @@ impl PhpParser {
     }
 
     /// Process a property declaration node
-    fn process_property(
+    fn process_properties(
         &mut self,
         node: Node,
         code: &str,
         file_id: FileId,
         counter: &mut SymbolCounter,
-    ) -> Option<Symbol> {
-        // Find the property element within the declaration
+    ) -> Vec<Symbol> {
+        let mut symbols = Vec::new();
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "property_element" {
                 if let Some(name_node) = child.child_by_field_name("name") {
-                    let name = &code[name_node.byte_range()];
-                    // Remove $ prefix from property name if present
-                    let clean_name = name.strip_prefix('$').unwrap_or(name);
-
-                    let id = counter.next_id();
-
-                    let mut symbol = Symbol::new(
-                        id,
-                        clean_name,
-                        SymbolKind::Field,
-                        file_id,
-                        self.node_to_range(node),
-                    );
-                    // Set scope context
-                    symbol.scope_context = Some(self.context.current_scope_context());
-                    symbol.doc_comment = self.extract_doc_comment(&node, code).map(Into::into);
-                    return Some(symbol);
+                    symbols.push(self.property_symbol(node, name_node, code, file_id, counter));
                 }
             }
         }
-        None
+        symbols
+    }
+
+    fn property_symbol(
+        &self,
+        declaration: Node,
+        name_node: Node,
+        code: &str,
+        file_id: FileId,
+        counter: &mut SymbolCounter,
+    ) -> Symbol {
+        let name = &code[name_node.byte_range()];
+        let mut symbol = Symbol::new(
+            counter.next_id(),
+            name.strip_prefix('$').unwrap_or(name),
+            SymbolKind::Field,
+            file_id,
+            self.node_to_range(name_node),
+        );
+        // Promoted parameters are fields of the class, even though they are
+        // syntactically inside the constructor's parameter list.
+        symbol.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: self.context.current_class().map(Into::into),
+        });
+        symbol.signature = Some(code[declaration.byte_range()].to_string().into());
+        symbol.doc_comment = self.extract_doc_comment(&declaration, code).map(Into::into);
+        symbol
     }
 
     /// Process a constant declaration node
@@ -1025,12 +1039,142 @@ impl LanguageParser for PhpParser {
 
         let mut variable_types = Vec::with_capacity(16); // Typical function parameters
         self.extract_variable_types_from_node(tree.root_node(), code, &mut variable_types);
+        self.extract_property_receiver_types(tree.root_node(), code, &mut variable_types);
         variable_types
     }
 }
 
 // Helper methods for PhpParser
 impl PhpParser {
+    /// Declared properties provide bounded receiver evidence inside their own
+    /// class methods. This does not evaluate factories, magic properties, or
+    /// runtime containers, and does not guess across callable boundaries.
+    fn extract_property_receiver_types<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        bindings: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        if matches!(node.kind(), "class_declaration" | "trait_declaration") {
+            let Some(body) = node.child_by_field_name("body") else {
+                return;
+            };
+            let mut fields = std::collections::HashMap::new();
+            for declaration in body.named_children(&mut body.walk()) {
+                if declaration.kind() == "property_declaration" {
+                    if let Some(typ) = declaration
+                        .child_by_field_name("type")
+                        .and_then(|typ| Self::single_named_type(typ, code))
+                    {
+                        for property in declaration.named_children(&mut declaration.walk()) {
+                            if property.kind() == "property_element" {
+                                if let Some(name) = property.child_by_field_name("name") {
+                                    fields.insert(
+                                        code[name.byte_range()].trim_start_matches('$'),
+                                        typ,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else if declaration.kind() == "method_declaration"
+                    && declaration
+                        .child_by_field_name("name")
+                        .is_some_and(|name| &code[name.byte_range()] == "__construct")
+                {
+                    if let Some(parameters) = declaration.child_by_field_name("parameters") {
+                        for parameter in parameters.named_children(&mut parameters.walk()) {
+                            if parameter.kind() == "property_promotion_parameter" {
+                                if let (Some(name), Some(typ)) = (
+                                    parameter.child_by_field_name("name"),
+                                    parameter
+                                        .child_by_field_name("type")
+                                        .and_then(|typ| Self::single_named_type(typ, code)),
+                                ) {
+                                    fields.insert(
+                                        code[name.byte_range()].trim_start_matches('$'),
+                                        typ,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for declaration in body.named_children(&mut body.walk()) {
+                if declaration.kind() == "method_declaration" {
+                    if let Some(method_body) = declaration.child_by_field_name("body") {
+                        self.bind_property_calls(method_body, code, &fields, bindings);
+                    }
+                }
+            }
+        }
+        for child in node.named_children(&mut node.walk()) {
+            self.extract_property_receiver_types(child, code, bindings);
+        }
+    }
+
+    fn single_named_type<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        match node.kind() {
+            // Preserve qualification: reducing \\External\\Gateway to Gateway
+            // would bind an unrelated same-named local class.
+            "named_type" => Some(&code[node.byte_range()]),
+            "optional_type" => node
+                .named_children(&mut node.walk())
+                .find(|child| child.kind() == "named_type")
+                .map(|child| &code[child.byte_range()]),
+            _ => None,
+        }
+    }
+
+    fn bind_property_calls<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        fields: &std::collections::HashMap<&'a str, &'a str>,
+        bindings: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        if matches!(
+            node.kind(),
+            "function_definition"
+                | "anonymous_function"
+                | "arrow_function"
+                | "anonymous_class"
+                | "class_declaration"
+        ) {
+            return;
+        }
+        if matches!(
+            node.kind(),
+            "member_call_expression" | "nullsafe_member_call_expression"
+        ) {
+            if let Some(receiver) = node.child_by_field_name("object") {
+                if matches!(
+                    receiver.kind(),
+                    "member_access_expression" | "nullsafe_member_access_expression"
+                ) {
+                    if let (Some(object), Some(name)) = (
+                        receiver.child_by_field_name("object"),
+                        receiver.child_by_field_name("name"),
+                    ) {
+                        if &code[object.byte_range()] == "$this" && name.kind() == "name" {
+                            if let Some(typ) = fields.get(&code[name.byte_range()]) {
+                                bindings.push((
+                                    &code[receiver.byte_range()],
+                                    typ,
+                                    self.node_to_range(receiver),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for child in node.named_children(&mut node.walk()) {
+            self.bind_property_calls(child, code, fields, bindings);
+        }
+    }
+
     fn extract_calls_from_node<'a>(
         &mut self,
         node: Node,
@@ -1054,7 +1198,7 @@ impl PhpParser {
                     self.extract_calls_from_node(child, code, current_context, calls);
                 }
             }
-            "member_call_expression" => {
+            "member_call_expression" | "nullsafe_member_call_expression" => {
                 self.register_handled_node(node.kind(), node.kind_id());
                 // Method calls like $obj->method() or $this->method()
                 // Extract the method name from the "name" field
@@ -1118,7 +1262,7 @@ impl PhpParser {
         calls: &mut Vec<MethodCall>,
     ) {
         match node.kind() {
-            "member_call_expression" => {
+            "member_call_expression" | "nullsafe_member_call_expression" => {
                 if let (Some(name_node), Some(object_node)) = (
                     node.child_by_field_name("name"),
                     node.child_by_field_name("object"),
@@ -1194,7 +1338,10 @@ impl PhpParser {
                     if child.kind() == "class_interface_clause" {
                         let mut iface_cursor = child.walk();
                         for iface_child in child.children(&mut iface_cursor) {
-                            if iface_child.kind() == "name" {
+                            if matches!(
+                                iface_child.kind(),
+                                "name" | "qualified_name" | "relative_name"
+                            ) {
                                 let interface_name = &code[iface_child.byte_range()];
                                 let range = self.node_to_range(iface_child);
                                 implementations.push((class_name, interface_name, range));
@@ -1228,7 +1375,10 @@ impl PhpParser {
                     if child.kind() == "base_clause" {
                         let mut base_cursor = child.walk();
                         for base_child in child.children(&mut base_cursor) {
-                            if base_child.kind() == "name" {
+                            if matches!(
+                                base_child.kind(),
+                                "name" | "qualified_name" | "relative_name"
+                            ) {
                                 let base_name = &code[base_child.byte_range()];
                                 let range = self.node_to_range(base_child);
                                 extends.push((derived, base_name, range));
@@ -1253,13 +1403,26 @@ impl PhpParser {
         uses: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
         match node.kind() {
-            "typed_property_declaration" | "parameter_declaration" => {
+            "property_declaration"
+            | "simple_parameter"
+            | "variadic_parameter"
+            | "property_promotion_parameter" => {
                 if let Some(type_node) = node.child_by_field_name("type") {
-                    let type_name = &code[type_node.byte_range()];
-                    let range = self.node_to_range(type_node);
                     if let Some(context) = current_context {
-                        uses.push((context, type_name, range));
+                        self.extract_named_type_uses(type_node, code, context, uses);
                     }
+                }
+            }
+            "class_declaration"
+            | "interface_declaration"
+            | "trait_declaration"
+            | "enum_declaration" => {
+                let context = node
+                    .child_by_field_name("name")
+                    .map(|name| &code[name.byte_range()])
+                    .or(current_context);
+                for child in node.children(&mut node.walk()) {
+                    self.extract_uses_from_node(child, code, context, uses);
                 }
             }
             "function_definition" | "method_declaration" => {
@@ -1270,10 +1433,8 @@ impl PhpParser {
 
                 // Check return type
                 if let Some(return_type) = node.child_by_field_name("return_type") {
-                    let type_name = &code[return_type.byte_range()];
-                    let range = self.node_to_range(return_type);
                     if let Some(context) = new_context {
-                        uses.push((context, type_name, range));
+                        self.extract_named_type_uses(return_type, code, context, uses);
                     }
                 }
 
@@ -1288,6 +1449,22 @@ impl PhpParser {
                     self.extract_uses_from_node(child, code, current_context, uses);
                 }
             }
+        }
+    }
+
+    fn extract_named_type_uses<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        context: &'a str,
+        uses: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        if node.kind() == "named_type" {
+            uses.push((context, &code[node.byte_range()], self.node_to_range(node)));
+            return;
+        }
+        for child in node.named_children(&mut node.walk()) {
+            self.extract_named_type_uses(child, code, context, uses);
         }
     }
 
@@ -1344,37 +1521,42 @@ impl PhpParser {
         imports: &mut Vec<Import>,
     ) {
         if node.kind() == "namespace_use_declaration" {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() == "namespace_use_clause" {
-                    let mut path = String::new();
-                    let mut alias = None;
-
-                    let mut clause_cursor = child.walk();
-                    for clause_child in child.children(&mut clause_cursor) {
-                        match clause_child.kind() {
-                            "qualified_name" => {
-                                path = code[clause_child.byte_range()].to_string();
-                            }
-                            "namespace_aliasing_clause" => {
-                                if let Some(alias_node) = clause_child.child(1) {
-                                    alias = Some(code[alias_node.byte_range()].to_string());
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if !path.is_empty() {
-                        imports.push(Import {
-                            path,
-                            imported_name: None,
-                            alias,
-                            is_glob: false,
-                            file_id,
-                            is_type_only: false,
-                        });
-                    }
+            let group = node
+                .child_by_field_name("body")
+                .filter(|body| body.kind() == "namespace_use_group");
+            let prefix = if group.is_some() {
+                node.named_children(&mut node.walk())
+                    .find(|child| child.kind() == "namespace_name")
+                    .map(|child| &code[child.byte_range()])
+                    .unwrap_or("")
+            } else {
+                ""
+            };
+            let clauses = group.unwrap_or(node);
+            for clause in clauses.named_children(&mut clauses.walk()) {
+                if clause.kind() != "namespace_use_clause" {
+                    continue;
+                }
+                let alias_node = clause.child_by_field_name("alias");
+                let target = clause.named_children(&mut clause.walk()).find(|child| {
+                    Some(child.id()) != alias_node.map(|alias| alias.id())
+                        && matches!(child.kind(), "name" | "qualified_name" | "relative_name")
+                });
+                if let Some(target) = target {
+                    let suffix = &code[target.byte_range()];
+                    let path = if prefix.is_empty() {
+                        suffix.to_string()
+                    } else {
+                        format!("{}\\{}", prefix.trim_end_matches('\\'), suffix)
+                    };
+                    imports.push(Import {
+                        path,
+                        imported_name: None,
+                        alias: alias_node.map(|alias| code[alias.byte_range()].to_string()),
+                        is_glob: false,
+                        file_id,
+                        is_type_only: false,
+                    });
                 }
             }
         }
@@ -1462,7 +1644,10 @@ impl PhpParser {
         code: &'a str,
         variable_types: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
-        if node.kind() == "simple_parameter" {
+        if matches!(
+            node.kind(),
+            "simple_parameter" | "property_promotion_parameter"
+        ) {
             let mut type_name = None;
             let mut var_name = None;
 

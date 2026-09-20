@@ -458,9 +458,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -490,9 +490,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -522,9 +522,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -554,9 +554,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -586,9 +586,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -618,9 +618,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -750,9 +750,9 @@ impl CSharpParser {
 
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 calls.push((caller, callee, range));
             }
@@ -853,9 +853,9 @@ impl CSharpParser {
                                     let method = code[name_node.byte_range()].to_string();
                                     let range = Range::new(
                                         node.start_position().row as u32,
-                                        node.start_position().column as u16,
+                                        node.start_position().column as u32,
                                         node.end_position().row as u32,
-                                        node.end_position().column as u16,
+                                        node.end_position().column as u32,
                                     );
                                     // Syntactic Pascal heuristic; type-inference recovers lowercase classes later.
                                     let is_static = receiver
@@ -876,9 +876,9 @@ impl CSharpParser {
                             let method = code[expression_node.byte_range()].to_string();
                             let range = Range::new(
                                 node.start_position().row as u32,
-                                node.start_position().column as u16,
+                                node.start_position().column as u32,
                                 node.end_position().row as u32,
-                                node.end_position().column as u16,
+                                node.end_position().column as u32,
                             );
                             method_calls.push(
                                 MethodCall::new(caller, &method, range).with_receiver("this"),
@@ -931,9 +931,9 @@ impl CSharpParser {
                                 if interface_name.starts_with('I') && interface_name.len() > 1 {
                                     let range = Range::new(
                                         base_child.start_position().row as u32,
-                                        base_child.start_position().column as u16,
+                                        base_child.start_position().column as u32,
                                         base_child.end_position().row as u32,
-                                        base_child.end_position().column as u16,
+                                        base_child.end_position().column as u32,
                                     );
                                     implementations.push((class_name, interface_name, range));
                                 }
@@ -1150,9 +1150,9 @@ impl CSharpParser {
                         {
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             );
                             bindings.push((var_name, type_name, range));
                             continue; // Successfully extracted, move to next variable
@@ -1169,9 +1169,9 @@ impl CSharpParser {
                         if type_str != "var" {
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             );
                             bindings.push((var_name, type_str, range));
                         }
@@ -1466,9 +1466,9 @@ impl CSharpParser {
                             file_id,
                             Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             ),
                             Some(signature),
                             doc_comment,
@@ -1549,9 +1549,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1579,9 +1579,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1621,9 +1621,9 @@ impl CSharpParser {
                                 file_id,
                                 Range::new(
                                     var_child.start_position().row as u32,
-                                    var_child.start_position().column as u16,
+                                    var_child.start_position().column as u32,
                                     var_child.end_position().row as u32,
-                                    var_child.end_position().column as u16,
+                                    var_child.end_position().column as u32,
                                 ),
                                 Some(signature.clone()),
                                 doc_comment.clone(),
@@ -1658,9 +1658,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1689,9 +1689,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1720,9 +1720,9 @@ impl CSharpParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1756,9 +1756,9 @@ impl CSharpParser {
                         file_id,
                         Range::new(
                             child.start_position().row as u32,
-                            child.start_position().column as u16,
+                            child.start_position().column as u32,
                             child.end_position().row as u32,
-                            child.end_position().column as u16,
+                            child.end_position().column as u32,
                         ),
                         Some(signature.clone()),
                         doc_comment.clone(),

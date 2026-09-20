@@ -1,0 +1,8 @@
+{
+  "source_tree_sha256": "561b5d67bd92ab4832b12dfaada719bccfe7a820971a68da020925f171349eae",
+  "base_revision": "bf25b185717fdaac2e36ea55e0edee24a056dbee",
+  "worktree_dirty": true,
+  "report_sha256": "9cd0bcbbf855f5c20dd7d4c4b0b55af4fc8e1eed138c622e9ac69e6274bf3113",
+  "source_tree_hash_definition": "SHA256 of sorted JSON mapping src/**, tests/**, Cargo.toml and Cargo.lock to their individual SHA256 digests",
+  "embedding_inference": false
+}

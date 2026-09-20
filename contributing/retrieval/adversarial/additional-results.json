@@ -1,0 +1,644 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "revision": "bf25b185717fdaac2e36ea55e0edee24a056dbee",
+  "worktree_dirty": true,
+  "source_tree_sha256": "561b5d67bd92ab4832b12dfaada719bccfe7a820971a68da020925f171349eae",
+  "log_sha256": [
+    "39861a285b83f6bbc226b0eeec695001243f98a85804c64e1caf946976a08487"
+  ],
+  "test_source_sha256": {
+    "src/documents/chunker.rs": "def818488343e9a8facb6638aa77ce1f62ef9f351643b671c57a4f5c611e19fc",
+    "src/documents/embedding.rs": "e1110a8554a989b5e297b69334f85def70dc9c62a8799447c2d08d74cd1b77e6",
+    "src/documents/store.rs": "c39919aa8daa4ee9c63ffb4a7c694c85b3266ed920799dca238bdcbe88bf5fb3",
+    "src/indexing/facade_retrieval_tests.rs": "1cc22c0f83ef765ee89dac8749f979d38911fc977e3b3becae0fa4d0a23607f7",
+    "src/indexing/pipeline/dependencies.rs": "305465ba113bcc8515e22a63aea2ab599aa9b23c6e62be9018c929583ca86fb8",
+    "src/indexing/pipeline/stages/cleanup.rs": "0e8427270dee06b8c3bc3887cb0c76a1d35d112ab91bfb5a5f425407d74aac36",
+    "src/indexing/pipeline/stages/discover.rs": "9bc6c630f0ab2ef7173649f2d1d80a91648341d24df7615ad96988df4e8c7192",
+    "src/indexing/pipeline/stages/resolve.rs": "fce9c4bf153461478460d07e58aed195a0d89e93530c6a617196b761d2d68dac",
+    "src/parsing/go/method_sets.rs": "83ae635b8f1e44e301ae0d0e7109e565cdb90a9ebc58a1087600de42274c4772",
+    "src/storage/tantivy/codec.rs": "42f477e24bc9280e93daac8b6dedae0558230d55e070131543ef1b9247ca4c13",
+    "src/storage/tantivy/query.rs": "91b2a2753bf31e7de232c6c5714436b5fb6cc3f122e1347c88801274f3ddaa2f",
+    "src/watcher/unified.rs": "ec109179b6e7260a3a2b1f6b72c3d762514dfb654d93db13618baa71b2d053ed",
+    "tests/callback_references.rs": "1fdf5be9a614c81f0278d743ddb7e77036ab8ea61b25d1c676f3d9cfde777a6c",
+    "tests/document_backend_regressions.rs": "285a82fb2892b0b4daae1c8b939331f2563936ae062ec869db56d7725df24eb8",
+    "tests/document_embedding_regressions.rs": "1a3d04aeb17f409bde9f9dc75c08b4dc2cb39ad2d7279367ca232daa2d01a12f",
+    "tests/index_lifecycle_regressions.rs": "d5e88f0dec41f080f8bc721998c957f6bfbaf813cf0dce7f25bdd7bfc28a9b34",
+    "tests/language_semantics_regressions.rs": "cd726395bf3ed6fbdc29f9fa7570850044616781ce48639a3fd3567280ddb48d",
+    "tests/parser_semantics_regressions.rs": "72c0fa3594e2763db513bdb320d475470774bfbea7069ad3248e8c851030f283",
+    "tests/python_dispatch_regressions.rs": "99c67e85ad52b9150270bba555b16e519c85d88900e47674248b57d7037c5f4f",
+    "tests/web_export_regressions.rs": "b3c6874250a2978fb7c680bf7bfe3dce7f94bd570a6945f86db9cab51c0de49d"
+  },
+  "passed": 101,
+  "failed": 0,
+  "ignored": 0,
+  "results": [
+    {
+      "id": "ADX001",
+      "target": "lib",
+      "test": "documents::chunker::tests::heading_scopes_stay_in_source_order_across_crlf_and_small_sections",
+      "status": "passed"
+    },
+    {
+      "id": "ADX002",
+      "target": "lib",
+      "test": "documents::chunker::tests::fenced_indented_and_quoted_hashes_do_not_change_document_context",
+      "status": "passed"
+    },
+    {
+      "id": "ADX003",
+      "target": "lib",
+      "test": "documents::chunker::tests::headings_keep_skipped_levels_and_strip_only_separated_closing_hashes",
+      "status": "passed"
+    },
+    {
+      "id": "ADX004",
+      "target": "lib",
+      "test": "documents::chunker::tests::whitespace_merging_and_unicode_windows_reproduce_exact_source_ranges",
+      "status": "passed"
+    },
+    {
+      "id": "ADX005",
+      "target": "lib",
+      "test": "documents::embedding::tests::identity_tracks_endpoint_and_model_without_persisting_url_credentials",
+      "status": "passed"
+    },
+    {
+      "id": "ADX006",
+      "target": "lib",
+      "test": "documents::store::preview_tests::unicode_expansion_before_match_keeps_kwic_and_highlight_source_positions",
+      "status": "passed"
+    },
+    {
+      "id": "ADX007",
+      "target": "lib",
+      "test": "documents::store::preview_tests::expanded_or_shrunk_keywords_highlight_whole_original_characters",
+      "status": "passed"
+    },
+    {
+      "id": "ADX008",
+      "target": "lib",
+      "test": "documents::store::preview_tests::unicode_adjacent_highlights_merge_without_crossing_newlines",
+      "status": "passed"
+    },
+    {
+      "id": "ADX009",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::exact_lookup_boundaries_filter_before_pagination",
+      "status": "passed"
+    },
+    {
+      "id": "ADX010",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::symbol_listing_reports_total_and_empty_page_without_false_absence",
+      "status": "passed"
+    },
+    {
+      "id": "ADX011",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::invalid_retrieve_search_limit_remains_an_error",
+      "status": "passed"
+    },
+    {
+      "id": "ADX012",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::semantic_context_preserves_results_when_one_impact_exceeds_budget",
+      "status": "passed"
+    },
+    {
+      "id": "ADX013",
+      "target": "lib",
+      "test": "indexing::pipeline::dependencies::tests::package_entry_and_regular_module_have_distinct_dependency_keys",
+      "status": "passed"
+    },
+    {
+      "id": "ADX014",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::cleanup::tests::rebound_targets_keep_recorded_local_parent_and_namespace_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADX015",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::discover::tests::legacy_second_valued_mtime_is_verified_with_a_hash",
+      "status": "passed"
+    },
+    {
+      "id": "ADX016",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::discover::tests::equal_coarse_or_future_mtime_still_checks_changed_bytes",
+      "status": "passed"
+    },
+    {
+      "id": "ADX017",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_distinguish_pointer_value_and_embedded_receivers",
+      "status": "passed"
+    },
+    {
+      "id": "ADX018",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_preserve_ambiguity_and_field_shadowing",
+      "status": "passed"
+    },
+    {
+      "id": "ADX019",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_compare_signatures_and_merge_interface_requirements",
+      "status": "passed"
+    },
+    {
+      "id": "ADX020",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_keep_private_names_and_shadowed_builtins_package_specific",
+      "status": "passed"
+    },
+    {
+      "id": "ADX021",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_do_not_equate_unresolved_array_constants",
+      "status": "passed"
+    },
+    {
+      "id": "ADX022",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_empty_interfaces_cover_all_complete_types_without_a_cap",
+      "status": "passed"
+    },
+    {
+      "id": "ADX023",
+      "target": "lib",
+      "test": "storage::tantivy::codec::tests::long_source_columns_survive_storage_and_reload",
+      "status": "passed"
+    },
+    {
+      "id": "ADX024",
+      "target": "lib",
+      "test": "storage::tantivy::query::review_budget_tests::literal_code_fallback_uses_analyzed_phrase_and_rejects_decoys",
+      "status": "passed"
+    },
+    {
+      "id": "ADX025",
+      "target": "lib",
+      "test": "watcher::unified::tests::nested_ignore_policy_reconciles_exclusion_and_reinclusion",
+      "status": "passed"
+    },
+    {
+      "id": "ADX026",
+      "target": "lib",
+      "test": "watcher::unified::tests::preparation_watches_policy_in_an_initially_excluded_code_directory",
+      "status": "passed"
+    },
+    {
+      "id": "ADX027",
+      "target": "callback_references",
+      "test": "registered_route_handler_is_a_reference_with_source_evidence",
+      "status": "passed"
+    },
+    {
+      "id": "ADX028",
+      "target": "callback_references",
+      "test": "imported_callback_alias_retains_provider_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADX029",
+      "target": "callback_references",
+      "test": "parameter_shadow_does_not_reference_same_named_global_handler",
+      "status": "passed"
+    },
+    {
+      "id": "ADX030",
+      "target": "callback_references",
+      "test": "passing_strings_or_members_does_not_invent_callback_targets",
+      "status": "passed"
+    },
+    {
+      "id": "ADX031",
+      "target": "document_embedding_regressions",
+      "test": "force_reindex_preserves_one_live_chunk_per_source",
+      "status": "passed"
+    },
+    {
+      "id": "ADX032",
+      "target": "document_embedding_regressions",
+      "test": "force_selected_collection_preserves_other_collection_tracking",
+      "status": "passed"
+    },
+    {
+      "id": "ADX033",
+      "target": "document_embedding_regressions",
+      "test": "overlapping_collections_are_indexed_or_rejected_explicitly",
+      "status": "passed"
+    },
+    {
+      "id": "ADX034",
+      "target": "document_embedding_regressions",
+      "test": "overlapping_roots_deduplicate_discovered_files",
+      "status": "passed"
+    },
+    {
+      "id": "ADX035",
+      "target": "document_embedding_regressions",
+      "test": "equal_second_mtime_does_not_hide_content_edits",
+      "status": "passed"
+    },
+    {
+      "id": "ADX036",
+      "target": "document_embedding_regressions",
+      "test": "chunking_config_changes_invalidate_unchanged_file_state",
+      "status": "passed"
+    },
+    {
+      "id": "ADX037",
+      "target": "document_embedding_regressions",
+      "test": "enabling_embeddings_populates_existing_metadata_only_chunks",
+      "status": "passed"
+    },
+    {
+      "id": "ADX038",
+      "target": "document_embedding_regressions",
+      "test": "equal_dimension_model_change_rebuilds_or_errors",
+      "status": "passed"
+    },
+    {
+      "id": "ADX039",
+      "target": "document_embedding_regressions",
+      "test": "embedding_failure_can_resume_in_same_store",
+      "status": "passed"
+    },
+    {
+      "id": "ADX040",
+      "target": "document_embedding_regressions",
+      "test": "embedding_failure_then_reopen_does_not_duplicate_metadata",
+      "status": "passed"
+    },
+    {
+      "id": "ADX041",
+      "target": "document_embedding_regressions",
+      "test": "absent_lexical_terms_do_not_return_arbitrary_chunks",
+      "status": "passed"
+    },
+    {
+      "id": "ADX042",
+      "target": "document_embedding_regressions",
+      "test": "heading_hierarchy_respects_source_order",
+      "status": "passed"
+    },
+    {
+      "id": "ADX043",
+      "target": "document_embedding_regressions",
+      "test": "fenced_code_comments_do_not_become_document_headings",
+      "status": "passed"
+    },
+    {
+      "id": "ADX044",
+      "target": "document_embedding_regressions",
+      "test": "chunk_ranges_reproduce_source_after_whitespace_merging",
+      "status": "passed"
+    },
+    {
+      "id": "ADX045",
+      "target": "document_embedding_regressions",
+      "test": "unicode_case_expansion_does_not_panic_during_preview",
+      "status": "passed"
+    },
+    {
+      "id": "ADX046",
+      "target": "document_embedding_regressions",
+      "test": "control_unchanged_index_reuses_embeddings_and_deletion_hides_hits",
+      "status": "passed"
+    },
+    {
+      "id": "ADX047",
+      "target": "index_lifecycle_regressions",
+      "test": "multi_root_mutations_match_fresh_graph_in_both_orders",
+      "status": "passed"
+    },
+    {
+      "id": "ADX048",
+      "target": "index_lifecycle_regressions",
+      "test": "unresolved_import_dependencies_survive_reopening",
+      "status": "passed"
+    },
+    {
+      "id": "ADX049",
+      "target": "index_lifecycle_regressions",
+      "test": "persisted_dynamic_roots_retarget_import_only_barrels",
+      "status": "passed"
+    },
+    {
+      "id": "ADX050",
+      "target": "index_lifecycle_regressions",
+      "test": "unrelated_relative_importers_keep_their_symbol_ids",
+      "status": "passed"
+    },
+    {
+      "id": "ADX051",
+      "target": "index_lifecycle_regressions",
+      "test": "max_files_is_global_deterministic_and_zero_is_not_deletion_evidence",
+      "status": "passed"
+    },
+    {
+      "id": "ADX052",
+      "target": "index_lifecycle_regressions",
+      "test": "bounded_barrel_update_invalidates_then_repairs_after_reopen_without_source_edits",
+      "status": "passed"
+    },
+    {
+      "id": "ADX053",
+      "target": "language_semantics_regressions",
+      "test": "python_incremental_c3_keeps_unchanged_imported_ancestor_identities",
+      "status": "passed"
+    },
+    {
+      "id": "ADX054",
+      "target": "language_semantics_regressions",
+      "test": "go_interface_signature_edit_removes_stale_implementation_without_rebinding_it",
+      "status": "passed"
+    },
+    {
+      "id": "ADX055",
+      "target": "language_semantics_regressions",
+      "test": "go_embedded_method_edit_recomputes_unchanged_wrapper_implementation",
+      "status": "passed"
+    },
+    {
+      "id": "ADX056",
+      "target": "language_semantics_regressions",
+      "test": "go_pointer_only_relationship_retains_receiver_evidence",
+      "status": "passed"
+    },
+    {
+      "id": "ADX057",
+      "target": "language_semantics_regressions",
+      "test": "python_annotation_dependencies_do_not_create_eager_call_edges",
+      "status": "passed"
+    },
+    {
+      "id": "ADX058",
+      "target": "parser_semantics_regressions",
+      "test": "python_postponed_annotation_calls_are_type_uses",
+      "status": "passed"
+    },
+    {
+      "id": "ADX059",
+      "target": "parser_semantics_regressions",
+      "test": "python_parent_positions_preserve_source_order",
+      "status": "passed"
+    },
+    {
+      "id": "ADX060",
+      "target": "parser_semantics_regressions",
+      "test": "go_indexed_callable_values_do_not_call_their_container",
+      "status": "passed"
+    },
+    {
+      "id": "ADX061",
+      "target": "python_dispatch_regressions",
+      "test": "self_dispatch_uses_the_same_c3_order_as_an_annotated_receiver",
+      "status": "passed"
+    },
+    {
+      "id": "ADX062",
+      "target": "python_dispatch_regressions",
+      "test": "unresolved_imported_parent_never_uses_an_unrelated_same_named_class",
+      "status": "passed"
+    },
+    {
+      "id": "ADX063",
+      "target": "python_dispatch_regressions",
+      "test": "inconsistent_c3_order_does_not_choose_an_arbitrary_parent_method",
+      "status": "passed"
+    },
+    {
+      "id": "ADX064",
+      "target": "web_export_regressions",
+      "test": "javascript_default_export_and_bare_arrow_keep_definition_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADX065",
+      "target": "web_export_regressions",
+      "test": "named_and_default_aliases_survive_three_barrels",
+      "status": "passed"
+    },
+    {
+      "id": "ADX066",
+      "target": "web_export_regressions",
+      "test": "import_then_local_export_keeps_the_imported_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADX067",
+      "target": "web_export_regressions",
+      "test": "ordinary_import_does_not_implicitly_export_a_binding",
+      "status": "passed"
+    },
+    {
+      "id": "ADX068",
+      "target": "web_export_regressions",
+      "test": "star_export_excludes_default_even_with_a_same_named_decoy",
+      "status": "passed"
+    },
+    {
+      "id": "ADX069",
+      "target": "web_export_regressions",
+      "test": "explicit_export_takes_precedence_over_conflicting_star_export",
+      "status": "passed"
+    },
+    {
+      "id": "ADX070",
+      "target": "web_export_regressions",
+      "test": "conflicting_star_exports_fail_closed",
+      "status": "passed"
+    },
+    {
+      "id": "ADX071",
+      "target": "web_export_regressions",
+      "test": "diamond_star_exports_of_the_same_definition_are_unambiguous",
+      "status": "passed"
+    },
+    {
+      "id": "ADX072",
+      "target": "web_export_regressions",
+      "test": "cyclic_barrel_with_reachable_leaf_terminates_and_resolves",
+      "status": "passed"
+    },
+    {
+      "id": "ADX073",
+      "target": "web_export_regressions",
+      "test": "namespace_import_calls_the_public_member",
+      "status": "passed"
+    },
+    {
+      "id": "ADX074",
+      "target": "web_export_regressions",
+      "test": "namespace_reexport_calls_the_original_definition",
+      "status": "passed"
+    },
+    {
+      "id": "ADX075",
+      "target": "web_export_regressions",
+      "test": "namespace_private_member_does_not_fall_through_to_a_decoy",
+      "status": "passed"
+    },
+    {
+      "id": "ADX076",
+      "target": "web_export_regressions",
+      "test": "typescript_js_specifier_resolves_the_typescript_source",
+      "status": "passed"
+    },
+    {
+      "id": "ADX077",
+      "target": "web_export_regressions",
+      "test": "type_only_barrel_preserves_uses_without_creating_runtime_calls",
+      "status": "passed"
+    },
+    {
+      "id": "ADX078",
+      "target": "web_export_regressions",
+      "test": "exports_are_persisted_for_a_reopened_partial_index",
+      "status": "passed"
+    },
+    {
+      "id": "ADX079",
+      "target": "web_export_regressions",
+      "test": "php_promoted_and_nullable_declared_fields_resolve_their_own_type",
+      "status": "passed"
+    },
+    {
+      "id": "ADX080",
+      "target": "web_export_regressions",
+      "test": "php_untyped_and_union_properties_do_not_guess_a_receiver_class",
+      "status": "passed"
+    },
+    {
+      "id": "ADX081",
+      "target": "web_export_regressions",
+      "test": "tsconfig_alias_missing_export_is_negative_evidence_for_resolution",
+      "status": "passed"
+    },
+    {
+      "id": "ADX082",
+      "target": "lib",
+      "test": "indexing::facade::retrieval_context_regressions::reference_context_surfaces_remain_distinct_from_calls",
+      "status": "passed"
+    },
+    {
+      "id": "ADX083",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_external_test_package_cannot_satisfy_private_methods",
+      "status": "passed"
+    },
+    {
+      "id": "ADX084",
+      "target": "lib",
+      "test": "parsing::go::method_sets::tests::method_sets_external_test_package_named_types_have_distinct_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADX085",
+      "target": "callback_references",
+      "test": "local_bindings_do_not_reference_same_named_global_handler",
+      "status": "passed"
+    },
+    {
+      "id": "ADX086",
+      "target": "python_dispatch_regressions",
+      "test": "undefined_parent_never_uses_an_unimported_global_class",
+      "status": "passed"
+    },
+    {
+      "id": "ADX087",
+      "target": "web_export_regressions",
+      "test": "typescript_declared_and_constructor_fields_anchor_method_calls",
+      "status": "passed"
+    },
+    {
+      "id": "ADX088",
+      "target": "web_export_regressions",
+      "test": "typescript_field_type_stops_at_an_ordinary_function_this_boundary",
+      "status": "passed"
+    },
+    {
+      "id": "ADX089",
+      "target": "document_backend_regressions",
+      "test": "disabled_document_embeddings_never_initialize_configured_backend",
+      "status": "passed"
+    },
+    {
+      "id": "ADX090",
+      "target": "document_backend_regressions",
+      "test": "configured_remote_documents_use_model_dimension_and_heading_input_consistently",
+      "status": "passed"
+    },
+    {
+      "id": "ADX091",
+      "target": "document_backend_regressions",
+      "test": "one_shot_document_search_reads_index_without_reembedding_changed_sources",
+      "status": "passed"
+    },
+    {
+      "id": "ADX092",
+      "target": "web_export_regressions",
+      "test": "php_qualified_property_type_does_not_capture_a_bare_named_decoy",
+      "status": "passed"
+    },
+    {
+      "id": "ADX093",
+      "target": "lib",
+      "test": "documents::store::tests::lexical_search_finds_relevant_chunk_after_ten_thousand_nonmatches",
+      "status": "passed"
+    },
+    {
+      "id": "ADX094",
+      "target": "lib",
+      "test": "watcher::unified::document_collection_tests::document_watcher_indexes_new_and_recreated_files_with_collection_overrides",
+      "status": "passed"
+    },
+    {
+      "id": "ADX095",
+      "target": "lib",
+      "test": "watcher::unified::document_collection_tests::document_watcher_catches_moved_subtrees_and_nested_ignore_changes",
+      "status": "passed"
+    },
+    {
+      "id": "ADX096",
+      "target": "parser_semantics_regressions",
+      "test": "rust_factory_evidence_does_not_cross_lexical_modules_or_import_aliases",
+      "status": "passed"
+    },
+    {
+      "id": "ADX097",
+      "target": "parser_semantics_regressions",
+      "test": "rust_factory_evidence_fails_closed_for_duplicate_owner_declarations",
+      "status": "passed"
+    },
+    {
+      "id": "ADX098",
+      "target": "web_export_regressions",
+      "test": "dense_barrel_diamond_exhaustion_cannot_publish_a_partial_winner",
+      "status": "passed"
+    },
+    {
+      "id": "ADX099",
+      "target": "web_export_regressions",
+      "test": "export_depth_exhaustion_cannot_hide_a_conflicting_target",
+      "status": "passed"
+    },
+    {
+      "id": "ADX100",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::resolve::tests::python_self_form_miss_does_not_capture_a_free_function",
+      "status": "passed"
+    },
+    {
+      "id": "ADX101",
+      "target": "lib",
+      "test": "indexing::pipeline::stages::resolve::tests::inherited_member_resolves_cross_file_from_parent_identity",
+      "status": "passed"
+    }
+  ],
+  "note": "All listed cases have measured outcomes from completed Cargo groups. No outcome for uncatalogued repository tests is implied."
+}

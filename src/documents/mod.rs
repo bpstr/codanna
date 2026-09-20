@@ -8,6 +8,7 @@
 
 pub mod chunker;
 pub mod config;
+mod embedding;
 pub mod schema;
 pub mod status;
 pub mod store;
@@ -23,9 +24,21 @@ pub use store::{CollectionStats, DocumentStore, IndexProgress, SearchQuery, Sear
 pub use types::{ChunkId, CollectionId, DocumentChunk, FileState};
 
 use crate::config::Settings;
-use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
+use crate::vector::{EmbeddingGenerator, VectorDimension};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Open a store with the same enabled flag, model, dimensions and backend for
+/// CLI indexing, CLI search and MCP. Disabled embeddings never load a model.
+pub fn open_from_settings(settings: &Settings) -> store::StoreResult<DocumentStore> {
+    let path = settings.index_path.join("documents");
+    if !settings.semantic_search.enabled {
+        return DocumentStore::new(path, VectorDimension::dimension_384());
+    }
+    let generator = embedding::ConfiguredGenerator::new(&settings.semantic_search)
+        .map_err(|error| store::DocumentStoreError::Embedding(error.to_string()))?;
+    DocumentStore::new(path, generator.dimension())?.with_embeddings(Box::new(generator))
+}
 
 /// Load document store from settings if enabled and indexed.
 ///
@@ -43,17 +56,7 @@ pub fn load_from_settings(settings: &Settings) -> Option<Arc<RwLock<DocumentStor
         return None;
     }
 
-    let generator = match FastEmbedGenerator::from_settings(&settings.semantic_search.model, false)
-    {
-        Ok(g) => g,
-        Err(e) => {
-            tracing::warn!(target: "documents", "failed to create embedding generator: {e}");
-            return None;
-        }
-    };
-
-    let dimension = generator.dimension();
-    let store = match DocumentStore::new(&doc_path, dimension) {
+    let store = match open_from_settings(settings) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(target: "documents", "failed to open document store: {e}");
@@ -61,14 +64,6 @@ pub fn load_from_settings(settings: &Settings) -> Option<Arc<RwLock<DocumentStor
         }
     };
 
-    let store_with_emb = match store.with_embeddings(Box::new(generator)) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(target: "documents", "failed to attach embeddings to store: {e}");
-            return None;
-        }
-    };
-
     tracing::info!(target: "documents", "loaded document store from {}", crate::parsing::paths::render_absolute_path(&doc_path).display());
-    Some(Arc::new(RwLock::new(store_with_emb)))
+    Some(Arc::new(RwLock::new(store)))
 }

@@ -35,7 +35,7 @@ pub struct SearchResult {
     /// 1-indexed editor line of the symbol's definition start
     pub line: u32,
     /// 0-indexed column (machine coordinate)
-    pub column: u16,
+    pub column: u32,
     pub doc_comment: Option<String>,
     pub signature: Option<String>,
     pub module_path: String,

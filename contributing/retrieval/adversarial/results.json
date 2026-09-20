@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "target": "adversarial_regressions",
+  "revision": "bf25b185717fdaac2e36ea55e0edee24a056dbee",
+  "worktree_dirty": true,
+  "status": "completed",
+  "test_count": 62,
+  "passed": 62,
+  "failed": 0,
+  "ignored": 0,
+  "log_sha256": "d8076fdad3b79496472e1ed318fa592df909ab848c9486370a741e551eaec43a",
+  "source_tree_sha256": "4707e92b80fd21473df1c1690a300dfeae16fd2c7f97dc5f5dff55a1a405c031",
+  "test_source_sha256": {
+    "tests/adversarial/index_lifecycle/review_index_lifecycle.rs": "c4e03b9802696de4b7d84a6ab0a10185ec480d3b9d6adbf1e617e19addd1a816",
+    "tests/adversarial/rust_go_python/end_to_end.rs": "d027277e1fb71596cd83a75f9d4b99c1516a07fdfc1d8df76303f5cfbfedeed3",
+    "tests/adversarial/rust_go_python/parser_edge_cases.rs": "85442b765503e32c113ed0efb662b06b5a24c4cb9b0180e54f50a3ffe8750eee",
+    "tests/adversarial/rust_go_python/pipeline_edge_cases.rs": "6656e8f97c126dc83be88ec2ef1e951c27d777e440f5fa760fec21a84a87d997",
+    "tests/adversarial/root/adversarial_root.rs": "8d342e5311f451b9560c918e5d47b7965996413237564e7237c4957682efeb6d",
+    "tests/adversarial/search_graph/search_graph_review.rs": "25d608a7630136ec3c24549486bf0ef9283b490ac30987963acc306b62136a83",
+    "tests/adversarial/ts_php/regressions.rs": "347e6d1489a97627d6c4ca0ac5800d402168ad494931a8ca628624ea0ab7eac5"
+  },
+  "results": [
+    {
+      "id": "ADR001",
+      "test": "index_lifecycle::adding_missing_import_target_repairs_unchanged_caller",
+      "status": "passed"
+    },
+    {
+      "id": "ADR002",
+      "test": "index_lifecycle::batch_discovery_rejects_partial_invalid_ignore_rules",
+      "status": "passed"
+    },
+    {
+      "id": "ADR003",
+      "test": "index_lifecycle::changing_reexport_retargets_unchanged_consumer",
+      "status": "passed"
+    },
+    {
+      "id": "ADR004",
+      "test": "index_lifecycle::delayed_rescan_detects_different_nanoseconds_in_same_mtime_second",
+      "status": "passed"
+    },
+    {
+      "id": "ADR005",
+      "test": "index_lifecycle::deleting_then_restoring_target_recovers_unchanged_caller",
+      "status": "passed"
+    },
+    {
+      "id": "ADR006",
+      "test": "index_lifecycle::max_files_limits_real_indexing_as_well_as_preview",
+      "status": "passed"
+    },
+    {
+      "id": "ADR007",
+      "test": "index_lifecycle::multi_root_edits_never_resurrect_old_caller_ids",
+      "status": "passed"
+    },
+    {
+      "id": "ADR008",
+      "test": "index_lifecycle::removing_alpha_member_does_not_rebind_its_caller_to_beta_member",
+      "status": "passed"
+    },
+    {
+      "id": "ADR009",
+      "test": "language_end_to_end::end_to_end_go_generic_calls_preserve_every_arity",
+      "status": "passed"
+    },
+    {
+      "id": "ADR010",
+      "test": "language_end_to_end::end_to_end_go_structural_implementations_are_discoverable",
+      "status": "passed"
+    },
+    {
+      "id": "ADR011",
+      "test": "language_end_to_end::end_to_end_python_dispatch_uses_c3_not_nearest_ancestor",
+      "status": "passed"
+    },
+    {
+      "id": "ADR012",
+      "test": "language_end_to_end::end_to_end_python_field_annotation_does_not_change_local_receiver",
+      "status": "passed"
+    },
+    {
+      "id": "ADR013",
+      "test": "language_end_to_end::end_to_end_python_super_resolves_first_bases_inherited_method",
+      "status": "passed"
+    },
+    {
+      "id": "ADR014",
+      "test": "language_end_to_end::end_to_end_rust_annotation_prevents_factory_owner_false_edge",
+      "status": "passed"
+    },
+    {
+      "id": "ADR015",
+      "test": "parser_edge_cases::go_every_name_in_grouped_parameter_gets_the_type",
+      "status": "passed"
+    },
+    {
+      "id": "ADR016",
+      "test": "parser_edge_cases::go_generic_composite_literal_provides_receiver_type",
+      "status": "passed"
+    },
+    {
+      "id": "ADR017",
+      "test": "parser_edge_cases::go_inferred_var_and_short_declaration_have_equal_evidence",
+      "status": "passed"
+    },
+    {
+      "id": "ADR018",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_conversion_shaped_ast",
+      "status": "passed"
+    },
+    {
+      "id": "ADR019",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_index_shaped_ast",
+      "status": "passed"
+    },
+    {
+      "id": "ADR020",
+      "test": "parser_edge_cases::go_package_initializer_has_a_caller",
+      "status": "passed"
+    },
+    {
+      "id": "ADR021",
+      "test": "parser_edge_cases::go_shadowed_package_name_is_an_instance_receiver",
+      "status": "passed"
+    },
+    {
+      "id": "ADR022",
+      "test": "parser_edge_cases::go_two_type_arguments_control_is_already_extracted",
+      "status": "passed"
+    },
+    {
+      "id": "ADR023",
+      "test": "parser_edge_cases::python_annotated_attribute_does_not_rebind_bare_local",
+      "status": "passed"
+    },
+    {
+      "id": "ADR024",
+      "test": "parser_edge_cases::python_bare_decorator_application_is_recorded",
+      "status": "passed"
+    },
+    {
+      "id": "ADR025",
+      "test": "parser_edge_cases::python_default_argument_call_belongs_to_definition_environment",
+      "status": "passed"
+    },
+    {
+      "id": "ADR026",
+      "test": "parser_edge_cases::python_inheritance_helper_uses_c3_not_depth_first_deduplication",
+      "status": "passed"
+    },
+    {
+      "id": "ADR027",
+      "test": "parser_edge_cases::rust_explicit_local_annotation_outranks_factory_owner",
+      "status": "passed"
+    },
+    {
+      "id": "ADR028",
+      "test": "parser_edge_cases::rust_factory_owner_is_not_proof_of_return_type",
+      "status": "passed"
+    },
+    {
+      "id": "ADR029",
+      "test": "parser_edge_cases::rust_turbofish_preserves_free_call",
+      "status": "passed"
+    },
+    {
+      "id": "ADR030",
+      "test": "parser_edge_cases::rust_turbofish_preserves_method_call_and_receiver",
+      "status": "passed"
+    },
+    {
+      "id": "ADR031",
+      "test": "resolver_stages::python_field_annotation_cannot_overwrite_local_receiver_type",
+      "status": "passed"
+    },
+    {
+      "id": "ADR032",
+      "test": "resolver_stages::python_receiver_resolution_follows_mro_instead_of_shortest_distance",
+      "status": "passed"
+    },
+    {
+      "id": "ADR033",
+      "test": "resolver_stages::python_super_visits_inherited_method_of_first_base",
+      "status": "passed"
+    },
+    {
+      "id": "ADR034",
+      "test": "resolver_stages::rust_factory_receiver_must_target_return_type_not_associated_owner",
+      "status": "passed"
+    },
+    {
+      "id": "ADR035",
+      "test": "root_probes::different_line_control_preserves_both_calls",
+      "status": "passed"
+    },
+    {
+      "id": "ADR036",
+      "test": "root_probes::generated_line_after_64k_keeps_exact_source_column",
+      "status": "passed"
+    },
+    {
+      "id": "ADR037",
+      "test": "root_probes::same_line_free_and_associated_function_both_survive",
+      "status": "passed"
+    },
+    {
+      "id": "ADR038",
+      "test": "root_probes::separate_repeated_call_sites_keep_both_columns",
+      "status": "passed"
+    },
+    {
+      "id": "ADR039",
+      "test": "root_probes::typescript_formatting_does_not_change_resolved_graph",
+      "status": "passed"
+    },
+    {
+      "id": "ADR040",
+      "test": "root_probes::typescript_same_line_free_and_static_calls_both_survive",
+      "status": "passed"
+    },
+    {
+      "id": "ADR041",
+      "test": "root_probes::typescript_split_line_calls_have_no_duplicate_channel_record",
+      "status": "passed"
+    },
+    {
+      "id": "ADR042",
+      "test": "search_graph::class_qualification_does_not_lose_a_symbol_after_global_candidate_limiting",
+      "status": "passed"
+    },
+    {
+      "id": "ADR043",
+      "test": "search_graph::dense_graph_preserves_complete_local_enumeration_and_reports_network_budget_failure",
+      "status": "passed"
+    },
+    {
+      "id": "ADR044",
+      "test": "search_graph::exact_code_fragment_survives_query_parser_fallback",
+      "status": "passed"
+    },
+    {
+      "id": "ADR045",
+      "test": "search_graph::exact_name_lookup_reports_every_same_named_symbol",
+      "status": "passed"
+    },
+    {
+      "id": "ADR046",
+      "test": "search_graph::id_lookup_keeps_language_filter_consistent_with_name_lookup",
+      "status": "passed"
+    },
+    {
+      "id": "ADR047",
+      "test": "search_graph::impact_handles_a_diamond_cycle_and_self_recursion",
+      "status": "passed"
+    },
+    {
+      "id": "ADR048",
+      "test": "web_parser::full_graph_typescript_arrow_keeps_caller_identity",
+      "status": "passed"
+    },
+    {
+      "id": "ADR049",
+      "test": "web_parser::full_graph_typescript_default_import_calls_default_definition",
+      "status": "passed"
+    },
+    {
+      "id": "ADR050",
+      "test": "web_parser::full_graph_typescript_explicit_named_import_control",
+      "status": "passed"
+    },
+    {
+      "id": "ADR051",
+      "test": "web_parser::javascript_bare_arrow_parameter_is_not_the_caller_name",
+      "status": "passed"
+    },
+    {
+      "id": "ADR052",
+      "test": "web_parser::php_alias_import_retains_visible_name",
+      "status": "passed"
+    },
+    {
+      "id": "ADR053",
+      "test": "web_parser::php_grouped_imports_expand_prefix_and_alias",
+      "status": "passed"
+    },
+    {
+      "id": "ADR054",
+      "test": "web_parser::php_nullsafe_call_is_still_a_call_site",
+      "status": "passed"
+    },
+    {
+      "id": "ADR055",
+      "test": "web_parser::php_ordinary_receiver_control_already_works",
+      "status": "passed"
+    },
+    {
+      "id": "ADR056",
+      "test": "web_parser::php_promoted_dependency_is_a_field",
+      "status": "passed"
+    },
+    {
+      "id": "ADR057",
+      "test": "web_parser::php_property_declaration_emits_every_field",
+      "status": "passed"
+    },
+    {
+      "id": "ADR058",
+      "test": "web_parser::php_qualified_inheritance_is_extracted",
+      "status": "passed"
+    },
+    {
+      "id": "ADR059",
+      "test": "web_parser::php_simple_parameter_type_emits_usage",
+      "status": "passed"
+    },
+    {
+      "id": "ADR060",
+      "test": "web_parser::typescript_bare_arrow_parameter_is_not_the_caller_name",
+      "status": "passed"
+    },
+    {
+      "id": "ADR061",
+      "test": "web_parser::typescript_default_import_does_not_bind_same_named_named_export",
+      "status": "passed"
+    },
+    {
+      "id": "ADR062",
+      "test": "web_parser::typescript_parenthesized_arrow_control_already_works",
+      "status": "passed"
+    }
+  ],
+  "note": "No ignored or filtered cases. Source-tree hash identifies the source snapshot, including any uncommitted implementation changes. Native fixture syntax is parsed, not executed as an application."
+}

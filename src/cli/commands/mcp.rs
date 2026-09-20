@@ -8,7 +8,7 @@ use crate::io::envelope::EntityType;
 use crate::mcp::catalog::ToolKind;
 use crate::mcp::service::{
     FindSymbolTarget, SymbolResolution, accepted_params_line, missing_param_message,
-    resolve_find_symbol_target, resolve_symbol_or_id, tool_param_spec,
+    resolve_symbol_or_id, tool_param_spec, try_resolve_find_symbol_target,
 };
 use serde::Serialize;
 
@@ -155,7 +155,7 @@ struct CallRelation {
     call_line: Option<u32>,
     /// Column of the call site
     #[serde(skip_serializing_if = "Option::is_none")]
-    call_column: Option<u16>,
+    call_column: Option<u32>,
 }
 
 /// Symbol info extracted from search result for consistent JSON shape.
@@ -167,7 +167,7 @@ struct SymbolInfo {
     kind: crate::types::SymbolKind,
     file_path: String,
     line: u32,
-    column: u16,
+    column: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     doc_comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -353,6 +353,21 @@ pub async fn run(
     }
     let arguments = arguments;
 
+    // Share typed defaults and validation with the actual MCP handler. The
+    // CLI-only symbol_id alias has already supplied the name string above.
+    let find_symbol_request = if tool_kind == ToolKind::FindSymbol {
+        let mut map = arguments.clone().unwrap_or_default();
+        map.remove("symbol_id");
+        Some(
+            serde_json::from_value::<crate::mcp::FindSymbolRequest>(serde_json::Value::Object(map))
+                .unwrap_or_else(|error| {
+                    exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+                }),
+        )
+    } else {
+        None
+    };
+
     // Semantic snapshots intentionally load without constructing a second
     // query model. Direct CLI invocations do not pass through the workspace
     // reader's lazy initializer, so initialize the shared backend once before
@@ -385,12 +400,19 @@ pub async fn run(
         if let Some(symbol_name) = name {
             // One resolution policy with the MCP handler: the symbol_id:
             // form resolves by id here exactly as it does in text mode.
-            let symbols = match resolve_find_symbol_target(&facade, symbol_name, language) {
+            let symbols = match try_resolve_find_symbol_target(&facade, symbol_name, language)
+                .unwrap_or_else(|error| exit_index_error(EntityType::Symbol, symbol_name, error))
+            {
                 FindSymbolTarget::Symbols { symbols, .. } => symbols,
                 // Non-numeric id: nothing to look up; renders the
                 // not_found envelope exactly like an unmatched name.
                 FindSymbolTarget::InvalidId(_) => Vec::new(),
             };
+            let request = find_symbol_request
+                .as_ref()
+                .expect("find_symbol request validated");
+            let (symbols, page) =
+                crate::mcp::service::page_symbols(symbols, request.offset, request.limit);
             if !symbols.is_empty() {
                 use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();
@@ -416,9 +438,9 @@ pub async fn run(
                         });
                     }
                 }
-                Some(results)
+                Some((results, page))
             } else {
-                Some(Vec::new())
+                Some((Vec::new(), page))
             }
         } else {
             None
@@ -635,6 +657,8 @@ pub async fn run(
         symbol: Symbol,
         score: f32,
         context: ContextWithoutSymbol,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        impact: Option<crate::mcp::service::ImpactContext>,
     }
 
     // Get guidance config before moving indexer
@@ -730,21 +754,35 @@ pub async fn run(
                         use crate::symbol::context::ContextIncludes;
                         let context_results: Vec<SemanticSearchWithContextResult> = results
                             .into_iter()
-                            .filter_map(|(symbol, score)| {
+                            .map(|(symbol, score)| {
                                 // Get full context for each symbol
                                 let context = facade.get_symbol_context(
                                     symbol.id,
                                     ContextIncludes::SYMBOL_CARD | ContextIncludes::CALLS,
                                 );
 
-                                context.map(|ctx| SemanticSearchWithContextResult {
-                                    symbol,
-                                    score,
-                                    context: ContextWithoutSymbol {
+                                let impact = matches!(
+                                    symbol.kind,
+                                    crate::SymbolKind::Function | crate::SymbolKind::Method
+                                )
+                                .then(|| {
+                                    crate::mcp::service::impact_context(&facade, symbol.id, 2).1
+                                });
+                                let context = context
+                                    .map(|ctx| ContextWithoutSymbol {
                                         file_path: ctx.file_path,
                                         relationships: ctx.relationships,
-                                    },
-                                })
+                                    })
+                                    .unwrap_or_else(|| ContextWithoutSymbol {
+                                        file_path: symbol.file_path.to_string(),
+                                        relationships: Default::default(),
+                                    });
+                                SemanticSearchWithContextResult {
+                                    symbol,
+                                    score,
+                                    context,
+                                    impact,
+                                }
                             })
                             .collect();
                         Some(context_results)
@@ -843,7 +881,7 @@ pub async fn run(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5) as usize;
 
-            let mut store = store_arc.write().await;
+            let mut store = store_arc.read().await.query_snapshot();
             let search_query = crate::documents::SearchQuery {
                 text: query.clone(),
                 collection,
@@ -852,18 +890,11 @@ pub async fn run(
                 preview_config: Some(config.documents.search.clone()),
             };
 
-            // Auto-sync collections before searching — same behavior as the
-            // MCP handler; JSON mode must not return stale chunks.
-            for (name, coll_config) in &config.documents.collections {
-                if let Err(e) =
-                    store.index_collection(name, coll_config, &config.documents.defaults)
-                {
-                    tracing::warn!(target: "rag", "auto-sync failed for collection '{}': {}", name, e);
-                }
-            }
-
-            match store.search(search_query) {
-                Ok(results) => Some((query, results)),
+            // Queries consume the indexed snapshot. Explicit indexing and the
+            // watcher own corpus refresh, consistently with the MCP handler.
+            match crate::runtime::blocking(move || store.search(search_query)).await {
+                Ok(Ok(results)) => Some((query, results)),
+                Ok(Err(e)) => exit_index_error(EntityType::Document, &query, e),
                 Err(e) => exit_index_error(EntityType::Document, &query, e),
             }
         } else {
@@ -892,7 +923,11 @@ pub async fn run(
                     .as_ref()
                     .and_then(|m| m.get("lang"))
                     .and_then(|v| v.as_str());
-                let found = match resolve_find_symbol_target(&facade, name, lang) {
+                let found = match try_resolve_find_symbol_target(&facade, name, lang)
+                    .unwrap_or_else(|error| {
+                        eprintln!("Symbol lookup failed: {error}");
+                        std::process::exit(2);
+                    }) {
                     FindSymbolTarget::Symbols { symbols, .. } => !symbols.is_empty(),
                     FindSymbolTarget::InvalidId(_) => false,
                 };
@@ -968,6 +1003,14 @@ pub async fn run(
                     .find_symbol(Parameters(FindSymbolRequest {
                         name: name.to_string(),
                         lang,
+                        limit: find_symbol_request
+                            .as_ref()
+                            .expect("validated request")
+                            .limit,
+                        offset: find_symbol_request
+                            .as_ref()
+                            .expect("validated request")
+                            .offset,
                     }))
                     .await
             }
@@ -1244,7 +1287,7 @@ pub async fn run(
                 }
             } else if json && tool == "find_symbol" {
                 // Use pre-collected data for JSON output
-                if let Some(symbol_contexts) = find_symbol_data {
+                if let Some((symbol_contexts, page)) = find_symbol_data {
                     use crate::io::envelope::{EntityType, Envelope};
                     use crate::io::guidance_engine::generate_guidance_from_config;
 
@@ -1258,11 +1301,15 @@ pub async fn run(
                         .and_then(|m| m.get("lang"))
                         .and_then(|v| v.as_str());
 
-                    if symbol_contexts.is_empty() {
+                    if page.total == 0 {
                         let mut envelope: Envelope<()> =
                             Envelope::not_found(format!("Symbol '{name}' not found"))
                                 .with_entity_type(EntityType::Symbol)
                                 .with_query(name);
+                        envelope.meta.total = Some(page.total);
+                        envelope.meta.offset = Some(page.offset);
+                        envelope.meta.limit = Some(page.limit);
+                        envelope.meta.truncated = Some(false);
 
                         if let Some(lang) = language {
                             envelope = envelope.with_lang(lang);
@@ -1286,6 +1333,11 @@ pub async fn run(
                             .with_count(count)
                             .with_query(name)
                             .with_message(format!("Found {count} symbol(s)"));
+                        envelope.meta.total = Some(page.total);
+                        envelope.meta.offset = Some(page.offset);
+                        envelope.meta.limit = Some(page.limit);
+                        envelope.meta.next_offset = page.next_offset;
+                        envelope.meta.truncated = Some(page.returned < page.total);
 
                         if let Some(lang) = language {
                             envelope = envelope.with_lang(lang);

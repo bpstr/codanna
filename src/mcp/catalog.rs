@@ -22,7 +22,7 @@ macro_rules! tools {
     }
 }
 tools! {
-    FindSymbol => ("find_symbol",["name","symbol_id","lang"],["name"],Some("name"),Read),
+    FindSymbol => ("find_symbol",["name","symbol_id","lang","limit","offset"],["name"],Some("name"),Read),
     GetCalls => ("get_calls",["function_name","symbol_id"],["function_name","symbol_id"],Some("function_name"),Read),
     FindCallers => ("find_callers",["function_name","symbol_id"],["function_name","symbol_id"],Some("function_name"),Read),
     AnalyzeImpact => ("analyze_impact",["symbol_name","symbol_id","max_depth","depth"],["symbol_name","symbol_id"],Some("symbol_name"),Read),

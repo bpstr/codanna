@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "recorded_date_utc": "2026-09-20",
+  "review_baseline": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+  "integrated_upstream_main": "fc7d934478fc04206aec1b760524721232eb0381",
+  "tested_base_revision": "bf25b185717fdaac2e36ea55e0edee24a056dbee",
+  "tested_worktree_dirty": true,
+  "source_snapshots": {
+    "complete_production_and_tests": {
+      "sha256": "561b5d67bd92ab4832b12dfaada719bccfe7a820971a68da020925f171349eae",
+      "scope": [
+        "src/**",
+        "tests/**",
+        "Cargo.toml",
+        "Cargo.lock"
+      ]
+    },
+    "original_adversarial_target": {
+      "sha256": "4707e92b80fd21473df1c1690a300dfeae16fd2c7f97dc5f5dff55a1a405c031",
+      "scope": [
+        "src/**",
+        "tests/adversarial/**",
+        "tests/adversarial_regressions.rs",
+        "Cargo.toml",
+        "Cargo.lock"
+      ]
+    },
+    "hash_definition": "SHA256 of UTF-8 json.dumps(path_to_sha256, sort_keys=True), with repository-relative POSIX paths and default JSON separators. Each entry hashes the full file bytes. The original target intentionally hashes a narrower test scope.",
+    "post_run_changes": "Only documentation and result inventory/recording files were finalized after these source snapshots; no further production or Rust test edits."
+  },
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "onnx_runtime": "CPU 1.22, dynamically linked",
+    "cargo_dependencies": "Locked dependencies cached; explicit direct Cargo verification used --offline.",
+    "generic_language_pack": "TSLP_OFFLINE=1; native parsers exercised. No generic-pack runtime coverage claim.",
+    "test_process_environment": "Allowlisted runtime environment; provider credentials and CODANNA_EMBED_* overrides removed. New embedding transports bind loopback and return fixed vectors.",
+    "embedding_inference": false,
+    "local_build_overrides": {
+      "dev_debug": 0,
+      "incremental": false,
+      "jobs": 6,
+      "codanna_dev_and_test_codegen_units": 1
+    },
+    "dynamic_linker": "ONNX shared library installed in the local system loader search path so credential-isolated benchmark subprocesses can start. No benchmark environment allowlist change.",
+    "unavailable_fixture": {
+      "test": "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "failure": "Unix-domain socket fixture setup returns EPERM before source-reading code executes.",
+      "independent_confirmation": [
+        "Python AF_UNIX/SOCK_STREAM socket creation returns errno 1.",
+        "Rust standard-library-only UnixListener::bind probe returns EPERM while ordinary file writes succeed."
+      ],
+      "repository_test_modified_or_ignored": false,
+      "later_runs": "Exactly this named test excluded with --skip; normal CI keeps it enabled."
+    }
+  },
+  "fixture_inventory": {
+    "original": {
+      "total": 62,
+      "baseline_passed": 10,
+      "baseline_failed": 52,
+      "passed": 62,
+      "failed": 0,
+      "ignored": 0,
+      "case_results": "results.json"
+    },
+    "implementation": {
+      "total": 101,
+      "new_tests": 99,
+      "revised_existing_tests": 2,
+      "passed": 101,
+      "failed": 0,
+      "ignored": 0,
+      "case_results": "additional-results.json"
+    },
+    "total_catalogued_entries": 163,
+    "document_baseline_subset": {
+      "total": 16,
+      "baseline_passed": 1,
+      "baseline_failed": 15,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "note": "Subset of implementation fixtures; not added again to the 163-entry total."
+    },
+    "prepared_native_source_files": 27,
+    "broader_followups": {
+      "total": 21,
+      "coverage_crosswalk": "FOLLOW-UP-COVERAGE.md",
+      "status": "Implemented portions and remaining qualification listed separately."
+    }
+  },
+  "validations": [
+    {
+      "id": "quick-check",
+      "reproduction_command": "./contributing/scripts/quick-check.sh",
+      "status": "passed",
+      "log_filename": "quick-check.log",
+      "log_sha256": "46a64701e3ac127d74787b9d4fb5602df17cde7886deb7087472ca213e1d0ec1",
+      "checks": [
+        "cargo fmt --all -- --check",
+        "strict Clippy for all targets and all features"
+      ]
+    },
+    {
+      "id": "full-test-unmodified",
+      "reproduction_command": "./contributing/scripts/full-test.sh",
+      "status": "blocked_by_environment",
+      "log_filename": "full-test.log",
+      "log_sha256": "813af542628c5caa15981c63e2c0d5f6e204ccffcf5d9d328de126296bea6188",
+      "completed_checks": [
+        "formatting",
+        "strict Clippy for all targets and all features",
+        "no-default-features compilation"
+      ],
+      "test_counts": {
+        "passed": 1337,
+        "failed": 1,
+        "ignored": 27,
+        "measured": 0,
+        "filtered": 0
+      },
+      "failed_test": "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking"
+    },
+    {
+      "id": "default-features",
+      "reproduction_command": "cargo test --locked --offline --no-fail-fast -- --test-threads=1 --skip indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "status": "passed_with_one_explicit_environment_exclusion",
+      "log_filename": "default-tests.log",
+      "log_sha256": "39861a285b83f6bbc226b0eeec695001243f98a85804c64e1caf946976a08487",
+      "test_counts": {
+        "passed": 2239,
+        "failed": 0,
+        "ignored": 62,
+        "measured": 0,
+        "filtered": 1
+      }
+    },
+    {
+      "id": "all-features",
+      "reproduction_command": "cargo test --locked --offline --all-features --no-fail-fast -- --test-threads=1 --skip indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "status": "passed_with_one_explicit_environment_exclusion",
+      "log_filename": "all-feature-tests.log",
+      "log_sha256": "66270d5be32f4fb5210743e45912ebb3aadb643147ba96926dd32c5f83cba893",
+      "test_counts": {
+        "passed": 2241,
+        "failed": 0,
+        "ignored": 62,
+        "measured": 0,
+        "filtered": 1
+      }
+    },
+    {
+      "id": "docs-build",
+      "reproduction_command": "RUSTDOCFLAGS=-Dwarnings cargo doc --locked --offline --no-deps --all-features",
+      "status": "passed",
+      "log_filename": "docs-build.log",
+      "log_sha256": "416cb1889fc36b21d9f6686bf3453970376775503fe270abe2f3f173df6c3628"
+    },
+    {
+      "id": "original-adversarial",
+      "reproduction_command": "cargo test --locked --offline --test adversarial_regressions -- --test-threads=1",
+      "status": "passed",
+      "log_filename": "adversarial-final.log",
+      "log_sha256": "d8076fdad3b79496472e1ed318fa592df909ab848c9486370a741e551eaec43a",
+      "test_counts": {
+        "passed": 62,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      "case_results": "results.json"
+    },
+    {
+      "id": "retrieval-evaluator",
+      "reproduction_command": "python3 -m unittest discover -s contributing/retrieval -p test_run.py",
+      "status": "passed",
+      "log_filename": "retrieval-evaluator-tests.log",
+      "log_sha256": "270b5eeb26695acb45f0a86fad4b7c25f3de45335fbd8ae0e88619e6e7ef0428",
+      "passed": 25,
+      "failed": 0
+    },
+    {
+      "id": "plugin-boundaries",
+      "reproduction_command": "node --test tests/security/plugin-boundaries.test.cjs",
+      "status": "passed",
+      "log_filename": "plugin-boundary-tests.log",
+      "log_sha256": "112fda2a79534fce410abfff5db0bb432ff588dec4c9db9dca82c9ca58bbaa25",
+      "passed": 7,
+      "failed": 0
+    },
+    {
+      "id": "cli-mcp-smoke",
+      "reproduction_command": "codanna --help; codanna index --help; codanna retrieve --help; codanna index src --no-progress; codanna mcp-test",
+      "status": "passed",
+      "log_filename": "cli-mcp-smoke/results.json",
+      "log_sha256": "ebb5a53cb759f29d93cb66005abef58597e08e85537d8fe0a034320c7219470c",
+      "commands": [
+        {
+          "arguments": [
+            "--help"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.081
+        },
+        {
+          "arguments": [
+            "index",
+            "--help"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.023
+        },
+        {
+          "arguments": [
+            "retrieve",
+            "--help"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.022
+        },
+        {
+          "arguments": [
+            "index",
+            "src",
+            "--no-progress"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.122
+        },
+        {
+          "arguments": [
+            "mcp-test"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.054
+        }
+      ],
+      "workspace": "Fresh temporary workspace with semantic search disabled; no production index."
+    },
+    {
+      "id": "lexical-retrieval-acceptance",
+      "reproduction_command": "python3 contributing/retrieval/run.py --profile lexical --codanna /absolute/path/to/codanna --knowledge /absolute/path/to/codanna-knowledge",
+      "status": "six_improvement_targets_unmet",
+      "log_filename": "retrieval-lexical-verified/report.json",
+      "log_sha256": "9cd0bcbbf855f5c20dd7d4c4b0b55af4fc8e1eed138c622e9ac69e6274bf3113",
+      "passed": 23,
+      "failed": 6,
+      "total": 29,
+      "all_invariants_passed": true,
+      "unmet_cases": [
+        "G06",
+        "G14",
+        "G15",
+        "G17",
+        "C03",
+        "D06"
+      ],
+      "report": "lexical-acceptance-results.json",
+      "context": "lexical-evaluation-context.json",
+      "document_metrics": {
+        "positive_queries": 4,
+        "hit_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "mean_required_evidence_recall_at_5": 0.875,
+        "required_evidence_recall_floor": 0.9,
+        "forbidden_evidence": 0
+      }
+    }
+  ],
+  "reproduction_notes": [
+    "Commands identify the repository checks and relevant test options. Local runtime wrappers supplied the environment and Cargo build overrides above; checkout and temporary binary paths vary by machine.",
+    "Full Rust suite counts sum every completed unit, integration and doctest group. The 62 ignored tests/examples are existing repository exclusions; none of the 163 catalogued cases is ignored.",
+    "No blanket full-CI pass is claimed by this local record. GitHub workflow status belongs to the pull request.",
+    "Raw process logs are kept outside the checkout; their checksums are recorded here. Selected per-case outcomes and the complete lexical acceptance JSON are committed.",
+    "The semantic acceptance profile and ten manual qualification scenarios were not executed. Fixed-vector correctness results do not establish semantic relevance, multilingual quality or production latency."
+  ]
+}

@@ -4,6 +4,12 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
+    #[error("graph {resource} budget exceeded (limit {limit}); narrow the query or depth")]
+    GraphBudgetExceeded {
+        resource: &'static str,
+        limit: usize,
+    },
+
     #[error("Tantivy error: {0}")]
     Tantivy(#[from] TantivyError),
 

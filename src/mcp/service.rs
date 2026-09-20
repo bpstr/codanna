@@ -80,26 +80,145 @@ pub fn resolve_find_symbol_target(
     name: &str,
     lang: Option<&str>,
 ) -> FindSymbolTarget {
+    // Compatibility for callers of the original infallible library helper.
+    // Tool transports use the fallible version to preserve backend errors.
+    try_resolve_find_symbol_target(facade, name, lang).unwrap_or_else(|_| {
+        FindSymbolTarget::Symbols {
+            symbols: Vec::new(),
+            label: name.to_owned(),
+        }
+    })
+}
+
+pub fn try_resolve_find_symbol_target(
+    facade: &IndexFacade,
+    name: &str,
+    lang: Option<&str>,
+) -> crate::StorageResult<FindSymbolTarget> {
     if let Some(id_str) = name.strip_prefix("symbol_id:") {
         let Ok(id) = id_str.parse::<u32>() else {
-            return FindSymbolTarget::InvalidId(id_str.to_string());
+            return Ok(FindSymbolTarget::InvalidId(id_str.to_string()));
         };
-        let symbols: Vec<Symbol> = facade.get_symbol(crate::SymbolId(id)).into_iter().collect();
+        let symbols: Vec<Symbol> = facade
+            .document_index()
+            .find_symbol_by_id(crate::SymbolId(id))?
+            .filter(|symbol| {
+                lang.is_none_or(|expected| {
+                    symbol
+                        .language_id
+                        .as_ref()
+                        .is_some_and(|actual| actual.as_str() == expected)
+                })
+            })
+            .into_iter()
+            .collect();
         let label = symbols
             .first()
             .map(|s| s.name.to_string())
             .unwrap_or_else(|| name.to_string());
-        FindSymbolTarget::Symbols { symbols, label }
+        Ok(FindSymbolTarget::Symbols { symbols, label })
     } else {
-        let mut symbols = facade.find_symbols_by_name(name, lang);
-        if symbols.is_empty() {
-            symbols = find_dotted_members(name, |n| facade.find_symbols_by_name(n, lang));
+        let mut symbols = facade.document_index().find_symbols_by_name(name, lang)?;
+        if symbols.is_empty()
+            && let Some((owner, member)) = name.rsplit_once('.')
+            && !owner.is_empty()
+            && !member.is_empty()
+        {
+            symbols = facade
+                .document_index()
+                .find_symbols_by_name(member, lang)?
+                .into_iter()
+                .filter(|symbol| is_member_of(symbol, owner))
+                .collect();
         }
-        FindSymbolTarget::Symbols {
+        Ok(FindSymbolTarget::Symbols {
             symbols,
             label: name.to_string(),
-        }
+        })
     }
+}
+
+/// Pagination describes the complete filtered candidate set, before slicing.
+/// Offsets apply to one indexed state; restart paging after reindexing.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SymbolPageInfo {
+    pub total: usize,
+    pub returned: usize,
+    pub offset: u32,
+    pub limit: u32,
+    pub next_offset: Option<usize>,
+}
+
+pub fn page_symbols(
+    symbols: Vec<Symbol>,
+    offset: u32,
+    limit: u32,
+) -> (Vec<Symbol>, SymbolPageInfo) {
+    let total = symbols.len();
+    let symbols: Vec<_> = symbols
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    let returned = symbols.len();
+    let next = offset as usize + returned;
+    let page = SymbolPageInfo {
+        total,
+        returned,
+        offset,
+        limit,
+        next_offset: (next < total).then_some(next),
+    };
+    (symbols, page)
+}
+
+/// A context expansion is optional evidence, independent of retrieval success.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImpactContext {
+    pub symbol_id: u32,
+    pub status: ImpactContextStatus,
+    pub max_depth: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImpactContextStatus {
+    Complete,
+    BudgetExceeded,
+    Unavailable,
+}
+
+pub fn impact_context(
+    facade: &IndexFacade,
+    id: crate::SymbolId,
+    depth: usize,
+) -> (Vec<crate::SymbolId>, ImpactContext) {
+    let (ids, status, reason) = match facade.get_impact_radius_bounded(id, depth) {
+        Ok(ids) => (ids, ImpactContextStatus::Complete, None),
+        Err(error) => {
+            let status = if matches!(
+                error,
+                crate::IndexError::Storage(crate::StorageError::GraphBudgetExceeded { .. })
+            ) {
+                ImpactContextStatus::BudgetExceeded
+            } else {
+                ImpactContextStatus::Unavailable
+            };
+            (Vec::new(), status, Some(error.to_string()))
+        }
+    };
+    let context = ImpactContext {
+        symbol_id: id.value(),
+        status,
+        max_depth: depth,
+        count: (status == ImpactContextStatus::Complete).then_some(ids.len()),
+        reason,
+    };
+    (ids, context)
 }
 
 /// Per-tool argument vocabulary: accepted keys plus the required subset

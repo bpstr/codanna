@@ -17,6 +17,13 @@ pub enum WatchAction {
     /// Re-index a document file.
     ReindexDocument { path: PathBuf },
 
+    /// Reconcile configured document collections after a source or policy event.
+    ReconcileDocuments {
+        path: PathBuf,
+        collections: Vec<(String, crate::documents::CollectionConfig)>,
+        defaults: crate::documents::ChunkingConfig,
+    },
+
     /// Remove a code file from the index.
     RemoveCode { path: PathBuf },
 
@@ -72,6 +79,11 @@ pub trait WatchHandler: Send + Sync {
 
     /// Handle a file deletion event (called immediately, no debouncing).
     async fn on_delete(&self, path: &Path) -> Result<WatchAction, WatchError>;
+
+    /// Catch up a created, moved or removed directory before per-file events.
+    async fn on_directory_change(&self, _path: &Path) -> Result<WatchAction, WatchError> {
+        Ok(WatchAction::None)
+    }
 
     /// Refresh the handler's tracked paths from its source.
     ///

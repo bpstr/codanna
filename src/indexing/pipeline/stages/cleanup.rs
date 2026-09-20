@@ -97,20 +97,32 @@ fn member_scope(symbol: &crate::Symbol) -> Option<String> {
     }
 }
 
+/// Preserve every recorded owner boundary. Hoisting describes lookup behavior
+/// within a local owner and does not change which owner declares the symbol.
+fn owner_scope(symbol: &crate::Symbol) -> Option<crate::symbol::ScopeContext> {
+    let mut scope = symbol.scope_context.clone();
+    if let Some(crate::symbol::ScopeContext::Local { hoisted, .. }) = scope.as_mut() {
+        *hoisted = false;
+    }
+    scope
+}
+
 /// Symbols sharing `name`, `kind`, and containing scope with `target`, in
 /// file order.
 ///
-/// Position within this group is what tells apart symbols the scope cannot
-/// split -- python `@overload` stubs are all module-level functions of the
-/// same name in one file, so `Field` appears many times with no containing
-/// type. Order survives any edit that shifts lines; it changes only when a
-/// peer is added or removed, and the group-size check turns that into a
-/// fail-closed.
+/// The count tells rebinding whether the old target was ambiguous within its
+/// owner. File order is retained only for capture diagnostics; overload
+/// identity must come from a declaration signature, never an ordinal.
 fn peer_group<'a>(symbols: &'a [crate::Symbol], target: &crate::Symbol) -> Vec<&'a crate::Symbol> {
-    let scope = member_scope(target);
+    let scope = owner_scope(target);
     let mut peers: Vec<&crate::Symbol> = symbols
         .iter()
-        .filter(|s| s.name == target.name && s.kind == target.kind && member_scope(s) == scope)
+        .filter(|s| {
+            s.name == target.name
+                && s.kind == target.kind
+                && owner_scope(s) == scope
+                && s.module_path == target.module_path
+        })
         .collect();
     peers.sort_by_key(|s| (s.range.start_line, s.range.start_column));
     peers
@@ -131,8 +143,8 @@ pub struct CleanupStats {
 /// file's rows are deleted so it can be rebound to the replacement symbol.
 ///
 /// `symbol_id` is session-scoped and not stable across reindexes, so the
-/// target is carried by name and kind. The line rides along as a tie-break
-/// only -- keying on it would fail to rebind whenever an edit shifts ranges.
+/// target is carried by file, name, kind, owner, and declaration signature.
+/// Source position is diagnostic only: edits can move or reorder declarations.
 #[derive(Debug, Clone)]
 pub struct CapturedInboundEdge {
     pub from: SymbolId,
@@ -141,18 +153,21 @@ pub struct CapturedInboundEdge {
     pub target_file: PathBuf,
     pub target_name: String,
     pub target_kind: SymbolKind,
+    /// Declaration signature distinguishes overloads across reorderings.
+    pub target_signature: Option<String>,
     /// Containing type of the target, when it is a class member. This is what
     /// tells two same-named members apart -- `Alpha::make` from `Beta::make`
     /// -- and unlike the line it survives any edit that shifts ranges.
     pub target_scope: Option<String>,
-    /// Position of the target among its same-(name, kind, scope) peers in file
-    /// order, with the peer count it was taken from. Discriminates symbols the
-    /// scope cannot split; the count is what makes a changed peer set fail
-    /// closed rather than rebind to the wrong peer.
+    /// Full recorded scope and namespace distinguish nested owners and equal
+    /// class names declared in different modules within one source file.
+    pub target_scope_context: Option<crate::symbol::ScopeContext>,
+    pub target_module: Option<String>,
+    /// Previous ordinal retained for diagnostics; never used as identity.
     pub target_ordinal: usize,
+    /// Whether the old target shared its name, kind, and owner with overloads.
     pub target_peer_count: usize,
-    /// Start line as it stood before the re-index. Last-resort tie-break only;
-    /// an edit above the symbol invalidates it.
+    /// Previous start line retained for diagnostics; never used as identity.
     pub target_line: u32,
     pub relationship: Relationship,
 }
@@ -383,6 +398,17 @@ impl CleanupStage {
             let peers = peer_group(&symbols, symbol);
             let ordinal = peers.iter().position(|s| s.id == symbol.id).unwrap_or(0);
             for kind in ALL_RELATION_KINDS {
+                // Go implementations are structural and Phase 2 recomputes
+                // them from live method sets. A same-named edited interface
+                // must not regain an implementation rejected by that pass.
+                if symbol
+                    .language_id
+                    .as_ref()
+                    .is_some_and(|language| language.as_str() == "go")
+                    && matches!(kind, RelationKind::Implements | RelationKind::ImplementedBy)
+                {
+                    continue;
+                }
                 for (from, _to, relationship) in self.index.get_relationships_to(symbol.id, kind)? {
                     if in_flight.contains(&from) {
                         continue;
@@ -392,7 +418,10 @@ impl CleanupStage {
                         target_file: path.to_path_buf(),
                         target_name: symbol.name.to_string(),
                         target_kind: symbol.kind,
+                        target_signature: symbol.signature.as_deref().map(str::to_owned),
                         target_scope: member_scope(symbol),
+                        target_scope_context: owner_scope(symbol),
+                        target_module: symbol.module_path.as_deref().map(str::to_owned),
                         target_ordinal: ordinal,
                         target_peer_count: peers.len(),
                         target_line: symbol.range.start_line,
@@ -412,11 +441,9 @@ impl CleanupStage {
     /// its inbound edges stay dead rather than being resurrected against a
     /// stale target.
     ///
-    /// The match key is (file, name, kind). Line is excluded: the common edit
-    /// shifts ranges, and a line-exact key would fail to rebind on exactly
-    /// those edits. An ambiguous match (same name AND kind more than once in
-    /// the file) is dropped rather than guessed -- rebinding to the wrong
-    /// overload would trade a recall gap for a wrong edge.
+    /// The match key includes file, name, kind, and containing owner. If the
+    /// old or replacement group contains overloads, a unique declaration
+    /// signature is required. Missing or ambiguous identities are dropped.
     pub fn rebind_inbound_edges(
         &self,
         captured: &[CapturedInboundEdge],
@@ -441,64 +468,61 @@ impl CleanupStage {
             replacements_by_file.insert(edge.target_file.clone(), symbols);
         }
 
+        // Read source liveness before opening the batch, both to avoid one
+        // lookup per repeated edge and to leave no staged batch on read error.
+        let mut live_sources = std::collections::HashMap::new();
+        for edge in captured {
+            if let std::collections::hash_map::Entry::Vacant(entry) = live_sources.entry(edge.from)
+            {
+                entry.insert(self.index.find_symbol_by_id(edge.from)?.is_some());
+            }
+        }
+
         self.index.start_batch().map_err(|e| PipelineError::Parse {
             path: PathBuf::new(),
             reason: format!("Failed to start batch: {e}"),
         })?;
 
         for edge in captured {
+            // Another root may have replaced this source after its edge was
+            // captured. Its new parse owns the replacement edge; reviving the
+            // old source id would create a durable orphan.
+            if !live_sources[&edge.from] {
+                stats.dropped += 1;
+                continue;
+            }
             let replacements = replacements_by_file
                 .get(&edge.target_file)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
             let candidates: Vec<_> = replacements
                 .iter()
-                .filter(|s| s.name.as_ref() == edge.target_name && s.kind == edge.target_kind)
+                .filter(|s| {
+                    s.name.as_ref() == edge.target_name
+                        && s.kind == edge.target_kind
+                        && owner_scope(s) == edge.target_scope_context
+                        && s.module_path.as_deref() == edge.target_module.as_deref()
+                })
                 .collect();
-            // Three discriminators, most durable first. Containing type
-            // splits rust impl blocks and class overloads and survives any
-            // range shift. Position among same-scope peers splits what the
-            // scope cannot -- python `@overload` stubs share name, kind, and
-            // module scope -- and survives shifts too, guarded by a peer-count
-            // check so an added or removed sibling fails closed instead of
-            // rebinding to its neighbour. The line is last and any edit above
-            // the symbol invalidates it.
-            let target: &crate::Symbol = if let [only] = candidates.as_slice() {
-                only
-            } else {
-                let by_scope: Vec<&crate::Symbol> = candidates
-                    .iter()
-                    .copied()
-                    .filter(|s| member_scope(s) == edge.target_scope)
-                    .collect();
-                let mut narrowed = if by_scope.is_empty() {
-                    candidates.clone()
-                } else {
-                    by_scope
-                };
-                narrowed.sort_by_key(|s| (s.range.start_line, s.range.start_column));
-
-                let picked = if narrowed.len() == 1 {
-                    Some(narrowed[0])
-                } else if narrowed.len() == edge.target_peer_count {
-                    narrowed.get(edge.target_ordinal).copied()
-                } else {
-                    let mut exact = narrowed
-                        .iter()
-                        .copied()
-                        .filter(|s| s.range.start_line == edge.target_line);
-                    match (exact.next(), exact.next()) {
-                        (Some(one), None) => Some(one),
-                        _ => None,
-                    }
-                };
-                match picked {
-                    Some(one) => one,
-                    None => {
-                        stats.dropped += 1;
-                        continue;
-                    }
+            // Scope is part of identity even when only one namesake survives.
+            // Overloads require the original signature, not file ordinal: a
+            // reorder can preserve peer count while changing every ordinal.
+            let target = if candidates.len() == 1 && edge.target_peer_count == 1 {
+                Some(candidates[0])
+            } else if edge.target_signature.is_some() {
+                let mut exact = candidates.iter().copied().filter(|candidate| {
+                    candidate.signature.as_deref() == edge.target_signature.as_deref()
+                });
+                match (exact.next(), exact.next()) {
+                    (Some(one), None) => Some(one),
+                    _ => None,
                 }
+            } else {
+                None
+            };
+            let Some(target) = target else {
+                stats.dropped += 1;
+                continue;
             };
 
             if let Err(e) = self
@@ -562,6 +586,10 @@ impl CleanupStage {
             self.index.delete_relationships_for_symbol(*symbol_id)?;
         }
 
+        // Import/export facts are keyed by FileId, not file_path. Remove them
+        // explicitly or a deleted generation can shadow a restored module.
+        self.index.delete_imports_for_file(file_id)?;
+
         // Step 4: Remove file documents from Tantivy
         self.index.remove_file_documents(&path_str)?;
 
@@ -609,5 +637,110 @@ mod tests {
         let stats = result.unwrap();
         assert_eq!(stats.files_cleaned, 1);
         assert_eq!(stats.symbols_removed, 0);
+    }
+
+    #[test]
+    fn rebound_targets_keep_recorded_local_parent_and_namespace_identity() {
+        use crate::{FileId, Range, ScopeContext, Symbol};
+        for local_parent_changed in [true, false] {
+            let temp = TempDir::new().unwrap();
+            let index = Arc::new(
+                DocumentIndex::new(temp.path().join("index"), &Settings::default()).unwrap(),
+            );
+            let target_path = temp.path().join("target.py");
+            let caller_path = temp.path().join("caller.py");
+            let scope = |parent: &str| {
+                if local_parent_changed {
+                    ScopeContext::Local {
+                        hoisted: false,
+                        parent_name: Some(parent.into()),
+                        parent_kind: Some(SymbolKind::Function),
+                    }
+                } else {
+                    ScopeContext::ClassMember {
+                        class_name: Some("Store".into()),
+                    }
+                }
+            };
+            let target = Symbol::new(
+                SymbolId::new(1).unwrap(),
+                "work",
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                Range::new(0, 0, 1, 0),
+            )
+            .with_signature("def work():")
+            .with_scope(scope("Alpha"))
+            .with_module_path("Old");
+            let caller = Symbol::new(
+                SymbolId::new(2).unwrap(),
+                "caller",
+                SymbolKind::Function,
+                FileId::new(2).unwrap(),
+                Range::new(0, 0, 1, 0),
+            );
+            let registration = |file_id| crate::indexing::pipeline::FileRegistration {
+                path: target_path.clone(),
+                file_id,
+                content_hash: "fixture".to_owned(),
+                language_id: crate::parsing::LanguageId::new("python"),
+                timestamp: 0,
+                mtime: 0,
+            };
+            index.start_batch().unwrap();
+            index
+                .store_file_registration(&registration(target.file_id))
+                .unwrap();
+            index
+                .index_symbol(&target, &target_path.to_string_lossy())
+                .unwrap();
+            index
+                .index_symbol(&caller, &caller_path.to_string_lossy())
+                .unwrap();
+            index
+                .store_relationship(
+                    caller.id,
+                    target.id,
+                    &Relationship::new(RelationKind::Calls),
+                )
+                .unwrap();
+            index.commit_batch().unwrap();
+            let stage = CleanupStage::new(Arc::clone(&index), temp.path().join("semantic"));
+            let (_, captures) = stage
+                .cleanup_files_for_reindex(std::slice::from_ref(&target_path))
+                .unwrap();
+            assert_eq!(captures.len(), 1);
+
+            let replacement = Symbol::new(
+                SymbolId::new(3).unwrap(),
+                "work",
+                SymbolKind::Function,
+                FileId::new(3).unwrap(),
+                Range::new(0, 0, 1, 0),
+            )
+            .with_signature("def work():")
+            .with_scope(scope("Beta"))
+            .with_module_path(if local_parent_changed { "Old" } else { "New" });
+            index.start_batch().unwrap();
+            index
+                .store_file_registration(&registration(replacement.file_id))
+                .unwrap();
+            index
+                .index_symbol(&replacement, &target_path.to_string_lossy())
+                .unwrap();
+            index.commit_batch().unwrap();
+            let stats = stage.rebind_inbound_edges(&captures).unwrap();
+            assert_eq!(
+                stats.rebound, 0,
+                "changed local parent/namespace is a different declaration"
+            );
+            assert_eq!(stats.dropped, 1);
+            assert!(
+                index
+                    .get_relationships_from(caller.id, RelationKind::Calls)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 }

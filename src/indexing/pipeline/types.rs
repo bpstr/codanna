@@ -132,8 +132,8 @@ impl RawImport {
 pub struct VariableBinding {
     pub name: String,
     pub type_name: String,
-    /// Range of the binding site (the assignment), for position-aware
-    /// last-binding-wins lookup within the caller's span.
+    /// Range of the binding site, or a receiver expression with a declared
+    /// field type. Lookup retains source ordering and the containing callable.
     pub range: Range,
 }
 
@@ -196,6 +196,7 @@ pub struct ParsedFile {
     pub module_path: Option<String>,
     pub raw_symbols: Vec<RawSymbol>,
     pub raw_imports: Vec<RawImport>,
+    pub raw_exports: Option<Vec<crate::parsing::Export>>,
     pub raw_relationships: Vec<RawRelationship>,
     pub variable_bindings: Vec<VariableBinding>,
     pub this_barrier_spans: Vec<Range>,
@@ -210,6 +211,7 @@ impl ParsedFile {
             module_path: None,
             raw_symbols: Vec::new(),
             raw_imports: Vec::new(),
+            raw_exports: None,
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
             this_barrier_spans: Vec::new(),
@@ -254,7 +256,7 @@ pub struct FileRegistration {
     pub language_id: LanguageId,
     /// Unix timestamp when the file was indexed
     pub timestamp: u64,
-    /// File modification time (seconds since UNIX_EPOCH)
+    /// File modification time (nanoseconds since UNIX_EPOCH)
     pub mtime: u64,
 }
 
@@ -282,6 +284,8 @@ pub struct IndexBatch {
     pub symbols: Vec<Symbol>,
     /// Imports ready to store
     pub imports: Vec<Import>,
+    /// Explicit module export slots, including declaration-free barrels.
+    pub file_exports: Vec<crate::parsing::FileExports>,
     /// Relationships to resolve after all symbols are indexed
     pub unresolved_relationships: Vec<UnresolvedRelationship>,
     /// Files to register in the index
@@ -299,6 +303,7 @@ impl IndexBatch {
         Self {
             symbols: Vec::new(),
             imports: Vec::new(),
+            file_exports: Vec::new(),
             unresolved_relationships: Vec::new(),
             file_registrations: Vec::new(),
             variable_bindings: HashMap::new(),
@@ -310,6 +315,7 @@ impl IndexBatch {
         Self {
             symbols: Vec::with_capacity(symbols),
             imports: Vec::with_capacity(imports),
+            file_exports: Vec::new(),
             unresolved_relationships: Vec::with_capacity(rels),
             file_registrations: Vec::new(),
             variable_bindings: HashMap::new(),
@@ -322,13 +328,17 @@ impl IndexBatch {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.symbols.is_empty() && self.imports.is_empty() && self.file_registrations.is_empty()
+        self.symbols.is_empty()
+            && self.imports.is_empty()
+            && self.file_exports.is_empty()
+            && self.file_registrations.is_empty()
     }
 
     /// Merge another batch into this one
     pub fn merge(&mut self, other: IndexBatch) {
         self.symbols.extend(other.symbols);
         self.imports.extend(other.imports);
+        self.file_exports.extend(other.file_exports);
         self.unresolved_relationships
             .extend(other.unresolved_relationships);
         self.file_registrations.extend(other.file_registrations);
@@ -469,6 +479,9 @@ pub struct SymbolLookupCache {
     /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
     /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
     module_aliases: dashmap::DashMap<Box<str>, crate::types::SymbolId>,
+    pub(super) file_exports: dashmap::DashMap<FileId, crate::parsing::FileExports>,
+    pub(super) export_file_paths: dashmap::DashMap<PathBuf, FileId>,
+    pub(super) export_modules: dashmap::DashMap<String, Vec<FileId>>,
 }
 
 impl Default for SymbolLookupCache {
@@ -485,6 +498,9 @@ impl SymbolLookupCache {
             by_name: dashmap::DashMap::new(),
             by_file_id: dashmap::DashMap::new(),
             module_aliases: dashmap::DashMap::new(),
+            file_exports: dashmap::DashMap::new(),
+            export_file_paths: dashmap::DashMap::new(),
+            export_modules: dashmap::DashMap::new(),
         }
     }
 
@@ -495,6 +511,9 @@ impl SymbolLookupCache {
             by_name: dashmap::DashMap::with_capacity(symbols / 10), // Fewer unique names
             by_file_id: dashmap::DashMap::with_capacity(symbols / 50), // ~50 symbols/file avg
             module_aliases: dashmap::DashMap::new(),
+            file_exports: dashmap::DashMap::new(),
+            export_file_paths: dashmap::DashMap::new(),
+            export_modules: dashmap::DashMap::new(),
         }
     }
 
@@ -928,6 +947,25 @@ impl PipelineSymbolCache for SymbolLookupCache {
 
     fn resolve_module_alias(&self, path: &str) -> Option<SymbolId> {
         SymbolLookupCache::resolve_module_alias(self, path)
+    }
+
+    fn resolve_export(
+        &self,
+        file: FileId,
+        source: &str,
+        name: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        SymbolLookupCache::resolve_export(self, file, source, name, extensions)
+    }
+
+    fn resolve_module_export(
+        &self,
+        module: &str,
+        name: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        SymbolLookupCache::resolve_module_export(self, module, name, extensions)
     }
 
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {

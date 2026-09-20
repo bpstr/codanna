@@ -195,7 +195,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Search by natural language and get full context: documentation, dependencies, callers, impact.\n\nReturns symbols with:\n- Their documentation\n- What calls them\n- What they call\n- Complete impact graph (includes ALL relationships: calls, type usage, composition)\n\nUse this when: You want to find and understand symbols with their complete usage context."
+        description = "Search by natural language with documentation, dependency previews, callers and bounded impact. Returns each matching symbol even when its impact expansion exceeds the graph budget. Structured impact metadata reports complete, budget_exceeded or unavailable for each function/method; a missing count is not zero impact."
     )]
     pub async fn semantic_search_with_context(
         &self,
@@ -272,6 +272,7 @@ impl CodeIntelligenceServer {
                     query
                 ));
 
+                let mut impact_contexts = Vec::new();
                 // For each result, gather comprehensive context
                 for (idx, (symbol, score)) in results.iter().enumerate() {
                     // Basic symbol information - matching find_symbol format
@@ -463,8 +464,13 @@ impl CodeIntelligenceServer {
                         }
 
                         // Impact analysis - using logic from analyze_impact
-                        let impacted = indexer.get_impact_radius_bounded(symbol.id, 2)
-                            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+                        let (impacted, impact_context) = crate::mcp::service::impact_context(&indexer, symbol.id, 2);
+                        if let Some(reason) = &impact_context.reason {
+                            output.push_str(&format!(
+                                "\n   Impact expansion incomplete: {reason}. Other search matches remain available.\n"
+                            ));
+                        }
+                        impact_contexts.push(impact_context);
                         if !impacted.is_empty() {
                             output.push_str(&format!(
                                 "\n   Changing {} would impact {} symbol(s) (max depth: 2):\n",
@@ -736,7 +742,9 @@ impl CodeIntelligenceServer {
                     output.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                response.structured_content = Some(serde_json::json!({ "impact": impact_contexts }));
+                Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search failed: {e}"

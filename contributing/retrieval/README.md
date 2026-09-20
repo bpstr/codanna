@@ -2,7 +2,15 @@
 
 A small, deliberately awkward application that **Codanna itself indexes**. This is
 an acceptance specification and local evaluation harness, not a claim that current
-retrieval meets the proposed minimums. Production retrieval code is unchanged.
+retrieval meets the proposed minimums. The follow-up
+[edge-case implementation](adversarial/IMPLEMENTATION.md) repairs production
+behavior and records its own fixture results; this acceptance corpus keeps its
+original oracles.
+
+The recorded [implementation evaluation](adversarial/LEXICAL-RESULTS.md) passed
+23/29 lexical-profile cases, including every invariant, with six improvement
+targets still unmet. It does not establish semantic-model quality or complete
+the ten manual scenarios.
 
 The corpus includes Python, TypeScript and PHP, decisions, runbooks, ambiguous
 names, aliases, misleading old policies, unsupported link forms, ignored files,
@@ -34,7 +42,7 @@ indexes, dumps, configuration and models remain outside Git.
 | Profile | Cases | What is measured |
 | --- | ---: | --- |
 | `structural` | 23 | Real parser/dump/knowledge graph, evidence spans, links, bounded context, independent snapshots. Embeddings disabled. |
-| `lexical` | 29 | Structural cases plus document lookup with embeddings disabled. Expected to expose the missing lexical fallback. |
+| `lexical` | 29 | Structural cases plus query-aware document lookup with embeddings disabled. |
 | `semantic` | 31 | Structural cases plus local document/code embeddings. Explicit opt-in; first use may download the local model. |
 
 Run `lexical` and `semantic` by replacing the profile in the command above. They
@@ -87,9 +95,10 @@ zero. Each case also specifies its own required evidence and maximum rank, and
 those assertions must all pass for exit 0. See [REQUIREMENTS.md](REQUIREMENTS.md)
 for the rationale, implementation findings, formulas and staged improvement plan.
 
-Known source-level gaps include embedding-free document ranking, reference-style
-Markdown, percent-encoded links, symbol-free configuration ingestion and
-pre-declaration rationale ownership. Initial local runs may therefore be red.
+The implementation adds embedding-free document ranking. Remaining source-level
+gaps include reference-style Markdown, percent-encoded links, symbol-free
+configuration ingestion and pre-declaration rationale ownership. Local runs may
+therefore still be red.
 Keep these failures as actionable evidence; do not weaken the oracle to get green.
 
 ## Manual scenarios

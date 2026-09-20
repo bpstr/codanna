@@ -1,0 +1,1020 @@
+{
+  "schema_version": 1,
+  "target": "adversarial_regressions",
+  "baseline_revision": "1968a6fc14c4d5c080ac91b5e74799a4b0aa0cc2",
+  "baseline_case_count": 62,
+  "cases": [
+    {
+      "id": "ADR001",
+      "test": "index_lifecycle::adding_missing_import_target_repairs_unchanged_caller",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "missing-module",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Create a previously missing imported target without editing its caller; incremental callees must equal a fresh index.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR002",
+      "test": "index_lifecycle::batch_discovery_rejects_partial_invalid_ignore_rules",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "ignore-errors",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "An invalid ignore range attached to an otherwise valid walk entry must fail batch discovery explicitly.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR003",
+      "test": "index_lifecycle::changing_reexport_retargets_unchanged_consumer",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "reexport-invalidation",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Change only a Python package re-export from a.helper to b.helper; the unchanged consumer must follow b.helper.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR004",
+      "test": "index_lifecycle::delayed_rescan_detects_different_nanoseconds_in_same_mtime_second",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "subsecond-mtime",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Change a source at T+100ms to T+900ms and rescan later; updated symbols must replace the previous symbols.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR005",
+      "test": "index_lifecycle::deleting_then_restoring_target_recovers_unchanged_caller",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "missing-module",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Delete, index, restore, and reindex an imported target; unchanged caller relationships must recover.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR006",
+      "test": "index_lifecycle::max_files_limits_real_indexing_as_well_as_preview",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "file-cap",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Index three source files with max_files=1; the committed file count must match the one-file preview.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR007",
+      "test": "index_lifecycle::multi_root_edits_never_resurrect_old_caller_ids",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "live-endpoints",
+      "sequence": 3,
+      "layer": "incremental-index",
+      "expectation": "Reindex edited caller and callee in both root orders; no persisted edge may refer to the old caller ID.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR008",
+      "test": "index_lifecycle::removing_alpha_member_does_not_rebind_its_caller_to_beta_member",
+      "source": "tests/adversarial/index_lifecycle/review_index_lifecycle.rs",
+      "group": "rebind-owner",
+      "sequence": 1,
+      "layer": "incremental-index",
+      "expectation": "Remove Alpha.make while Beta.make survives; the former Alpha caller must never attach to Beta.make.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR009",
+      "test": "language_end_to_end::end_to_end_go_generic_calls_preserve_every_arity",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "go-generics",
+      "sequence": 2,
+      "layer": "full-index",
+      "expectation": "The full graph must retain Identity, Pair, Empty, and TwoTypes calls and exclude the Number type conversion.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_generic_calls.go"
+      ]
+    },
+    {
+      "id": "ADR010",
+      "test": "language_end_to_end::end_to_end_go_structural_implementations_are_discoverable",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "go-method-sets",
+      "sequence": 5,
+      "layer": "full-index",
+      "expectation": "The full graph must discover Socket and promoted Wrapper as Reader implementers and exclude WrongSignature.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_interfaces.go"
+      ]
+    },
+    {
+      "id": "ADR011",
+      "test": "language_end_to_end::end_to_end_python_dispatch_uses_c3_not_nearest_ancestor",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "python-mro",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "The full graph must resolve D(X, Y).run to inherited A.run according to C3 order.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_mro.py"
+      ]
+    },
+    {
+      "id": "ADR012",
+      "test": "language_end_to_end::end_to_end_python_field_annotation_does_not_change_local_receiver",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "python-field-binding",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "The full graph must resolve bare worker.run to First.run after a separate self.worker: Second annotation.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_attribute_binding.py"
+      ]
+    },
+    {
+      "id": "ADR013",
+      "test": "language_end_to_end::end_to_end_python_super_resolves_first_bases_inherited_method",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "python-mro",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "The full graph must resolve D.super().run to A.run inherited through its first base X.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_mro.py"
+      ]
+    },
+    {
+      "id": "ADR014",
+      "test": "language_end_to_end::end_to_end_rust_annotation_prevents_factory_owner_false_edge",
+      "source": "tests/adversarial/rust_go_python/end_to_end.rs",
+      "group": "rust-factory",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "The full graph must respect explicit Token annotations and never infer Client.consume from Client.make_token ownership.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/rust_factory.rs"
+      ]
+    },
+    {
+      "id": "ADR015",
+      "test": "parser_edge_cases::go_every_name_in_grouped_parameter_gets_the_type",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-bindings",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "Both first and second in a grouped *Codec parameter declaration must expose Codec type evidence.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR016",
+      "test": "parser_edge_cases::go_generic_composite_literal_provides_receiver_type",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-bindings",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "A Box[int] composite literal must provide the same Box receiver evidence as a non-generic literal.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_bindings.go"
+      ]
+    },
+    {
+      "id": "ADR017",
+      "test": "parser_edge_cases::go_inferred_var_and_short_declaration_have_equal_evidence",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-bindings",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "An inferred var codec = Codec{} declaration must provide Codec receiver evidence.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_bindings.go"
+      ]
+    },
+    {
+      "id": "ADR018",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_conversion_shaped_ast",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-generics",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "The parser must extract `Identity[int](1)`, whose grammar shape resembles a type conversion.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_generic_calls.go"
+      ]
+    },
+    {
+      "id": "ADR019",
+      "test": "parser_edge_cases::go_one_type_argument_call_survives_index_shaped_ast",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-generics",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "The parser must extract `Pair[int](1, 2)` and `Empty[int]()` despite index-shaped callees.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_generic_calls.go"
+      ]
+    },
+    {
+      "id": "ADR020",
+      "test": "parser_edge_cases::go_package_initializer_has_a_caller",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "definition-time",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "A package-level loadConfig initializer must retain a dependency with an explicit caller owner.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_bindings.go"
+      ]
+    },
+    {
+      "id": "ADR021",
+      "test": "parser_edge_cases::go_shadowed_package_name_is_an_instance_receiver",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-bindings",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "A bytes parameter shadowing the bytes import must produce an instance Reset call, not a package/static call.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_bindings.go"
+      ]
+    },
+    {
+      "id": "ADR022",
+      "test": "parser_edge_cases::go_two_type_arguments_control_is_already_extracted",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "go-generics",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "Retain the already-supported TwoTypes[int, string] call as a positive control.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/go_generic_calls.go"
+      ]
+    },
+    {
+      "id": "ADR023",
+      "test": "parser_edge_cases::python_annotated_attribute_does_not_rebind_bare_local",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "python-field-binding",
+      "sequence": 1,
+      "layer": "parser-or-helper",
+      "expectation": "Parser bindings must keep worker: First and must not insert self.worker: Second as bare worker: Second.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_attribute_binding.py"
+      ]
+    },
+    {
+      "id": "ADR024",
+      "test": "parser_edge_cases::python_bare_decorator_application_is_recorded",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "definition-time",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "A bare @register decorator must produce a reference to the decorator application.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_definition_time.py"
+      ]
+    },
+    {
+      "id": "ADR025",
+      "test": "parser_edge_cases::python_default_argument_call_belongs_to_definition_environment",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "definition-time",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "A bootstrap() default argument belongs to the module definition environment, not the handle function body.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_definition_time.py"
+      ]
+    },
+    {
+      "id": "ADR026",
+      "test": "parser_edge_cases::python_inheritance_helper_uses_c3_not_depth_first_deduplication",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "python-mro",
+      "sequence": 1,
+      "layer": "parser-or-helper",
+      "expectation": "The standalone inheritance helper must choose Right.run before Root.run for Diamond(Left, Right).",
+      "fixtures": []
+    },
+    {
+      "id": "ADR027",
+      "test": "parser_edge_cases::rust_explicit_local_annotation_outranks_factory_owner",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "rust-factory",
+      "sequence": 1,
+      "layer": "parser-or-helper",
+      "expectation": "Parser bindings for an explicitly annotated Token must use Token and must not use factory owner Client.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR028",
+      "test": "parser_edge_cases::rust_factory_owner_is_not_proof_of_return_type",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "rust-factory",
+      "sequence": 1,
+      "layer": "parser-or-helper",
+      "expectation": "An associated factory returning Token must never emit concrete Client receiver type evidence.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/rust_factory.rs"
+      ]
+    },
+    {
+      "id": "ADR029",
+      "test": "parser_edge_cases::rust_turbofish_preserves_free_call",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "rust-generics",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "Unwrap explicit type arguments so identity::<u32>(1) retains the identity callable.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/rust_turbofish.rs"
+      ]
+    },
+    {
+      "id": "ADR030",
+      "test": "parser_edge_cases::rust_turbofish_preserves_method_call_and_receiver",
+      "source": "tests/adversarial/rust_go_python/parser_edge_cases.rs",
+      "group": "rust-generics",
+      "sequence": 2,
+      "layer": "parser-or-helper",
+      "expectation": "Unwrap explicit type arguments while retaining worker as the receiver of accept::<u32>.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/rust_turbofish.rs"
+      ]
+    },
+    {
+      "id": "ADR031",
+      "test": "resolver_stages::python_field_annotation_cannot_overwrite_local_receiver_type",
+      "source": "tests/adversarial/rust_go_python/pipeline_edge_cases.rs",
+      "group": "python-field-binding",
+      "sequence": 1,
+      "layer": "production-resolver",
+      "expectation": "Production ResolveStage fed by real parsed bindings must choose First.run for the bare worker receiver.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_attribute_binding.py"
+      ]
+    },
+    {
+      "id": "ADR032",
+      "test": "resolver_stages::python_receiver_resolution_follows_mro_instead_of_shortest_distance",
+      "source": "tests/adversarial/rust_go_python/pipeline_edge_cases.rs",
+      "group": "python-mro",
+      "sequence": 1,
+      "layer": "production-resolver",
+      "expectation": "Production ResolveStage must use C3 order rather than shortest inheritance distance for D.run.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_mro.py"
+      ]
+    },
+    {
+      "id": "ADR033",
+      "test": "resolver_stages::python_super_visits_inherited_method_of_first_base",
+      "source": "tests/adversarial/rust_go_python/pipeline_edge_cases.rs",
+      "group": "python-mro",
+      "sequence": 1,
+      "layer": "production-resolver",
+      "expectation": "Production ResolveStage must find A.run through X before examining the later base Y.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/python_mro.py"
+      ]
+    },
+    {
+      "id": "ADR034",
+      "test": "resolver_stages::rust_factory_receiver_must_target_return_type_not_associated_owner",
+      "source": "tests/adversarial/rust_go_python/pipeline_edge_cases.rs",
+      "group": "rust-factory",
+      "sequence": 1,
+      "layer": "production-resolver",
+      "expectation": "Production ResolveStage must forbid Client.consume for inferred and annotated factory results and require Token.consume for the annotation.",
+      "fixtures": [
+        "tests/adversarial/rust_go_python/fixtures/rust_factory.rs"
+      ]
+    },
+    {
+      "id": "ADR035",
+      "test": "root_probes::different_line_control_preserves_both_calls",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "Keep both the Rust free call and associated call when formatted on separate lines.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR036",
+      "test": "root_probes::generated_line_after_64k_keeps_exact_source_column",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "source-range",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "A generated call at byte column 65,562 must retain that exact position instead of wrapping to 26.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR037",
+      "test": "root_probes::same_line_free_and_associated_function_both_survive",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "Keep distinct Rust make() and Boxed::make() call sites on one line.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR038",
+      "test": "root_probes::separate_repeated_call_sites_keep_both_columns",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "Two ping() calls on one line must retain two distinct evidence columns.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR039",
+      "test": "root_probes::typescript_formatting_does_not_change_resolved_graph",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "full-index",
+      "expectation": "The normalized full TypeScript graph must reach both intended make definitions under both line layouts.",
+      "fixtures": [
+        "tests/adversarial/root/corpus/same_line_calls/calls.ts"
+      ]
+    },
+    {
+      "id": "ADR040",
+      "test": "root_probes::typescript_same_line_free_and_static_calls_both_survive",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "Raw TypeScript records must contain one free make call and one Boxed.make call on the same line.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR041",
+      "test": "root_probes::typescript_split_line_calls_have_no_duplicate_channel_record",
+      "source": "tests/adversarial/root/adversarial_root.rs",
+      "group": "call-sites",
+      "sequence": 2,
+      "layer": "parse-stage",
+      "expectation": "Splitting the TypeScript calls across lines must not create a duplicate plain/rich extraction record.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR042",
+      "test": "search_graph::class_qualification_does_not_lose_a_symbol_after_global_candidate_limiting",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "exact-lookup",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "Every owner-qualified StoreNNN.save lookup must succeed among 101 same-named methods.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR043",
+      "test": "search_graph::dense_graph_preserves_complete_local_enumeration_and_reports_network_budget_failure",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "graph-completeness",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "Retain all 1001 caller edges, expose complete 1000+1 paging, and explicitly reject a smaller graph budget.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR044",
+      "test": "search_graph::exact_code_fragment_survives_query_parser_fallback",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "literal-search",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "A qualified Rust type fragment rejected by Tantivy syntax parsing must still match its containing signature.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR045",
+      "test": "search_graph::exact_name_lookup_reports_every_same_named_symbol",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "exact-lookup",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "Exact-name lookup must return all 101 indexed save methods, not silently stop at 100.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR046",
+      "test": "search_graph::id_lookup_keeps_language_filter_consistent_with_name_lookup",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "id-filter",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "The same mismatched language filter must reject a Rust symbol under both plain-name and direct-ID lookup.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR047",
+      "test": "search_graph::impact_handles_a_diamond_cycle_and_self_recursion",
+      "source": "tests/adversarial/search_graph/search_graph_review.rs",
+      "group": "graph-completeness",
+      "sequence": 4,
+      "layer": "storage-or-service",
+      "expectation": "Impact traversal must terminate, deduplicate a diamond/cycle, and exclude the seed reached by recursion.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR048",
+      "test": "web_parser::full_graph_typescript_arrow_keeps_caller_identity",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "arrow-owner",
+      "sequence": 2,
+      "layer": "full-index",
+      "expectation": "Full indexing must attach a bare-arrow persist call to save, with a parenthesized control in the same file.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR049",
+      "test": "web_parser::full_graph_typescript_default_import_calls_default_definition",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "default-export",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "Full indexing must resolve locally named save to default persist and forbid the unrelated named save export.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR050",
+      "test": "web_parser::full_graph_typescript_explicit_named_import_control",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "default-export",
+      "sequence": 1,
+      "layer": "full-index",
+      "expectation": "An explicit named import must continue to call named save even when a separate default persist exists.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR051",
+      "test": "web_parser::javascript_bare_arrow_parameter_is_not_the_caller_name",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "arrow-owner",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "The JavaScript parser must use the arrow declaration save as caller and must not invent caller value.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR052",
+      "test": "web_parser::php_alias_import_retains_visible_name",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-imports",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "Preserve Payments as the alias of App\\Billing\\Gateway.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR053",
+      "test": "web_parser::php_grouped_imports_expand_prefix_and_alias",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-imports",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "Expand both grouped imports with App\\Billing and preserve the Receipt-as-Invoice alias.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR054",
+      "test": "web_parser::php_nullsafe_call_is_still_a_call_site",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-nullsafe",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "The parser must retain pay -> charge with receiver $gateway for a nullsafe member call.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR055",
+      "test": "web_parser::php_ordinary_receiver_control_already_works",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-nullsafe",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "An ordinary PHP member call must retain its caller, method, and receiver as a positive control.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR056",
+      "test": "web_parser::php_promoted_dependency_is_a_field",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-properties",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "A promoted private readonly constructor parameter must emit a gateway Field symbol.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR057",
+      "test": "web_parser::php_property_declaration_emits_every_field",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-properties",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "A single declaration containing $id and $reference must emit both fields.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR058",
+      "test": "web_parser::php_qualified_inheritance_is_extracted",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-inheritance",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "Fully qualified extends and implements clauses must emit both relationships.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR059",
+      "test": "web_parser::php_simple_parameter_type_emits_usage",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "php-type-use",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "An ordinary Invoice parameter must emit an archive -> Invoice Uses relationship.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR060",
+      "test": "web_parser::typescript_bare_arrow_parameter_is_not_the_caller_name",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "arrow-owner",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "The TypeScript parser must use declaration save as caller and must not invent caller value.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR061",
+      "test": "web_parser::typescript_default_import_does_not_bind_same_named_named_export",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "default-export",
+      "sequence": 1,
+      "layer": "parser-or-binding",
+      "expectation": "The real TypeScript import-binding context must select the default persist ID, not the named save decoy.",
+      "fixtures": []
+    },
+    {
+      "id": "ADR062",
+      "test": "web_parser::typescript_parenthesized_arrow_control_already_works",
+      "source": "tests/adversarial/ts_php/regressions.rs",
+      "group": "arrow-owner",
+      "sequence": 2,
+      "layer": "parser-or-binding",
+      "expectation": "Retain save -> persist for a parenthesized TypeScript arrow as a positive control.",
+      "fixtures": []
+    }
+  ],
+  "follow_ups": [
+    {
+      "id": "ADF001",
+      "slug": "barrel-exports",
+      "sequence": 5,
+      "status": "source-confirmed",
+      "expectation": "Resolve named and namespace re-exports through a declaration-free barrel.",
+      "procedure": "Index storage.persist, barrel export { persist as save }, and client import { save as write }; require the original persist identity. Add 3-hop chains, cycles, default slots, conflicting stars, explicit-over-star precedence, type-only exports, and path aliases.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/ts_named_reexport.ts",
+        "tests/adversarial/ts_php/fixtures/ts_namespace_reexport.ts"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF002",
+      "slug": "php-property-receivers",
+      "sequence": 5,
+      "status": "source-confirmed",
+      "expectation": "Follow declared promoted property types through $this->gateway->charge().",
+      "procedure": "Index a Gateway dependency and a same-named charge decoy. Require the declared field type target, and retain ambiguous union/intersection receivers as candidates rather than choosing an arbitrary class.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/php_promoted_dependency.php"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF003",
+      "slug": "php-trait-adaptations",
+      "sequence": 5,
+      "status": "prepared-capability",
+      "expectation": "Track trait composition, insteadof preference, and as aliases.",
+      "procedure": "Resolve serialize to the explicitly preferred JsonSerializer and serializeCsv to the aliased CsvSerializer method. An unresolved trait conflict must never select whichever trait was visited last.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/php_trait_adaptation.php"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF004",
+      "slug": "commonjs",
+      "sequence": 5,
+      "status": "prepared-capability",
+      "expectation": "Resolve literal require and CommonJS export aliases.",
+      "procedure": "Add storage module.exports/exports definitions and resolve destructured require aliases. Preserve unresolved evidence for computed module names.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/js_commonjs.js"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF005",
+      "slug": "literal-dynamic-import",
+      "sequence": 5,
+      "status": "prepared-capability",
+      "expectation": "Track a literal dynamic import and its destructured callable.",
+      "procedure": "Resolve the module literal and named member after await while retaining conditional execution evidence; a computed string remains unresolved.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/ts_dynamic_import.ts"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF006",
+      "slug": "callback-references",
+      "sequence": 5,
+      "status": "prepared-capability",
+      "expectation": "Retain a passed callable as a reference distinct from immediate execution.",
+      "procedure": "Require a reference from registration/argument position to persist, including its source span. Do not manufacture a proven direct Calls edge for every callback argument.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/ts_registered_callback.ts"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF007",
+      "slug": "framework-registrations",
+      "sequence": 5,
+      "status": "prepared-capability",
+      "expectation": "Expose literal Laravel route handlers and container mappings.",
+      "procedure": "Require CheckoutController::store handler identity and Gateway-to-StripeGateway binding with adapter provenance. Retain unresolved registrations for dynamic factories.",
+      "fixtures": [
+        "tests/adversarial/ts_php/fixtures/php_framework_registration.php"
+      ],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF008",
+      "slug": "nested-ignore-reconciliation",
+      "sequence": 3,
+      "status": "source-confirmed",
+      "expectation": "Refresh nested include/exclude policy through the live watcher.",
+      "procedure": "Change only a nested ignore file, wait for the watcher generation, and compare excluded and re-included subtrees to fresh indexing. No source-file touch may be required.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF009",
+      "slug": "optional-semantic-context",
+      "sequence": 4,
+      "status": "source-confirmed",
+      "expectation": "Keep semantic matches when optional impact expansion exceeds its budget.",
+      "procedure": "Use mocked embeddings to return a function with 1001 callers alongside small valid matches. Require every retrieved symbol plus an explicit per-result budget status; no paid or live provider calls. Recorded evidence: ADX012, `indexing::facade::retrieval_context_regressions::semantic_context_preserves_results_when_one_impact_exceeds_budget`, passed in `additional-results.json`.",
+      "fixtures": [],
+      "verification": "verified",
+      "verification_evidence": {
+        "case_id": "ADX012",
+        "target": "lib",
+        "test": "indexing::facade::retrieval_context_regressions::semantic_context_preserves_results_when_one_impact_exceeds_budget",
+        "result_artifact": "additional-results.json",
+        "status": "passed"
+      }
+    },
+    {
+      "id": "ADF010",
+      "slug": "source-boundaries",
+      "sequence": 2,
+      "status": "proposed",
+      "expectation": "Check exact positions around the old column boundary and encoding variants.",
+      "procedure": "Probe columns 65,535 and 65,536, multibyte UTF-8 before calls, and CRLF; verify source slicing, serialization, and persisted reload without narrowing.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF011",
+      "slug": "declaration-replacement",
+      "sequence": 1,
+      "status": "proposed",
+      "expectation": "Preserve declaration identity across overload reorder or replacement.",
+      "procedure": "Reorder same-name declarations and replace one at the same line with unchanged peer count. Check owner, module, kind, signature, and forbidden rebound edges.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF012",
+      "slug": "rename-and-branch-transitions",
+      "sequence": 3,
+      "status": "proposed",
+      "expectation": "Make rename, move, branch switch, and delayed import updates converge.",
+      "procedure": "Move and edit across indexed roots, rename a directory with imports arriving in a later event burst, then remove/restore a module as on a branch switch. Compare both index directions against a fresh oracle.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF013",
+      "slug": "resolution-config-changes",
+      "sequence": 3,
+      "status": "proposed",
+      "expectation": "Invalidate consumers when only module-resolution configuration changes.",
+      "procedure": "Change tsconfig, composer mappings, or go.mod without source edits. Require callers to follow the new module identity and reject stale targets.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF014",
+      "slug": "path-and-filesystem-variants",
+      "sequence": 3,
+      "status": "proposed",
+      "expectation": "Qualify duplicate basenames, case, Unicode, and symlink policy.",
+      "procedure": "Use nested packages with duplicate basenames, case-only renames on both filesystem kinds, composed/decomposed Unicode paths, and root/child symlinks. Assert the documented policy instead of assuming every platform behaves alike.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF015",
+      "slug": "read-and-commit-races",
+      "sequence": 3,
+      "status": "proposed",
+      "expectation": "Recover from disappearance, unreadability, and temporary writer contention.",
+      "procedure": "Make a file unreadable after discovery, remove it between read and commit, and transiently block a writer without a later source event. Require diagnostics, live endpoints, and eventual convergence without accepting a partial inventory as authoritative.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF016",
+      "slug": "lookup-pagination-boundaries",
+      "sequence": 4,
+      "status": "proposed",
+      "expectation": "Expose complete filtered lookup and paging across cardinality boundaries.",
+      "procedure": "Test 99, 100, 101, and 1001 collisions; query every owner, file, module, and language. Require total/continuation metadata and no unreachable exact target.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF017",
+      "slug": "literal-query-negatives",
+      "sequence": 4,
+      "status": "proposed",
+      "expectation": "Keep literal fallback useful without broad false positives.",
+      "procedure": "Search Rust/PHP/C++ qualifiers, generics, brackets, quotes, and unmatched punctuation. Pair each positive signature with misleading single-token decoys and an absent fragment.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF018",
+      "slug": "retrieval-errors",
+      "sequence": 4,
+      "status": "proposed",
+      "expectation": "Distinguish storage or context errors from empty successful results.",
+      "procedure": "Inject local read/query faults and malformed or stalled mocked provider responses. Verify explicit failure/partial status, retained valid results, and no false no-match response.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF019",
+      "slug": "go-cross-file-method-sets",
+      "sequence": 5,
+      "status": "proposed",
+      "expectation": "Extend Go structural typing with explicit pointer/value and package identity.",
+      "procedure": "Test embedded interfaces and structs, pointer and value method sets, exact signatures, unexported members from different packages, cross-file declarations, and real package names differing from import-path tails.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF020",
+      "slug": "inheritance-open-world",
+      "sequence": 5,
+      "status": "proposed",
+      "expectation": "Retain uncertainty for cross-file and open-world dispatch.",
+      "procedure": "Add cross-module C3 hierarchies and factory-return alternatives, runtime plugin loading, reflection, and conditional builds. Require candidate identities and unresolved reasons where one runtime target cannot be established.",
+      "fixtures": [],
+      "verification": "pending"
+    },
+    {
+      "id": "ADF021",
+      "slug": "syntax-transformations",
+      "sequence": 2,
+      "status": "proposed",
+      "expectation": "Use equivalent syntax transformations and same-name decoys.",
+      "procedure": "Rename aliases, add explicit type arguments, collapse code onto one line, reorder discovery, add same-name declarations, and wrap arrows in async/nested contexts. Preserve identities and all physical call sites.",
+      "fixtures": [],
+      "verification": "pending"
+    }
+  ],
+  "fixture_inventory": [
+    {
+      "path": "tests/adversarial/root/corpus/same_line_calls/calls.ts",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/go_bindings.go",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/go_generic_calls.go",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/go_interfaces.go",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/python_attribute_binding.py",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/python_definition_time.py",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/python_mro.py",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/rust_factory.rs",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/rust_go_python/fixtures/rust_turbofish.rs",
+      "role": "compiled-fixture"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/js_commonjs.js",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/js_single_parameter_arrow.js",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_framework_registration.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_grouped_import.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_import_alias.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_multiple_properties.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_nullsafe.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_promoted_dependency.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_qualified_inheritance.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_trait_adaptation.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/php_type_references.php",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_default_export/client.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_default_export/storage.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_dynamic_import.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_named_reexport.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_namespace_reexport.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_registered_callback.ts",
+      "role": "illustrative-or-follow-up"
+    },
+    {
+      "path": "tests/adversarial/ts_php/fixtures/ts_single_parameter_arrow.ts",
+      "role": "illustrative-or-follow-up"
+    }
+  ]
+}

@@ -30,6 +30,8 @@
 //! ```
 mod cache;
 pub mod config;
+mod dependencies;
+mod exports;
 mod full;
 mod incremental;
 pub mod metrics;
@@ -76,15 +78,21 @@ pub struct Pipeline {
     /// One warm cache per indexing pipeline; clones used by the mutation worker
     /// share its lifecycle. Cache updates happen only between resolution runs.
     symbol_cache: Arc<Mutex<Option<cache::CachedSymbols>>>,
+    /// Roots actually walked or restored from metadata can exceed the config
+    /// snapshot (for example `index some/path`). Keep that namespace inventory
+    /// with the warm pipeline so later single-file events can find importers.
+    dependency_roots: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
 }
 
 impl Pipeline {
     /// Create a new pipeline with the given settings and configuration.
     pub fn new(settings: Arc<Settings>, config: PipelineConfig) -> Self {
+        let dependency_roots = settings.indexed_paths_cache.iter().cloned().collect();
         Self {
             settings,
             config,
             symbol_cache: Arc::new(Mutex::new(None)),
+            dependency_roots: Arc::new(Mutex::new(dependency_roots)),
         }
     }
 
@@ -102,6 +110,27 @@ impl Pipeline {
     /// Get the settings.
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    pub(crate) fn register_dependency_root(&self, root: &Path) {
+        self.dependency_roots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(root.to_path_buf());
+    }
+
+    fn settings_with_dependency_roots(&self) -> Settings {
+        let mut settings = (*self.settings).clone();
+        settings.indexed_paths_cache.extend(
+            self.dependency_roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .cloned(),
+        );
+        settings.indexed_paths_cache.sort();
+        settings.indexed_paths_cache.dedup();
+        settings
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

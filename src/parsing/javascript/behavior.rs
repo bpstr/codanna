@@ -340,9 +340,16 @@ impl LanguageBehavior for JavaScriptBehavior {
             // Path-domain arm first: relative specifiers resolve by file
             // identity (trait default). Module-string normalization cannot
             // represent the navigation when stems contain dots.
-            let file_resolved = importing_file.as_deref().and_then(|f| {
-                self.resolve_relative_import(cache, target_name, &import.path, f, extensions)
-            });
+            use crate::parsing::ExportResolution;
+            let mut export_resolution =
+                cache.resolve_export(file_id, &import.path, target_name, extensions);
+            let file_resolved = match export_resolution {
+                ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => Some(id),
+                ExportResolution::Unknown => importing_file.as_deref().and_then(|f| {
+                    self.resolve_relative_import(cache, target_name, &import.path, f, extensions)
+                }),
+                ExportResolution::Missing | ExportResolution::Ambiguous => None,
+            };
             let file_resolved_module = file_resolved
                 .and_then(|id| cache.get(id))
                 .and_then(|s| s.module_path.map(String::from));
@@ -388,8 +395,21 @@ impl LanguageBehavior for JavaScriptBehavior {
             // order is file-processing order, not identity; raw ends_with
             // also admitted mid-segment captures).
             let mut resolved_symbol: Option<SymbolId> = file_resolved;
+            if matches!(export_resolution, ExportResolution::Unknown) {
+                export_resolution =
+                    cache.resolve_module_export(&target_module, target_name, extensions);
+                match export_resolution {
+                    ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => {
+                        resolved_symbol = Some(id)
+                    }
+                    ExportResolution::Missing | ExportResolution::Ambiguous => {
+                        resolved_symbol = None
+                    }
+                    ExportResolution::Unknown => {}
+                }
+            }
             let mut suffix_matches: Vec<SymbolId> = Vec::new();
-            if resolved_symbol.is_none() {
+            if resolved_symbol.is_none() && matches!(export_resolution, ExportResolution::Unknown) {
                 for id in cache.lookup_candidates(target_name) {
                     if let Some(symbol) = cache.get(id) {
                         if let Some(module) = symbol.module_path.as_deref() {
@@ -414,15 +434,26 @@ impl LanguageBehavior for JavaScriptBehavior {
             }
 
             // Determine origin
-            let origin = if resolved_symbol.is_some() {
+            let origin = if resolved_symbol.is_some()
+                || matches!(
+                    export_resolution,
+                    ExportResolution::Missing | ExportResolution::Ambiguous
+                ) {
                 ImportOrigin::Internal
             } else {
                 ImportOrigin::External
             };
 
-            // Register binding
+            // Keep type-only export paths available for Uses while preventing
+            // runtime Calls from treating them as ordinary value imports.
+            let mut effective_import = import.clone();
+            effective_import.is_type_only |=
+                matches!(export_resolution, ExportResolution::TypeOnly(_));
+            if let Some(enhanced) = enhanced_imports.last_mut() {
+                enhanced.is_type_only = effective_import.is_type_only;
+            }
             context.register_import_binding(ImportBinding {
-                import: import.clone(),
+                import: effective_import,
                 exposed_name: local_name.clone(),
                 origin,
                 resolved_symbol,

@@ -72,6 +72,7 @@
 pub mod audit;
 pub mod behavior;
 pub mod definition;
+pub(crate) mod method_sets;
 pub mod parser;
 pub mod resolution;
 

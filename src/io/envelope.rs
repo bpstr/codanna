@@ -165,6 +165,16 @@ pub struct Meta {
     /// Traversal depth for tree/graph results
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
+    /// Exact filtered match count before a paginated symbol listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    /// Offset into the current filtered indexed state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
 }
 
 impl Default for Meta {
@@ -178,6 +188,10 @@ impl Default for Meta {
             duration_ms: None,
             truncated: None,
             depth: None,
+            total: None,
+            offset: None,
+            limit: None,
+            next_offset: None,
         }
     }
 }

@@ -105,10 +105,10 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
             builder = builder
                 .document_store(store_arc.clone())
                 .chunking_config(config.documents.defaults.clone())
-                .handler(DocumentFileHandler::new(
-                    store_arc.clone(),
-                    workspace_root.clone(),
-                ));
+                .handler(
+                    DocumentFileHandler::new(store_arc.clone(), workspace_root.clone())
+                        .with_config(&config.documents),
+                );
         }
 
         // Build and start the unified watcher

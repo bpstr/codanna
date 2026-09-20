@@ -142,9 +142,9 @@ impl KotlinParser {
         let end = node.end_position();
         Range {
             start_line: start.row as u32,
-            start_column: start.column as u16,
+            start_column: start.column as u32,
             end_line: end.row as u32,
-            end_column: end.column as u16,
+            end_column: end.column as u32,
         }
     }
 

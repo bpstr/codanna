@@ -53,6 +53,11 @@ pub trait LanguageParser: Send + Sync {
             .collect()
     }
 
+    /// Find value references without asserting that the target is called.
+    fn find_references(&mut self, _code: &str) -> Vec<crate::parsing::references::Reference> {
+        Vec::new()
+    }
+
     /// Find trait/interface implementations
     ///
     /// Returns tuples of (type_name, trait_name, range)
@@ -84,6 +89,12 @@ pub trait LanguageParser: Send + Sync {
     ///
     /// Returns Import structs with path, alias, and glob information
     fn find_imports(&mut self, code: &str, file_id: FileId) -> Vec<crate::parsing::Import>;
+
+    /// Explicit export facts. `Some([])` describes a module with no exports;
+    /// `None` means this language does not use this export model.
+    fn find_exports(&mut self, _code: &str) -> Option<Vec<crate::parsing::Export>> {
+        None
+    }
 
     /// Get the language this parser handles
     fn language(&self) -> crate::parsing::Language;

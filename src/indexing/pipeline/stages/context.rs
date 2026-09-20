@@ -21,6 +21,8 @@ use crate::{IndexError, IndexResult, RelationKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+type PositionedParent = (Option<(u32, u32)>, crate::SymbolId);
+
 /// Context stage for building resolution contexts.
 ///
 /// Groups relationships by file and gathers all data needed for resolution.
@@ -82,6 +84,130 @@ impl ContextStage {
             .read()
             .map_err(|_| IndexError::MutexPoisoned)?
             .clone())
+    }
+
+    /// Read ordered Python parent identities for files that are not part of
+    /// this resolution pass. Completeness is checked against the persisted
+    /// declaration, because omitting one unresolved base changes C3 semantics.
+    pub fn persisted_class_parents(
+        &self,
+    ) -> IndexResult<HashMap<crate::SymbolId, Option<Vec<crate::SymbolId>>>> {
+        let mut declarations = HashMap::new();
+        self.index
+            .for_each_symbol::<crate::storage::StorageError>(|symbol| {
+                if symbol.kind == crate::SymbolKind::Class
+                    && symbol.language_id.is_some_and(|l| l.as_str() == "python")
+                {
+                    declarations.insert(symbol.id, symbol);
+                }
+                Ok(())
+            })?;
+        let mut edges: HashMap<crate::SymbolId, Vec<PositionedParent>> = HashMap::new();
+        if !declarations.is_empty() {
+            self.index
+                .for_each_relationship::<crate::storage::StorageError>(|from, to, rel| {
+                    if rel.kind == RelationKind::Extends && declarations.contains_key(&from) {
+                        let position = rel.metadata.and_then(|m| Some((m.line?, m.column?)));
+                        edges.entry(from).or_default().push((position, to));
+                    }
+                    Ok(())
+                })?;
+        }
+        Ok(declarations
+            .iter()
+            .map(|(&id, symbol)| {
+                let parents = (|| {
+                    let bases = crate::parsing::python::resolution::declared_bases(
+                        symbol.signature.as_deref()?,
+                    )?;
+                    let mut rows = edges.remove(&id).unwrap_or_default();
+                    rows.sort_by_key(|(position, _)| *position);
+                    let object_is_indexed = rows.iter().any(|(_, to)| {
+                        declarations
+                            .get(to)
+                            .is_some_and(|s| s.name.as_ref() == "object")
+                    });
+                    let expected = bases
+                        .iter()
+                        .filter(|base| base.as_str() != "object" || object_is_indexed)
+                        .count();
+                    if rows.len() != expected
+                        || rows
+                            .iter()
+                            .any(|(p, to)| p.is_none() || !declarations.contains_key(to))
+                        || rows.windows(2).any(|w| w[0].0 == w[1].0)
+                    {
+                        return None;
+                    }
+                    Some(rows.into_iter().map(|(_, to)| to).collect())
+                })();
+                (id, parents)
+            })
+            .collect())
+    }
+
+    /// Recompute structural Go implementation edges from the complete live
+    /// index. Interface or embedded-type edits can affect unchanged files, so
+    /// replace this derived kind globally while preserving all other edges.
+    pub fn rebuild_go_implementations(&self) -> IndexResult<usize> {
+        let mut symbols = Vec::new();
+        self.index
+            .for_each_symbol::<crate::storage::StorageError>(|symbol| {
+                if symbol.language_id.is_some_and(|l| l.as_str() == "go") {
+                    symbols.push(symbol);
+                }
+                Ok(())
+            })?;
+        if symbols.is_empty() {
+            return Ok(0);
+        }
+        let mut imports = HashMap::new();
+        for symbol in &symbols {
+            if let std::collections::hash_map::Entry::Vacant(entry) = imports.entry(symbol.file_id)
+            {
+                entry.insert(self.index.get_imports_for_file(symbol.file_id)?);
+            }
+        }
+        let declarations: HashMap<_, _> = symbols
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.kind,
+                    crate::SymbolKind::Struct
+                        | crate::SymbolKind::TypeAlias
+                        | crate::SymbolKind::Interface
+                )
+            })
+            .map(|s| (s.id, s.clone()))
+            .collect();
+        let method_sets = crate::parsing::go::method_sets::GoMethodSets::new(symbols, imports);
+        let implementations = method_sets.implementations();
+        self.index.start_batch()?;
+        for &id in declarations.keys() {
+            self.index
+                .delete_outgoing_relationships_of_kind(id, RelationKind::Implements)?;
+        }
+        for &(from, to, pointer_only) in &implementations {
+            let symbol = &declarations[&from];
+            let receiver = if pointer_only {
+                format!("*{}", symbol.name)
+            } else {
+                symbol.name.to_string()
+            };
+            let metadata = crate::relationship::RelationshipMetadata::new()
+                .at_position(symbol.range.start_line, symbol.range.start_column)
+                .with_receiver(receiver)
+                .with_context(if pointer_only {
+                    "Go method set: pointer only"
+                } else {
+                    "Go method set: value and pointer"
+                });
+            let rel = crate::relationship::Relationship::new(RelationKind::Implements)
+                .with_metadata(metadata);
+            self.index.store_relationship(from, to, &rel)?;
+        }
+        self.index.commit_batch()?;
+        Ok(implementations.len())
     }
 
     /// Build resolution contexts from unresolved relationships.
