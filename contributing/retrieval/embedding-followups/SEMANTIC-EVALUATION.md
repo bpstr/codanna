@@ -175,8 +175,10 @@ whole run. Invalid experiment/corpus/model provenance instead produces an
 `invalid_capture` report with no aggregate. Neither can qualify semantic quality.
 
 `capture.json` retains command argument lists, return codes, raw stdout/stderr
-paths and hashes, version evidence, binary and evaluator SHA-256, host metadata,
-and copied model artifact hashes. Scoring verifies the raw version/index evidence as well
+paths and hashes, version evidence, the binary SHA-256, host metadata,
+and copied model artifact hashes. It binds `experiment.json` through
+`experiment_sha256`; the evaluator SHA-256 is recorded in `experiment.json` and
+`report.json`. Scoring verifies the raw version/index evidence as well
 as both diagnostics requests and every query. The actual
 `documents stats semantic_eval --json` identity must specify the expected local
 model, revision label, exact tokenizer fingerprint, effective input budget, and
