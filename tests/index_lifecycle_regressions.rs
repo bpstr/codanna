@@ -358,7 +358,10 @@ fn max_files_is_global_deterministic_and_zero_is_not_deletion_evidence() {
     index
         .index_directories_with_options(&roots, false, false, false, Some(1))
         .unwrap();
-    assert_eq!(index.get_all_indexed_paths(), vec![first.join("a.rs")]);
+    assert_eq!(
+        index.get_all_indexed_paths(),
+        vec![first.join("a.rs").canonicalize().unwrap()]
+    );
     let before = snapshot(&index);
     fs::remove_file(first.join("a.rs")).unwrap();
     index
@@ -412,7 +415,7 @@ fn bounded_barrel_update_invalidates_then_repairs_after_reopen_without_source_ed
             .document_index()
             .get_pending_resolution_paths()
             .unwrap(),
-        vec![caller.clone()]
+        vec![caller.canonicalize().unwrap()]
     );
     persistence.save_facade(&index).unwrap();
     drop(index);
@@ -431,7 +434,7 @@ fn bounded_barrel_update_invalidates_then_repairs_after_reopen_without_source_ed
             .document_index()
             .get_pending_resolution_paths()
             .unwrap(),
-        vec![caller]
+        vec![caller.canonicalize().unwrap()]
     );
     // Every source hash is unchanged from its registration. Pending work must
     // independently trigger resolution through the ordinary directory API.
