@@ -16,7 +16,16 @@ struct LocalEmbeddingServer {
 
 impl LocalEmbeddingServer {
     fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = (0..20)
+            .find_map(|_| match TcpListener::bind("127.0.0.1:0") {
+                Ok(listener) => Some(listener),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    None
+                }
+                Err(error) => panic!("local embedding fixture bind failed: {error}"),
+            })
+            .expect("local embedding fixture bind remained temporarily unavailable");
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -33,6 +42,7 @@ impl LocalEmbeddingServer {
                     }
                     Err(error) => panic!("local fixture accept failed: {error}"),
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
