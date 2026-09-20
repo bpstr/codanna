@@ -1,0 +1,3 @@
+# The repository-wide docs/ rule must not hide this evaluation's fixed corpus.
+!corpus/docs/
+!corpus/docs/*.md

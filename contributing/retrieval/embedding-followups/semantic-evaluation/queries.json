@@ -1,0 +1,853 @@
+{
+  "schema_version": 1,
+  "name": "Waystation synthetic semantic retrieval",
+  "split": "heldout-synthetic-v1",
+  "label_policy": {
+    "origin": "Provisional fixture-author judgments. The corpus and questions are synthetic and authored together; no independent human relevance review has been performed.",
+    "languages": "English (en), Spanish (es), and Hungarian (hu) query wording is provisional author wording, not independently validated by native speakers. Every indexed source is in English.",
+    "unit": "Judgments apply to complete source documents identified by paths relative to corpus/. A retrieved chunk inherits its source grade; this can over-credit a chunk that omits the relevant passage.",
+    "grade_definitions": {
+      "0": "Does not support the requested answer; includes misleading same-keyword matches about a different mechanism.",
+      "1": "Related context or terminology, but insufficient evidence for a requested answer or a substantial answer facet.",
+      "2": "Useful partial evidence for the requested answer, but incomplete for the facet it addresses.",
+      "3": "Directly answers the request or directly supplies a distinct required facet of a multi-source request."
+    },
+    "completeness": "Every query explicitly judges every source, including zero-grade distractors. Missing judgments must not be inferred as zero.",
+    "multi_source": "For q03, both docs/representation-identity.md and docs/collection-handoff.md are required for complete source coverage. Retrieving multiple chunks from one source cannot cover the other source.",
+    "heldout_boundary": "Only corpus/docs/*.md may be ingested. This query manifest, grades, titles, tags, rationales, and evaluation outputs remain outside the indexed corpus. The fixed split is for evaluation, not a claim of independent corpus design or representative production quality.",
+    "measurement": "Grade 2 or 3 means relevant for binary recall and reciprocal-rank metrics. Graded ranking metrics retain the full 0-3 scale. No model performance is asserted by the fixture itself."
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "title": "Keep searches available during replacement",
+      "text": "People must keep finding documents while we prepare a replacement collection. What ordering lets ongoing requests finish safely and makes fresh requests use the completed replacement?",
+      "language": "en",
+      "tags": [
+        "paraphrase",
+        "concurrent-readers",
+        "publication"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 3,
+          "rationale": "Directly gives staging, validation, atomic publication, request pinning, and delayed reclamation."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 2,
+          "rationale": "Explains why interrupted staging cannot replace published data, but omits reader pinning and the successful handoff."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Controls the timing of source refreshes rather than collection publication or concurrent readers."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Describes removing and adding source paths, not keeping a collection available during replacement."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 0,
+          "rationale": "Describes text segmentation and contains no publication sequence."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Describes result limits rather than which collection a request reads."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 1,
+          "rationale": "Requires compatible manifests before serving, but delegates the publication procedure and says nothing about reader lifetimes."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Provides atomic visibility for one document revision, which is narrower than a whole-collection reader handoff."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Describes language matching, not availability during collection replacement."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Describes encoder input sizing, not reader availability."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Describes transport failure retries and no publication sequence."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 1,
+          "rationale": "Discusses collection snapshots, but its restore procedure stops readers and cannot supply the requested online handoff."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Batches notifications after source updates, without controlling which collection serves requests."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 0,
+          "rationale": "Formats retrieved passages and does not manage collection generations."
+        }
+      ]
+    },
+    {
+      "id": "q02",
+      "title": "Combine editor event bursts before refresh",
+      "text": "Which batching rule should combine repeated file changes before the search index is refreshed, so a burst of editor saves reads each final file state once without postponing work forever?",
+      "language": "en",
+      "tags": [
+        "paraphrase",
+        "watcher-events",
+        "hard-same-keyword-distractor"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Controls collection publication, not coalescing repeated file events."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Reuses work after an interrupted build and supplies no event-batching policy."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 3,
+          "rationale": "Directly specifies per-path replacement, a reset quiet timer, final-state reads, and a maximum wait."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 1,
+          "rationale": "Explains absent-path cleanup during moves, but does not explain coalescing saves or bounded waiting."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 0,
+          "rationale": "Groups text into passages rather than watcher events into work."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Limits returned matches, not pending file work."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 0,
+          "rationale": "Defines encoder compatibility and contains no watcher scheduling policy."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Explains the update transaction after passages are prepared, but not how events are batched before that update."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Discusses multilingual matching and no file-event policy."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Batches encoder inputs by capacity; it cannot choose a final file state or bound watcher-event delay."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Waits between failed transport attempts rather than coalescing successful editor events."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Schedules saved snapshots rather than processing edit bursts."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Hard same-keyword distractor: file changes batching and quiet/max timers delay email notices after refresh, not index refresh work."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 0,
+          "rationale": "Controls the presentation of existing matches and no refresh scheduling."
+        }
+      ]
+    },
+    {
+      "id": "q03",
+      "title": "Replace an encoder while preserving service",
+      "text": "We are switching to another embedding encoder. Which stored representation settings define what must be rebuilt, and how should the finished replacement take over while existing searches continue?",
+      "language": "en",
+      "tags": [
+        "paraphrase",
+        "multi-source",
+        "representation-compatibility",
+        "concurrent-readers"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 3,
+          "rationale": "Directly supplies the required availability facet: build separately, validate, publish atomically, and retain pinned readers."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 2,
+          "rationale": "Explains preserving published data on replacement failure and manifest-aware reuse, but omits the complete compatibility identity and successful reader handoff."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Combines file events and does not define representation compatibility or a collection handoff."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Changes source ownership paths rather than encoder representation identity."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 0,
+          "rationale": "Describes segmentation, without naming compatibility identity fields or publication behavior."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Sets result counts after retrieval and does not address encoder migration."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 3,
+          "rationale": "Directly supplies the required identity facet: encoder, revision, width, both roles, normalization, a fresh namespace, and corpus re-encoding."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Explains an atomic replacement of one source revision, but not a corpus-wide representation change or concurrent collection readers."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 1,
+          "rationale": "Mentions a shared compatible encoder and separate roles, but does not enumerate identity fields or the migration sequence."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 1,
+          "rationale": "Mentions document-role tokens during preparation, but omits representation identity and publication."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 1,
+          "rationale": "Rejects incompatible vector widths, but does not define the other identity fields or a migration."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Restores a saved collection with readers stopped; it cannot provide the requested encoder migration with ongoing searches."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Changes notification timing rather than representations or collection readers."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 0,
+          "rationale": "Formats returned matches and does not manage stored representations."
+        }
+      ]
+    },
+    {
+      "id": "q04",
+      "title": "Remove old passages after a shorter edit",
+      "text": "An edited document is much shorter, but searches still find sentences we deleted. What must the successful update replace or remove so readers cannot get a mixture of its old and new versions?",
+      "language": "en",
+      "tags": [
+        "paraphrase",
+        "source-revision",
+        "stale-passages"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 1,
+          "rationale": "Discusses generation isolation for whole collections, but does not explain deleting surplus passages owned by one source."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 1,
+          "rationale": "Checks completed staging entries after failure, but does not prescribe replacement of all passage rows for an edited source."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 1,
+          "rationale": "Reads a final changed file state once; it does not specify removal of surplus rows when the file becomes shorter."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 1,
+          "rationale": "Purges rows for a vanished old path, but this question concerns an edit under the same owner."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 1,
+          "rationale": "Defines passage construction and ownership, but not transactional removal of obsolete revisions."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Filtering or limiting matches does not remove obsolete stored passages."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 0,
+          "rationale": "Deals with encoder compatibility rather than editing a document under the same representation."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 3,
+          "rationale": "Directly requires replacing the complete owner row set in one transaction, deleting surplus old rows, and exposing one revision at a time."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Changes language matching behavior, not stored source revisions."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Prevents overlong encoder inputs and does not delete old passage rows."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Retries temporary transport failures rather than replacing stale source revisions."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "An offline snapshot restore can reintroduce older content and does not specify the successful source update."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Deleting a notice does not remove indexed passages and cannot repair stale text."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 1,
+          "rationale": "Distinguishes formatting from stored revisions, but supplies no update transaction or deletion rule."
+        }
+      ]
+    },
+    {
+      "id": "q05",
+      "title": "Eliminar la copia anterior tras mover una guía",
+      "text": "Moví una guía a otra carpeta y ahora aparecen tanto la ubicación anterior como la nueva al buscar. ¿Cómo se debe representar ese cambio para que desaparezca la copia antigua?",
+      "language": "es",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "source-relocation"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Publishes collections, but does not define path identity or move cleanup."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Handles interrupted staging work, not a source changing locations."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 2,
+          "rationale": "Explains that a finally absent path removes its indexed passages, providing useful cleanup evidence but not the full two-owner move rule."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 3,
+          "rationale": "Directly defines a move as removing the old path owner and ingesting the destination, with inventory reconciliation for lingering copies."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 1,
+          "rationale": "Preserves passage ownership and locations, but does not describe changing owners after a move."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Result duplicate filtering does not repair the obsolete source owner."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 0,
+          "rationale": "Defines encoder identity, not source path identity."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 2,
+          "rationale": "Explains purging and replacing all rows owned by a source, useful for cleanup, but distinguishes that operation from moving to a new path."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Spanish-language input is incidental; the requested operation is path cleanup, not cross-language matching."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Retains provenance during splitting but does not define moves or removal of a former owner."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Describes transport errors, not relocation bookkeeping."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Describes restoring snapshots rather than reconciling moved source paths."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Notification deletion does not delete source data or repair duplicate locations."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 1,
+          "rationale": "Displays a source link but cannot delete the data that makes the old location searchable."
+        }
+      ]
+    },
+    {
+      "id": "q06",
+      "title": "Conservar el sentido de tablas y secciones",
+      "text": "Al dividir un manual largo para buscar fragmentos, ¿cómo evitamos que una fila pierda los nombres de sus columnas o que un párrafo quede separado del título que le da contexto?",
+      "language": "es",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "document-structure"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Controls collection readers, not textual context across passage boundaries."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Describes resuming a build and no table or heading segmentation."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Groups filesystem events, not rows or paragraphs."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Tracks owning paths rather than context within a document."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 3,
+          "rationale": "Directly preserves section headings and table column headings, including repeated headings when a long table is divided."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Limits returned matches and does not preserve the meaning of stored fragments."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 0,
+          "rationale": "Defines vector compatibility fields and no document-structure rules."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Stores complete passage sets with ownership, but does not define section or table boundaries."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "The query language is incidental; language-space compatibility does not preserve headings during segmentation."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 2,
+          "rationale": "Requires oversized text to be divided at suitable boundaries while retaining provenance, but does not specify table or section heading retention."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Rejects invalid transport inputs and does not explain how to retain textual context."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Stores collection snapshots rather than preserving table structure in passages."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Groups change notices into email, not document text into meaningful passages."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 1,
+          "rationale": "Shows section titles and excerpts after retrieval, but does not preserve headings when creating stored passages."
+        }
+      ]
+    },
+    {
+      "id": "q07",
+      "title": "Consultar fuentes inglesas desde otro idioma",
+      "text": "La documentación está en inglés, pero el equipo pregunta en español o en húngaro. ¿Qué permite recuperar una respuesta pertinente sin exigir palabras idénticas ni traducir antes todos los documentos?",
+      "language": "es",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "multilingual-representation"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Describes collection publication, not matching meaning across languages."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Verifies interrupted build work, not language compatibility."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Controls event timing and does not address multilingual questions."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Tracks moved source paths, not language matching."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 1,
+          "rationale": "Preserves contextual meaning within passages, but does not explain a shared multilingual space."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Caps eligible results without establishing cross-language similarity."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 2,
+          "rationale": "Provides compatible query/document roles and the shared representation checks needed for retrieval, but does not establish multilingual capability."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 0,
+          "rationale": "Replaces source revisions rather than matching questions in other languages."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 3,
+          "rationale": "Directly explains a multilingual shared space, compatible query/document roles, and no mandatory source-language filter or full-corpus translation."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Sizes encoder inputs and provides no cross-language mechanism."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Retries failed requests and provides no language-space mechanism."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Stores and restores snapshots rather than matching across languages."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Groups notifications without changing retrieval semantics."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 1,
+          "rationale": "Confirms a cross-language semantic match may have no highlighted words, but does not explain how the encoder makes that match possible."
+        }
+      ]
+    },
+    {
+      "id": "q08",
+      "title": "Miért érkezik kevesebb találat?",
+      "text": "Húsz találatot kértem, mégis csak hetet kaptam. Milyen korlátok miatt lehet ez szabályos működés, és mely számokból derül ki, hogy a kérés felső határa vagy a megfelelő találatok hiánya okozta?",
+      "language": "hu",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "result-limits"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Selects a complete collection and does not define result-count diagnostics."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Explains unfinished builds, not a successful response containing fewer matches."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Bounds file-event delay rather than the number of search results."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Repairs old source ownership but does not explain requested, effective, and returned counts."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 0,
+          "rationale": "Defines stored text units and no result-count policy."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 3,
+          "rationale": "Directly distinguishes requested, effective, and returned counts, including caps, access checks, deduplication, and the similarity threshold."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 0,
+          "rationale": "Rejects incompatible encoders rather than explaining a valid short response."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 0,
+          "rationale": "Controls source revision replacement, not response-count eligibility."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Addresses query language but supplies no requested/effective/returned count diagnostics."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Input item and token limits apply before vector storage; they do not explain a valid search result count."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Describes attempt budgets for failed transport calls, not fewer eligible matches in a successful search."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Describes snapshot retention, not per-query counts."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Limits notification timing rather than returned matches."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 1,
+          "rationale": "Clarifies that expanding excerpts and changing row height do not change retrieval counts, but omits eligibility rules and count diagnostics."
+        }
+      ]
+    },
+    {
+      "id": "q09",
+      "title": "Helyreállás félbeszakadt felépítés után",
+      "text": "Az új gyűjtemény építése közben elfogyott a tárhely. Újraindításkor miből szolgáljuk ki a kereséseket, és hogyan döntjük el, hogy a félkész munka mely részei használhatók fel újra?",
+      "language": "hu",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "interrupted-build"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 2,
+          "rationale": "Requires readers to use published data and never select partial staging, but omits restart journal and checksum reuse decisions."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 3,
+          "rationale": "Directly covers disk exhaustion, keeping the published pointer, restarting from the journal, and checksum/manifest validation before reuse."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Handles live file-event bursts, not disk-exhaustion recovery."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 0,
+          "rationale": "Tracks moved files and does not decide whether staging work can be resumed."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 0,
+          "rationale": "Segments text and does not define durable recovery state."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "Limits search response size and provides no restart policy."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 1,
+          "rationale": "Defines the compatible manifest needed to assess stored vectors, but not the journal, checksums, or active pointer after disk failure."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Keeps a prior source revision on failed preparation or commit, but does not explain recovery of a partly built whole collection."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "The Hungarian question concerns recovery, not language-space matching."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 0,
+          "rationale": "Controls encoder capacity, not disk exhaustion or reusable staging entries."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 0,
+          "rationale": "Its temporary service failures are transport errors; retry waits do not provide local disk recovery or validate saved staging."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 1,
+          "rationale": "Discusses verified durable snapshots for disaster recovery, but stops readers and does not resume the surviving unfinished build."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Buffers email notices rather than durable index-building work."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 0,
+          "rationale": "Formats matches and does not choose data after a failed build."
+        }
+      ]
+    },
+    {
+      "id": "q10",
+      "title": "Túl hosszú bemenet az enkóder számára",
+      "text": "Egyetlen szövegrész sem fér bele az enkóder bemeneti keretébe, hiába küldök egyszerre kevesebb elemet. Hogyan készítsük elő a szöveget úgy, hogy a vége se vesszen el, és az eredeti forrás továbbra is azonosítható legyen?",
+      "language": "hu",
+      "tags": [
+        "paraphrase",
+        "cross-language",
+        "input-budget"
+      ],
+      "judgments": [
+        {
+          "path": "docs/collection-handoff.md",
+          "grade": 0,
+          "rationale": "Publishes finished collections and does not prepare oversized encoder inputs."
+        },
+        {
+          "path": "docs/recovery-checkpoint.md",
+          "grade": 0,
+          "rationale": "Reuses durable staging work after failure, not pieces of an overlong text input."
+        },
+        {
+          "path": "docs/change-intake.md",
+          "grade": 0,
+          "rationale": "Batches file events rather than encoder items or tokens."
+        },
+        {
+          "path": "docs/source-relocation.md",
+          "grade": 1,
+          "rationale": "Defines source ownership identity, but does not explain splitting text to fit an input allowance."
+        },
+        {
+          "path": "docs/passage-boundaries.md",
+          "grade": 2,
+          "rationale": "Supplies meaningful split boundaries and retained source locations, but does not distinguish item count from token capacity or account for role text."
+        },
+        {
+          "path": "docs/result-window.md",
+          "grade": 0,
+          "rationale": "The search result limit applies after vectors are stored and cannot fix an overlong encoder input."
+        },
+        {
+          "path": "docs/representation-identity.md",
+          "grade": 1,
+          "rationale": "Records encoder roles and settings, but does not give an oversized-input preparation rule."
+        },
+        {
+          "path": "docs/source-refresh.md",
+          "grade": 1,
+          "rationale": "Retains source ownership for passage sets, but does not prescribe capacity-aware splitting or prohibit truncation."
+        },
+        {
+          "path": "docs/multilingual-retrieval.md",
+          "grade": 0,
+          "rationale": "Describes cross-language matching, not input-length preparation."
+        },
+        {
+          "path": "docs/encoder-batches.md",
+          "grade": 3,
+          "rationale": "Directly separates item and token limits, measures role-inclusive tokens, splits oversized text, preserves provenance, and prohibits silent truncation."
+        },
+        {
+          "path": "docs/service-retries.md",
+          "grade": 1,
+          "rationale": "Explains why repeating an excessively long request does not fix it, but does not supply the splitting procedure."
+        },
+        {
+          "path": "docs/archive-checkpoints.md",
+          "grade": 0,
+          "rationale": "Saves collection snapshots and does not handle encoder input capacity."
+        },
+        {
+          "path": "docs/alert-digests.md",
+          "grade": 0,
+          "rationale": "Its batch size and timing concern notifications, not text submitted to the encoder."
+        },
+        {
+          "path": "docs/search-presentation.md",
+          "grade": 0,
+          "rationale": "Shortens display excerpts after retrieval; that does not preserve an overlong text during encoding."
+        }
+      ]
+    }
+  ]
+}

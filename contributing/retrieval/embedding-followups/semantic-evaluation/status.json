@@ -1,0 +1,10 @@
+{
+  "status": "unrun",
+  "full_qualification": false,
+  "semantic_relevance_measured": false,
+  "sources": 14,
+  "queries": 10,
+  "corpus_sha256": "b5b6136eae2877beb7c1e218fe598954aa738f3ff21efb3aba96b2e495f26447",
+  "queries_sha256": "7c1ecb555b73e7d711df6020be717cba9543221c4162e7a42f07faf82ffff4b8",
+  "metrics": null
+}
