@@ -3,7 +3,7 @@
 Final combined local verification passes **17 new reload fixtures and one revised
 workspace fixture**, together with all **17 splitting fixtures** and **18 retained
 watcher controls**. The complete default/all-feature suites pass **2,371 / 2,373
-tests** across 37 targets, with 62 preexisting ignored tests and one unchanged Unix
+tests** across 37 test-result groups, with 62 preexisting ignored tests and one unchanged Unix
 socket fixture excluded because local AF_UNIX creation is denied. The revised
 workspace-isolation fixture passes in both full suites. Formatting, strict Clippy,
 no-default-feature compilation, strict docs, CLI/MCP smoke and 25 lexical evaluator
@@ -17,6 +17,8 @@ mean required-evidence recall@5 **1.0**, and zero forbidden evidence. See the
 [lexical report](collection-reload-results/lexical-report.json). Real-model
 relevance remains unmeasured; this packet records deterministic implementation
 and lexical acceptance evidence.
+
+The [unfiltered CI verification](CI-VERIFICATION.json) passes **2,372 default / 2,374 all-feature tests**, with zero filtered out. All 35 changed Rust fixtures, the unchanged Unix socket fixture and the revised workspace fixture pass in both runs. CI also passes strict docs, CLI checks, and the Linux/macOS watcher jobs. Each full suite prints 37 result summaries: 35 test-binary targets and two doctest groups. The archived CI log and Git tree identity bind these results to the tested source; later documentation commits do not change that source.
 
 The persistent server's watcher now applies document collection settings edits without waiting for a source file event. This follow-up extends the collection watcher and durable document generations introduced before it. Earlier embedding reports remain historical records.
 

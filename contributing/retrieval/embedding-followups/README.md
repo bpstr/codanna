@@ -24,6 +24,7 @@ The combined local suites pass **2,371 default / 2,373 all-feature tests** and
 **29/29 lexical cases**, with **18/18 invariants**. All 35 changed Rust fixtures
 pass in both suites; the [combined inventory](COMBINED-RUST-FIXTURES.json) links
 each exact source hash and execution witness. The complete results are recorded in [COLLECTION-RELOAD-VALIDATION.json](COLLECTION-RELOAD-VALIDATION.json).
+[Complete CI verification](CI-VERIFICATION.json) also passes **2,372 default / 2,374 all-feature tests**, with zero filtered out, including all 35 changed fixtures and the Unix socket fixture. The report archives the CI log, exact tested Git tree, source digest, and successful workflow references.
 The separate [semantic status](https://github.com/bpstr/codanna/blob/codex/semantic-relevance-evaluation/contributing/retrieval/embedding-followups/semantic-evaluation/status.json)
 remains **unrun**, with null relevance metrics. Passing fixed-vector and evaluator
 contracts does not measure a real model's relevance.

@@ -35,13 +35,13 @@
       "elapsed_seconds": 88.338,
       "log": "collection-reload-results/default-tests.txt",
       "log_sha256": "2c5b8c8e8980e158ddd92c0bab43278daaa5792da8c41084210a743b78ce1f6e",
-      "completed_test_targets": 37,
       "passed": 2371,
       "failed": 0,
       "ignored": 62,
       "measured": 0,
       "filtered_out": 1,
-      "local_capture_basename": "reload-default.log"
+      "local_capture_basename": "reload-default.log",
+      "completed_test_result_groups": 37
     },
     "all-features": {
       "name": "all-features",
@@ -61,13 +61,13 @@
       "elapsed_seconds": 155.018,
       "log": "collection-reload-results/all-features-tests.txt",
       "log_sha256": "112f49ad4a3fca36cc64ba0b881f640adb0904873a608980b77092c820bcce77",
-      "completed_test_targets": 37,
       "passed": 2373,
       "failed": 0,
       "ignored": 62,
       "measured": 0,
       "filtered_out": 1,
-      "local_capture_basename": "reload-all-features.log"
+      "local_capture_basename": "reload-all-features.log",
+      "completed_test_result_groups": 37
     },
     "docs": {
       "name": "docs",
@@ -236,7 +236,7 @@
     "full_product_qualification": false,
     "new_or_revised_tests_excluded": 0,
     "preexisting_ignored_tests": 62,
-    "ci": "This report records final-source local verification. The separate unfiltered CI witness is linked from PR41 after it completes."
+    "ci": "Unfiltered CI verified the identical runtime source: see CI-VERIFICATION.json and its archived full job log."
   },
   "notes": [
     "Source identity covers src/**, tests/**, Cargo.toml and Cargo.lock. The later merge of splitting archive links changes only documentation/captures and preserves that source digest.",
@@ -244,6 +244,7 @@
     "The acceptance report retains inspected_main from the historical fixture manifest; the tested source checkpoint and source digest above identify this run.",
     "The raw acceptance report records disposable CLI capture paths. The committed report retains all commands, exit codes, measured result oracles and corpus/binary identities.",
     "The A-specific inventory remains its historical independent validation; COMBINED-RUST-FIXTURES.json records fresh pass witnesses and source hashes for every changed Rust fixture in this combined source.",
-    "Enabling documents on a server started without an attached document store still requires setup/restart. Code-directory catch-up retains its separate commits and pre-existing working-directory assumption."
+    "Enabling documents on a server started without an attached document store still requires setup/restart. Code-directory catch-up retains its separate commits and pre-existing working-directory assumption.",
+    "completed_test_result_groups counts Cargo result summaries, including separate doctest result groups; it is not a count of distinct Cargo target headings."
   ]
 }

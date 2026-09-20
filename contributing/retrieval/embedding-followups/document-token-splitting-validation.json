@@ -31,7 +31,7 @@
       "elapsed_seconds": 86.004,
       "log": "document-token-splitting-results/default-tests.txt",
       "log_sha256": "27ea2f1177796c39b1e3ad935d4b7dd6fff658f18ebee5c66be8e0c478431374",
-      "completed_test_targets": 37,
+      "completed_test_result_groups": 37,
       "passed": 2354,
       "failed": 0,
       "ignored": 62,
@@ -57,7 +57,7 @@
       "elapsed_seconds": 152.666,
       "log": "document-token-splitting-results/all-features-tests.txt",
       "log_sha256": "e94d4e2dce0079d33d527a6c070a4da7aa593114fbd33b31fc9d10a0369a4f97",
-      "completed_test_targets": 37,
+      "completed_test_result_groups": 37,
       "passed": 2356,
       "failed": 0,
       "ignored": 62,
@@ -216,6 +216,7 @@
     "ci": "Separate unfiltered CI is required; its completed witness is linked from PR39. This file records local verification."
   },
   "notes": [
+    "Each completed test-result group is one 'test result:' summary. Separate doctest groups count separately even when they share a Cargo target heading.",
     "Source identity covers all src/** and tests/** files plus Cargo.toml and Cargo.lock, independently of subsequent documentation commits.",
     "The raw acceptance report retains inspected_main from the historical fixture manifest; it is not the current tested revision. The tested implementation checkpoint and source digest above identify this run.",
     "The acceptance report references disposable raw CLI capture paths; the committed report records every command, exit code, binary and corpus identity, result and oracle.",

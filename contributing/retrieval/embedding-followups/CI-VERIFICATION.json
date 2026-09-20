@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "tested_head": "e1288af9370691e3bcb43f638dafb27877729db8",
+  "tested_merge": "d391597605df9d825e1ab68413318b1c41e905cb",
+  "tested_tree": "6ee21e34b70439296b30259250b13ed8c1b76d66",
+  "head_and_merge_trees_identical": true,
+  "source_tree_sha256": "66c9fa71dabb0dcd8a0306a610a38fac7332e4b3098fcc734af2123d83127510",
+  "source_file_count": 638,
+  "hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests",
+  "verified_at_utc": "2026-09-20T19:20:27Z",
+  "full_suite": {
+    "run_id": 35530895429,
+    "job_id": 106131166016,
+    "conclusion": "success",
+    "url": "https://github.com/bpstr/codanna/actions/runs/35530895429/job/106131166016",
+    "log": "collection-reload-results/github-full-test-suite.txt",
+    "log_sha256": "939336ff7cb78f46b1d01806eb1b25427f24944075e5c20c6a04373bd7ddfe42",
+    "results": {
+      "default": {
+        "passed": 2372,
+        "failed": 0,
+        "ignored": 62,
+        "measured": 0,
+        "filtered_out": 0,
+        "completed_test_result_groups": 37,
+        "test_binary_targets": 35,
+        "doctest_result_groups": 2,
+        "distinct_cargo_target_headings": 36,
+        "changed_fixtures_passed": 35
+      },
+      "all-features": {
+        "passed": 2374,
+        "failed": 0,
+        "ignored": 62,
+        "measured": 0,
+        "filtered_out": 0,
+        "completed_test_result_groups": 37,
+        "test_binary_targets": 35,
+        "doctest_result_groups": 2,
+        "distinct_cargo_target_headings": 36,
+        "changed_fixtures_passed": 35
+      }
+    }
+  },
+  "workflows": [
+    {
+      "run_id": 35530895429,
+      "name": "Full Test Suite",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895429"
+    },
+    {
+      "run_id": 35530895492,
+      "name": "Hardening",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895492"
+    },
+    {
+      "run_id": 35530895467,
+      "name": "Review security regressions",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895467"
+    },
+    {
+      "run_id": 35530895425,
+      "name": "Quick Check",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895425"
+    },
+    {
+      "run_id": 35530895430,
+      "name": "Conversation recall",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895430"
+    },
+    {
+      "run_id": 35530895435,
+      "name": "Auto-fix",
+      "conclusion": "success",
+      "url": "https://github.com/bpstr/codanna/actions/runs/35530895435"
+    }
+  ],
+  "changed_fixture_witnesses": [
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_add_remove_disable_and_reenable_publish_query_settings",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_globs_and_roots_preserve_retained_embeddings",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_default_and_collection_chunking_replace_only_affected_chunks",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_invalid_settings_and_identity_changes_keep_working_policy",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_failed_batch_preserves_all_collections_then_retries_without_event",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_committed_generation_wins_over_failed_state_mirror",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_without_attached_store_requires_restart_without_loading_a_model",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_observed_settings_edits_cancel_retries_before_debounce",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_missing_or_directory_settings_never_apply_defaults",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovers_a_committed_generation_before_a_reverted_proposal",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovery_checks_workspace_before_exposing_foreign_sources",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/watcher/collection_reload_tests.rs",
+      "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+    },
+    {
+      "test": "documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding",
+      "new_or_revised": "revised",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/store.rs",
+      "source_file_sha256": "fed3da417da31f2afeb78ee3e04f3b3481428176c2aaa06c632fdfc914641ef6"
+    },
+    {
+      "test": "embedding_input::tests::document_byte_splits_fill_budget_and_preserve_utf8",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "embedding_input::tests::document_splits_count_normalization_and_special_tokens_in_every_input",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "embedding_input::tests::document_splits_try_nonmonotonic_normalized_prefixes",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "embedding_input::tests::document_splits_validate_composed_heading_instead_of_prefix_alone",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "embedding_input::tests::document_splitting_bounds_tokenizer_work_and_output_parts",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "embedding_input::tests::document_splitting_handles_long_unbroken_inputs_above_byte_ceiling",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/embedding_input.rs",
+      "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_splitting_preserves_source_bytes_headings_and_existing_overlap",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_splitting_matches_collection_and_watcher_and_skips_unchanged_files",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_late_heading_failure_preserves_both_collections_and_reopen",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_later_embedding_failure_rolls_back_splits_and_can_retry",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_invalid_generator_ranges_reject_without_publishing_partial_evidence",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_policy_migration_reprocesses_unchanged_source_once",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_bounds_custom_generator_heading_amplification_before_cloning",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "documents::store::token_splitting_tests::document_budget_bounds_total_file_refinement_before_publication",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/documents/token_splitting_tests.rs",
+      "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+    },
+    {
+      "test": "semantic::pool::tests::document_batch_retains_whitespace_partitions_without_changing_code_filtering",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "src/semantic/pool.rs",
+      "source_file_sha256": "c18aff51fd33fccd07197d3ea2783a20d4ba03ee99e657a7dbf4c9852e84e30b"
+    },
+    {
+      "test": "configured_remote_splits_document_bodies_to_the_effective_budget",
+      "new_or_revised": "new",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "tests/document_backend_regressions.rs",
+      "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
+    },
+    {
+      "test": "remote_document_budget_includes_heading_breadcrumbs_and_rolls_back",
+      "new_or_revised": "revised",
+      "default": "passed",
+      "all-features": "passed",
+      "source": "tests/document_backend_regressions.rs",
+      "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
+    }
+  ],
+  "additional_witnesses": {
+    "unix_socket_fixture": {
+      "test": "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
+      "default": "passed",
+      "all-features": "passed"
+    },
+    "cli_help_checks": [
+      "codanna --help",
+      "codanna index --help",
+      "codanna retrieve --help"
+    ],
+    "strict_docs": "cargo doc --locked --no-deps --all-features with RUSTDOCFLAGS=-D warnings",
+    "watcher_jobs": [
+      "Linux watcher regressions",
+      "macOS watcher witness"
+    ]
+  },
+  "scope": {
+    "real_model_relevance_measured": false,
+    "preexisting_ignored_tests": 62,
+    "filtered_out_per_suite": 0,
+    "new_or_revised_fixture_exclusions": 0,
+    "later_changes": "Later report/archive corrections do not change the tested runtime source, tests or workflows. This witness identifies the precise tested Git revision instead of claiming a later documentation commit was run in the full suite."
+  },
+  "notes": [
+    "Full branch-filtered workflows ran while PR #41 temporarily targeted main. Its final dependency is PR #39; retargeting changes no source.",
+    "37 result summaries comprise 35 test-binary targets and two doctest result groups under one Doc-tests codanna heading, for 36 distinct Cargo target headings.",
+    "The archived log preserves the decoded GitHub job log bytes, including its UTF-8 BOM and final newline.",
+    "Local lexical results remain separately recorded in COLLECTION-RELOAD-VALIDATION.json; passing model-free tests does not establish model relevance."
+  ]
+}
