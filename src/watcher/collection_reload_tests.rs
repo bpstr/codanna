@@ -992,6 +992,65 @@ async fn collection_reload_observed_settings_edits_cancel_retries_before_debounc
 }
 
 #[tokio::test]
+async fn collection_reload_missing_or_directory_settings_never_apply_defaults() {
+    for replaced_by_directory in [false, true] {
+        let mut fixture = ReloadFixture::new(None).await;
+        let old = fixture.lexical_hits("alpha")[0].chunk_id;
+        let mut next = fixture.settings.clone();
+        next.documents.enabled = false;
+        fixture
+            .watcher
+            .execute_action(
+                WatchAction::ReloadSettings {
+                    settings: Box::new(next),
+                },
+                "config",
+            )
+            .await
+            .unwrap();
+        assert!(fixture.watcher.pending_config.read().await.is_some());
+
+        fs::remove_file(&fixture.settings_path).unwrap();
+        if replaced_by_directory {
+            fs::create_dir(&fixture.settings_path).unwrap();
+        }
+        // Read through the real handler: the file can disappear after the
+        // dispatcher's exists check. A missing-path event alone skips this read.
+        let error = fixture
+            .watcher
+            .handlers
+            .iter()
+            .find(|handler| handler.reloads_config())
+            .unwrap()
+            .on_modify(&fixture.settings_path)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            WatchError::ConfigError { reason } if reason.contains("Failed to reload config")
+        ));
+        fixture
+            .watcher
+            .handle_event(
+                Event::new(EventKind::Modify(ModifyKind::Any))
+                    .add_path(fixture.settings_path.clone()),
+            )
+            .await;
+        assert!(fixture.watcher.pending_config.read().await.is_none());
+        fixture
+            .watcher
+            .dispatch_ready_changes(Instant::now() + Duration::from_secs(60))
+            .await;
+        assert_eq!(
+            fixture.watcher.facade.read().await.settings().documents,
+            fixture.settings.documents
+        );
+        assert_eq!(fixture.lexical_hits("alpha")[0].chunk_id, old);
+        assert!(fixture.root.join("docs/alpha.md").is_file());
+    }
+}
+
+#[tokio::test]
 async fn collection_reload_recovers_a_committed_generation_before_a_reverted_proposal() {
     let mut fixture = ReloadFixture::new(None).await;
     let mut pinned = fixture.store.read().await.query_snapshot();

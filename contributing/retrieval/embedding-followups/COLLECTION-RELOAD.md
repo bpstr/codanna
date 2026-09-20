@@ -12,11 +12,11 @@ Removing a collection deletes its derived chunks, source ownership, fingerprints
 
 Changing a glob or root preserves unchanged sources, chunk IDs and embeddings. Sources leaving a collection are retired before any new ownership is admitted, so a single settings edit can transfer a source to a differently named collection. Effective chunking changes replace affected chunks. Overrides that keep a collection's effective settings unchanged retain its existing chunks.
 
-Pending source events and failed collection retries are synchronized with accepted configuration. Successful removal or disablement clears retired work, while unchanged collections retain their pending work. Previously captured actions cannot recreate a removed collection. Observing a newer settings event immediately cancels a stale proposal, before the newer edit's debounce window can expire. Configuration read failures also cancel stale proposals during native event overflow recovery.
+Pending source events and failed collection retries are synchronized with accepted configuration. Successful removal or disablement clears retired work, while unchanged collections retain their pending work. Previously captured actions cannot recreate a removed collection. Observing a newer settings event immediately cancels a stale proposal, before the newer edit's debounce window can expire. Configuration read failures also cancel stale proposals during native event overflow recovery. Reading a specific settings file requires that exact file; a deletion or read failure never substitutes default settings. Optional startup configuration discovery keeps its existing semantics.
 
 ## Validation and failure boundaries
 
-Malformed TOML, invalid globs, invalid merged chunking, unresolved symlinks, changed workspace or index roots, and changes to `semantic_search` settings are rejected before changing live document policy or configured code roots. ACL-scoped servers validate roots and canonical discovered sources against the original workspace boundary before source content reaches the embedding backend. Unrestricted local collection roots can remain outside the workspace. Managed index artifacts remain excluded from source discovery and event admission.
+Missing or unreadable settings files, malformed TOML, invalid globs, invalid merged chunking, unresolved symlinks, changed workspace or index roots, and changes to `semantic_search` settings are rejected before changing live document policy or configured code roots. ACL-scoped servers validate roots and canonical discovered sources against the original workspace boundary before source content reaches the embedding backend. Unrestricted local collection roots can remain outside the workspace. Managed index artifacts remain excluded from source discovery and event admission.
 
 Document additions, replacements, ownership transfers and removals publish as one `DocumentStore` transaction. A discovery, source read, embedding, or pre-publication failure preserves the prior generation and live configuration. Configuration retries use the normal watcher dispatch with exponential backoff from 250 ms to a maximum 30 seconds, without requiring another file event. Source work remains coalesced while configuration publication is pending. Proposed watches are removed on a failed apply.
 
@@ -30,7 +30,7 @@ Embedding backend settings, tokenizer configuration, model identity, workspace r
 
 ## Exact fixture inventory
 
-[COLLECTION-RELOAD.json](COLLECTION-RELOAD.json) provides the same 16 fixtures with exact test names, scenarios and machine-readable oracles.
+[COLLECTION-RELOAD.json](COLLECTION-RELOAD.json) provides the same 17 fixtures with exact test names, scenarios and machine-readable oracles.
 
 Every fixture below is defined in `src/watcher/collection_reload_tests.rs`. The fixture workspace contains only temporary local source files, settings, and derived indexes. `ReloadModel` returns fixed two-dimensional vectors and optionally a deterministic failure; it does not open a provider transport or load a model. Assertions inspect actual persisted documents and the running facade's settings snapshot.
 
@@ -50,6 +50,7 @@ Every fixture below is defined in `src/watcher/collection_reload_tests.rs`. The 
 | `collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots` | Unix startup alias retargeting compares against the previously accepted canonical root and immediately replaces the indexed inventory. |
 | `collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings` | A failed proposal cannot later commit after malformed/deleted settings whose native event was lost; overflow cancels stale retry state. |
 | `collection_reload_observed_settings_edits_cancel_retries_before_debounce` | A newer malformed/deleted settings event cancels the previous retry immediately, even while the new event is waiting in a longer debounce window. |
+| `collection_reload_missing_or_directory_settings_never_apply_defaults` | A missing settings file or directory replacement produces an error through the real configuration handler; a newer event cancels the queued disable proposal and preserves settings, durable chunk ID and source. |
 | `collection_reload_recovers_a_committed_generation_before_a_reverted_proposal` | An external durable publication with a temporarily missing manifest keeps recovery pending; restoring it followed by invalid source bytes preserves the old live query generation across failed reconciliation and a superseding no-op proposal; a later idle retry enforces the latest policy and honors another writer's reserved chunk IDs. |
 | `collection_reload_recovery_checks_workspace_before_exposing_foreign_sources` | Recovered foreign provenance is rejected before it reaches the live reader or cleanup transaction. |
 

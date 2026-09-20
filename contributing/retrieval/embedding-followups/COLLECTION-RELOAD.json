@@ -2,15 +2,15 @@
   "schema_version": 1,
   "source": "src/watcher/collection_reload_tests.rs",
   "module": "watcher::unified::collection_reload_tests",
-  "fixture_count": 16,
+  "fixture_count": 17,
   "commands": [
     "cargo test --lib collection_reload -- --test-threads=1",
     "cargo test --lib watcher::unified::document_ -- --test-threads=1"
   ],
   "isolation": "Temporary local sources, settings and indexes; injected watcher events and dispatch times; fixed local two-dimensional mock embeddings; no provider transport, credentials or model downloads.",
   "validation": {
-    "status": "pending rerun of revised 16-fixture snapshot",
-    "previous_snapshot": "Initial 13-fixture run compiled and passed 11; both initial fixture failures have been addressed."
+    "status": "17-fixture snapshot awaiting the focused rerun after the specific-file read correction",
+    "previous_snapshot": "All 16 reload fixtures and all 18 retained watcher::unified::document_ tests passed before the final specific-file read regression was added."
   },
   "fixtures": [
     {
@@ -159,6 +159,17 @@
       "oracles": [
         "The old proposal is canceled at event admission.",
         "Expiring the old retry clock cannot change settings or the durable original chunk."
+      ]
+    },
+    {
+      "name": "collection_reload_missing_or_directory_settings_never_apply_defaults",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_missing_or_directory_settings_never_apply_defaults",
+      "platform": "all",
+      "scenario": "Remove the explicitly watched settings file or replace it with a directory before the real configuration handler reads it, while an earlier disable proposal is queued.",
+      "oracles": [
+        "The real handler returns a configuration read error instead of a default-settings proposal.",
+        "The newer settings event cancels the queued disable proposal.",
+        "After dispatch, accepted document settings, the durable original chunk ID and source file remain unchanged."
       ]
     },
     {
