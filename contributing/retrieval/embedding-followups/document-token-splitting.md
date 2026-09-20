@@ -2,12 +2,15 @@
 
 Final local verification passed **16 new fixtures and one revised fixture**, plus
 nine retained backend controls. Complete default/all-feature suites passed
-**2,354 / 2,356 tests** across 37 targets, with 62 preexisting ignored tests and
-one unchanged socket fixture excluded because this environment denies AF_UNIX
-creation. The unmodified full script also encountered one existing debounce
-assertion that passed unchanged in both complete reruns. Formatting, strict
-Clippy, no-default-feature compilation, strict docs, CLI/MCP smoke and 25 lexical
-evaluator contracts passed.
+**2,354 / 2,356 tests** across 37 completed test-result groups per suite, with
+62 preexisting ignored tests and one unchanged socket fixture excluded because
+this environment denies AF_UNIX creation. The unmodified full script also
+encountered one existing debounce assertion that passed unchanged in both complete
+reruns. Formatting, strict Clippy, no-default-feature compilation, strict docs,
+CLI/MCP smoke and 25 lexical evaluator contracts passed.
+
+Each completed test-result group is one `test result:` summary. Separate doctest
+groups count separately even when they share a Cargo target heading.
 
 The unchanged lexical corpus remains **29/29**, with **18/18 invariants**, mean
 required-evidence recall@5 **1.0**, and zero forbidden evidence. See the
