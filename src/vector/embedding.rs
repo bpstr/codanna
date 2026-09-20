@@ -156,6 +156,25 @@ pub trait EmbeddingGenerator: Send + Sync {
     fn cache_identity(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
+
+    /// Refine one document body to fit this generator's input budget.
+    ///
+    /// Each returned range must be nonempty, UTF-8 aligned, and together form
+    /// an ordered partition of `body`. Every `prefix + body[range]` must fit.
+    /// The prefix contains the complete heading breadcrumbs. Code symbols and
+    /// queries do not use this hook. Generators without a declared budget keep
+    /// the existing character chunks; configured builtins use their actual budget.
+    fn document_input_ranges(
+        &self,
+        _prefix: &str,
+        body: &str,
+    ) -> Result<Vec<std::ops::Range<usize>>, VectorError> {
+        if body.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Ok(std::iter::once(0..body.len()).collect())
+        }
+    }
 }
 
 /// FastEmbed implementation with configurable embedding models.
@@ -309,6 +328,16 @@ impl EmbeddingGenerator for FastEmbedGenerator {
             None,
             &self.input_budget,
         )
+    }
+
+    fn document_input_ranges(
+        &self,
+        prefix: &str,
+        body: &str,
+    ) -> Result<Vec<std::ops::Range<usize>>, VectorError> {
+        self.input_budget
+            .document_ranges(prefix, body)
+            .map_err(VectorError::EmbeddingFailed)
     }
 }
 

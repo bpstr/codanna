@@ -5,11 +5,19 @@ heading breadcrumbs, separators and the exact source chunk; query inputs use the
 complete query. The remote client sends accepted text unchanged. Its former
 2,000-character truncation has been removed.
 
-An oversized input reports its batch index, measured size and budget, then aborts
-the embedding operation. The document indexing transaction preserves the prior
-indexed generation. Reduce `documents.defaults.max_chunk_chars` or long headings
-before retrying, or configure a larger limit supported by the actual provider.
-Codanna does not silently discard text to fit a model.
+Document indexing refines oversized character chunks into smaller source slices
+using the effective backend budget. Each input retains the complete heading
+breadcrumbs and its exact body bytes. The refinements preserve the original
+chunks' source coverage and overlap without adding overlap of their own. Lexical
+indexing keeps the existing character chunking behavior.
+
+If the heading context leaves no room for a complete body character, or bounded
+tokenizer search cannot find a complete split, indexing returns an actionable
+error and preserves the prior indexed generation. Shorten long headings or
+configure a larger limit supported by the actual provider before retrying.
+Code symbols and queries retain complete-input rejection for oversized inputs.
+See [document token splitting](retrieval/embedding-followups/document-token-splitting.md)
+for the search bounds and deterministic regression fixtures.
 
 ## Configure a remote model
 
@@ -58,6 +66,8 @@ it beyond the actual loaded model limit. `tokenizer_path` is remote-only.
 
 All inputs also have a 1 MiB byte ceiling before tokenization. This bounds
 tokenizer work for pathological single tokens independently of their token count.
+Document refinement also divides source chunks above this ceiling; each resulting
+complete input must satisfy both limits.
 
 ## Model changes and persisted vectors
 
@@ -76,6 +86,11 @@ Code reindexing uses `codanna index <path> --force`. Document indexing must star
 from a fresh document embedding index when the model or preprocessing identity
 changes; the existing mismatch diagnostic identifies the incompatible index.
 Preserve source documents and their collection configuration while rebuilding.
+Document chunking fingerprints additionally include the splitting policy and
+generator identity, so compatible policy changes reprocess unchanged sources once.
+The embedding text format and content-addressed cache remain compatible when the
+complete input is unchanged. Changing the configured budget or tokenizer still
+changes the persisted embedding identity and requires a fresh document index.
 
 The embedding cache is an optional accelerator scoped to the same identity and
 preprocessing version. Cache files above 32 MiB are rejected before JSON decoding;

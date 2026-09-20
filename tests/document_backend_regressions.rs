@@ -285,9 +285,9 @@ fn remote_document_budget_includes_heading_breadcrumbs_and_rolls_back() {
     settings.semantic_search.remote_url = Some(server.url.clone());
     settings.semantic_search.remote_model = Some("fixture".into());
     settings.semantic_search.remote_dim = Some(2);
-    settings.semantic_search.max_input_tokens = Some(80);
+    settings.semantic_search.max_input_tokens = Some(40);
     let path = temp.path().join("headed.md");
-    // Each source chunk fits alone; ancestry makes the body input exceed budget.
+    // Complete heading ancestry leaves no body capacity even after refinement.
     std::fs::write(
         &path,
         format!("# {}\n\n{}", "heading ".repeat(5), "body ".repeat(10)),
@@ -312,7 +312,7 @@ fn remote_document_budget_includes_heading_breadcrumbs_and_rolls_back() {
     let message = error.to_string();
     assert!(message.contains("budget"), "{message}");
     assert!(message.contains("heading breadcrumbs"), "{message}");
-    assert!(message.contains("not truncated"), "{message}");
+    assert!(message.contains("No input was truncated"), "{message}");
     assert!(store.search(query("alpha")).unwrap().is_empty());
     assert!(
         server
@@ -323,6 +323,54 @@ fn remote_document_budget_includes_heading_breadcrumbs_and_rolls_back() {
             .flat_map(|request| request["input"].as_array().unwrap())
             .all(|input| input.as_str() == Some("probe") || input.as_str() == Some("alpha"))
     );
+}
+
+#[test]
+fn configured_remote_splits_document_bodies_to_the_effective_budget() {
+    let server = LocalEmbeddingServer::start();
+    let temp = tempfile::tempdir().unwrap();
+    let mut settings = settings(temp.path());
+    settings.semantic_search.remote_url = Some(server.url.clone());
+    settings.semantic_search.remote_model = Some("fixture".into());
+    settings.semantic_search.remote_dim = Some(2);
+    settings.semantic_search.max_input_tokens = Some(80);
+    let path = temp.path().join("headed.md");
+    let heading = "heading ".repeat(5).trim().to_string();
+    let body = "body ".repeat(10).trim().to_string();
+    std::fs::write(&path, format!("# {heading}\n\n{body}")).unwrap();
+    let mut store = open_from_settings(&settings).unwrap();
+    let stats = store
+        .index_collection(
+            "docs",
+            &CollectionConfig {
+                paths: vec![path],
+                ..Default::default()
+            },
+            &ChunkingConfig {
+                min_chunk_chars: 1,
+                max_chunk_chars: 80,
+                overlap_chars: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(stats.chunks_created, 4);
+    let requests = server.requests.lock().unwrap();
+    let prefix = format!("{heading}\n\n");
+    let inputs: Vec<_> = requests
+        .iter()
+        .skip(1)
+        .flat_map(|request| request["input"].as_array().unwrap())
+        .map(|input| input.as_str().unwrap())
+        .collect();
+    assert!(inputs.iter().all(|input| input.len() <= 80));
+    assert!(inputs.iter().all(|input| input.starts_with(&prefix)));
+    let source_parts = inputs
+        .iter()
+        .map(|input| input.strip_prefix(&prefix).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(source_parts[..2].concat(), format!("# {heading}"));
+    assert_eq!(source_parts[2..].concat(), body);
 }
 
 #[test]
