@@ -1142,6 +1142,19 @@ impl IndexFacade {
         self.settings = settings;
     }
 
+    /// Publish document settings with the roots accepted by the live watcher.
+    pub(crate) fn reload_watched_settings(
+        &mut self,
+        paths: Vec<PathBuf>,
+        documents: crate::documents::DocumentsConfig,
+    ) {
+        self.reload_indexed_paths(paths);
+        let mut settings = (*self.settings).clone();
+        settings.documents = documents;
+        self.settings = Arc::new(settings);
+        self.pipeline = Pipeline::with_settings(Arc::clone(&self.settings));
+    }
+
     // =========================================================================
     // Mutation Methods (delegate to Pipeline)
     // =========================================================================

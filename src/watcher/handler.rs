@@ -30,12 +30,15 @@ pub enum WatchAction {
     /// Remove a document from the store.
     RemoveDocument { path: PathBuf },
 
-    /// Configuration changed - index new directories.
+    /// Configuration changed - index new code directories (legacy handler API).
     ReloadConfig {
         added: Vec<PathBuf>,
         removed: Vec<PathBuf>,
         current: Vec<PathBuf>,
     },
+
+    /// Proposed settings snapshot. The watcher publishes it after validation.
+    ReloadSettings { settings: Box<crate::Settings> },
 
     /// No action needed (e.g., file unchanged).
     None,
@@ -49,6 +52,17 @@ pub enum WatchAction {
 pub trait WatchHandler: Send + Sync {
     /// Handler name for logging.
     fn name(&self) -> &str;
+
+    /// Whether a failed read invalidates a pending settings proposal.
+    fn reloads_config(&self) -> bool {
+        false
+    }
+
+    /// Accepted document policy, including canonical roots captured at setup.
+    /// Reload comparisons must not resolve an old symlink through its new target.
+    fn document_config(&self) -> Option<crate::documents::DocumentsConfig> {
+        None
+    }
 
     /// Check if this handler should process events for the given path.
     fn matches(&self, path: &Path) -> bool;

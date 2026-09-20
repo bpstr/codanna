@@ -1193,32 +1193,148 @@ impl DocumentStore {
 
     /// Delete all chunks from a collection.
     pub fn delete_collection(&mut self, name: &str) -> StoreResult<usize> {
-        self.transaction(|store| {
-            let term = Term::from_field_text(store.schema.collection_name, name);
-            let query = TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
-            let count = store
-                .searcher()
-                .search(&query, &tantivy::collector::Count)?;
-            {
-                let mut guard = store
-                    .writer
-                    .lock()
-                    .map_err(|_| DocumentStoreError::LockPoisoned)?;
-                store.ensure_writer(&mut guard)?.delete_term(term);
+        self.transaction(|store| store.delete_collection_inner(name))
+    }
+
+    fn delete_collection_inner(&mut self, name: &str) -> StoreResult<usize> {
+        let term = Term::from_field_text(self.schema.collection_name, name);
+        let query = TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
+        let count = self.searcher().search(&query, &tantivy::collector::Count)?;
+        {
+            let mut guard = self
+                .writer
+                .lock()
+                .map_err(|_| DocumentStoreError::LockPoisoned)?;
+            self.ensure_writer(&mut guard)?.delete_term(term);
+        }
+        self.file_states.retain(|_, state| state.collection != name);
+        self.chunking_fingerprints
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.embedded_files
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.forced_collections.remove(name);
+        self.collection_ids.remove(name);
+        Ok(count)
+    }
+
+    /// Refresh an authoritative generation before a settings transaction. A
+    /// previous publication may have committed even when its reader reload failed.
+    /// Validate recovered provenance before making it visible in a scoped server.
+    pub(crate) fn refresh_committed_generation(
+        &mut self,
+        workspace: Option<&Path>,
+    ) -> StoreResult<bool> {
+        let _generation_lock = generation::lock(&self.base_path)?;
+        if let Some(root) = workspace {
+            self.restrict_workspace(root)?;
+        }
+        let payload = self.index.load_metas()?.payload;
+        let expected = self.current_generation.as_deref().map(generation::payload);
+        if payload == expected {
+            return Ok(false);
+        }
+        let (_, generation) =
+            generation::load(&self.base_path, payload.as_deref())?.ok_or_else(|| {
+                DocumentStoreError::Index(
+                    "Committed document generation is missing; reader recovery is pending".into(),
+                )
+            })?;
+        if self.embedding_generator.is_some() {
+            if generation.state.embedding_identity != self.embedding_identity {
+                return Err(DocumentStoreError::Embedding("Committed document embedding identity changed; restart with the matching backend before recovery".into()));
             }
-            store
-                .file_states
-                .retain(|_, state| state.collection != name);
-            store
-                .chunking_fingerprints
-                .retain(|path, _| store.file_states.contains_key(path));
-            store
-                .embedded_files
-                .retain(|path, _| store.file_states.contains_key(path));
-            store.forced_collections.remove(name);
-            store.collection_ids.remove(name);
-            Ok(count)
-        })
+            let vectors = SegmentedVectors::open(&self.base_path, &generation.vectors)?;
+            if vectors
+                .dimension()?
+                .is_some_and(|dimension| dimension != self.dimension)
+            {
+                return Err(DocumentStoreError::Embedding("Committed document vector dimensions changed; restart with the matching backend before recovery".into()));
+            }
+        }
+        if let Some(root) = workspace {
+            for path in generation.state.file_states.keys() {
+                crate::indexing::facade::IndexFacade::contained_source(root, Path::new(path))
+                    .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+            }
+        }
+        let previous_generation = self.current_generation.clone();
+        if let Err(error) = self.recover_generation(payload.as_deref()) {
+            if self.current_generation == previous_generation {
+                return Err(DocumentStoreError::Index(format!(
+                    "Committed document reader recovery is pending: {error}"
+                )));
+            }
+            tracing::warn!(target: "documents", %error, "committed reader recovered; state mirror repair deferred");
+        }
+        Ok(true)
+    }
+
+    /// Replace changed collections and remove retired collections in one durable
+    /// generation. Retire sources that leave their collection before admitting
+    /// transfers, retaining unchanged states and vectors for incremental skips.
+    ///
+    /// A warning means metadata committed but a redundant state mirror failed;
+    /// callers must publish the matching policy rather than restore the old one.
+    pub(crate) fn reconfigure_collections(
+        &mut self,
+        removed: &[String],
+        changed: &[(String, CollectionConfig)],
+        defaults: &ChunkingConfig,
+    ) -> StoreResult<Option<String>> {
+        let previous_generation = self.current_generation.clone();
+        let validated = changed
+            .iter()
+            .map(|(name, config)| {
+                let chunks = ValidatedChunkingConfig::try_from(config.effective_chunking(defaults))
+                    .map_err(DocumentStoreError::InvalidChunkingConfig)?;
+                let fingerprint = chunking_fingerprint(&chunks)?;
+                // Admission/discovery errors must happen before deleting any old rows
+                // or passing source content to an embedding backend.
+                let files = self.collect_files(config)?;
+                Ok((name, config, chunks, fingerprint, files))
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
+        let result = self.transaction(|store| {
+            for name in removed {
+                store.delete_collection_inner(name)?;
+            }
+            for (name, _, _, _, files) in &validated {
+                let retained: HashSet<_> = files.iter().collect();
+                let retired: Vec<_> = store
+                    .file_states
+                    .iter()
+                    .filter(|(path, state)| state.collection == **name && !retained.contains(path))
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                for path in retired {
+                    store.remove_file_inner(&path)?;
+                }
+            }
+            for (name, config, chunks, fingerprint, _) in &validated {
+                store.index_collection_inner(name, config, chunks, fingerprint, |_| {})?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(None),
+            Err(error) if self.current_generation != previous_generation => Ok(Some(format!(
+                "Document configuration committed; publication cleanup failed: {error}"
+            ))),
+            Err(error) => {
+                let expected = previous_generation.as_deref().map(generation::payload);
+                match self.index.load_metas() {
+                    Ok(metadata) if metadata.payload != expected => {
+                        Err(DocumentStoreError::Index(format!(
+                            "Document metadata publication advanced; reader recovery is pending before retry: {error}"
+                        )))
+                    }
+                    Ok(_) => Err(error),
+                    Err(verification) => Err(DocumentStoreError::Index(format!(
+                        "Document publication could not be verified; recovery is required before retry: {error}; {verification}"
+                    ))),
+                }
+            }
+        }
     }
 
     /// Get statistics about a collection.
@@ -1312,7 +1428,14 @@ impl DocumentStore {
     fn collect_files(&self, config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
         let mut excluded = vec![normalize_source_path(&self.base_path)];
         excluded.extend(self.source_exclusion.iter().map(|path| path.to_path_buf()));
-        Self::discover_files(config, excluded.into())
+        let files = Self::discover_files(config, excluded.into())?;
+        if let Some(root) = &self.workspace_root {
+            for path in &files {
+                crate::indexing::facade::IndexFacade::contained_source(root, path)
+                    .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+            }
+        }
+        Ok(files)
     }
 
     /// Shared collection discovery for indexing and watcher reconciliation.

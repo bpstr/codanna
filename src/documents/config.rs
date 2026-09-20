@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Top-level configuration for the documents feature.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentsConfig {
     /// Whether document indexing is enabled.
     #[serde(default)]
@@ -25,7 +25,7 @@ pub struct DocumentsConfig {
 }
 
 /// Configuration for search result display.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchConfig {
     /// Preview mode: "full" shows entire chunk, "kwic" centers on keyword.
     #[serde(default)]
@@ -70,7 +70,7 @@ pub enum PreviewMode {
 }
 
 /// Configuration for a single document collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionConfig {
     /// Paths to include (directories or individual files).
     #[serde(default)]
@@ -128,7 +128,7 @@ impl Default for CollectionConfig {
 }
 
 /// Configuration for document chunking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChunkingConfig {
     /// Chunking strategy to use.
     #[serde(default)]

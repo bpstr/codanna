@@ -114,7 +114,10 @@ async fn high_cardinality_document_events_keep_only_configured_collections_pendi
     std::fs::create_dir(&docs).unwrap();
     std::fs::create_dir(&more).unwrap();
     let (mut watcher, store) = fixture(&root, &docs);
-    let mut config = DocumentsConfig::default();
+    let mut config = DocumentsConfig {
+        enabled: true,
+        ..Default::default()
+    };
     config.collections.insert(
         "more".into(),
         CollectionConfig {
@@ -527,7 +530,10 @@ async fn code_and_document_collections_reconcile_the_same_source_independently()
     })
     .await
     .unwrap();
-    let mut config = DocumentsConfig::default();
+    let mut config = DocumentsConfig {
+        enabled: true,
+        ..Default::default()
+    };
     config.collections.insert(
         "docs".into(),
         CollectionConfig {
@@ -770,7 +776,10 @@ async fn ignored_index_artifacts_cannot_requeue_broad_document_collections() {
     // Exercise the ignore matcher independently of the configured-index
     // containment guard; these artifacts are in a different ignored subtree.
     watcher.index_path = root.join("configured-elsewhere-index");
-    let mut config = DocumentsConfig::default();
+    let mut config = DocumentsConfig {
+        enabled: true,
+        ..Default::default()
+    };
     config.collections.insert(
         "docs".into(),
         CollectionConfig {
