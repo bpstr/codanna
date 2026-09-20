@@ -1,0 +1,4 @@
+    Checking codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-reload)
+ Documenting codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-reload)
+    Finished `dev` profile [unoptimized] target(s) in 17.66s
+   Generated /workspace/scratch/aafac310ccab/runtime/target/doc/codanna/index.html and 3 other files

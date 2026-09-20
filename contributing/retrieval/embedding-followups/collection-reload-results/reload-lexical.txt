@@ -1,0 +1,30 @@
+PASS G01: Index real source symbols, including colliding cross-language names
+PASS G02: Preserve the direct receive to settle_once call
+PASS G03: Resolve an imported alias without a name-based false edge
+PASS G04: Resolve an explicit documentation symbol mention
+PASS G05: Attach in-body WHY rationale to its actual owner
+PASS G06: Associate declaration-leading rationale rather than only the file
+PASS G07: Keep duplicate short symbol names unresolved
+PASS G08: Do not interpret unknown inline literals as broken symbols
+PASS G09: Exclude fenced examples from explicit relationships
+PASS G10: Report broken references instead of guessing dependencies
+PASS G11: Resolve a parent-relative Markdown section link
+PASS G12: Disambiguate duplicate heading anchors
+PASS G13: Resolve a Unicode heading anchor with real source spans
+PASS G14: Support reference-style local Markdown links
+PASS G15: Decode an escaped local filename without escaping the root
+PASS G16: Never index explicitly excluded source or document canaries
+PASS G17: Carry symbol-free configuration references into evidence
+PASS G18: Keep independent peer graphs separate despite identical identifiers
+PASS C01: Return implementation, policy and a real static test reference
+PASS C02: Preserve valid evidence and disclose truncation under a tiny budget
+PASS C03: Discover delivery semantics without handing over a symbol name
+PASS C04: Inspect every independently implemented upload policy entrypoint
+PASS C05: Terminate graph expansion through a real call cycle
+PASS D01: Find the exact inclusive boundary, not the archived prototype
+PASS D02: Retrieve the acknowledgement-loss policy by user intent
+PASS D03: Retrieve a late fact and return the chunk that actually contains it
+PASS D04: Do not return arbitrary documents for an absent exact term
+PASS D05: Honor an unknown collection filter without cross-collection fallback
+PASS D06: Keep a long document from consuming the entire result budget
+Report and raw commands: /workspace/scratch/aafac310ccab/investigation/followups/reload-lexical/report.json

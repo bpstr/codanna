@@ -124,3 +124,8 @@ branch, it can be dispatched against a selected branch in GitHub Actions.
 The same two commands are useful in any existing CI job. Real semantic qualification
 should stay local or on an explicitly provisioned runner with a known cached model.
 No automatic embedding workflow or new required status check is introduced.
+
+The [document embedding follow-up review packets](embedding-followups/README.md)
+record token-budget splitting, live collection reload, the unchanged lexical
+acceptance comparison, and the separate local semantic evaluation harness with
+complete fixture checklists and source-specific validation results.

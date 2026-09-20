@@ -350,6 +350,19 @@ pub struct SearchResult {
     pub similarity: f32,
 }
 
+/// Live state retained while a recovered generation is reconciled to settings.
+/// Searchers/vector maps remain readable even if durable garbage collection
+/// unlinks their files; failed recovery never rewinds reserved chunk IDs.
+struct ReloadCheckpoint {
+    state: PersistedState,
+    generation: Option<String>,
+    vectors: Option<SegmentedVectors>,
+    searcher: tantivy::Searcher,
+    forced_collections: HashSet<String>,
+    new_vector_bytes: u64,
+    compacted_vector_bytes: u64,
+}
+
 /// Document store combining tantivy metadata with vector embeddings.
 pub struct DocumentStore {
     /// Base path for all storage files.
@@ -1198,32 +1211,190 @@ impl DocumentStore {
 
     /// Delete all chunks from a collection.
     pub fn delete_collection(&mut self, name: &str) -> StoreResult<usize> {
-        self.transaction(|store| {
-            let term = Term::from_field_text(store.schema.collection_name, name);
-            let query = TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
-            let count = store
-                .searcher()
-                .search(&query, &tantivy::collector::Count)?;
-            {
-                let mut guard = store
-                    .writer
-                    .lock()
-                    .map_err(|_| DocumentStoreError::LockPoisoned)?;
-                store.ensure_writer(&mut guard)?.delete_term(term);
+        self.transaction(|store| store.delete_collection_inner(name))
+    }
+
+    fn delete_collection_inner(&mut self, name: &str) -> StoreResult<usize> {
+        let term = Term::from_field_text(self.schema.collection_name, name);
+        let query = TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
+        let count = self.searcher().search(&query, &tantivy::collector::Count)?;
+        {
+            let mut guard = self
+                .writer
+                .lock()
+                .map_err(|_| DocumentStoreError::LockPoisoned)?;
+            self.ensure_writer(&mut guard)?.delete_term(term);
+        }
+        self.file_states.retain(|_, state| state.collection != name);
+        self.chunking_fingerprints
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.embedded_files
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.forced_collections.remove(name);
+        self.collection_ids.remove(name);
+        Ok(count)
+    }
+
+    /// Recover and reconcile as one live publication boundary. If the latest
+    /// policy fails after recovery, retain the old reader and metadata in memory;
+    /// the durable pointer stays authoritative for the next attempt, including a
+    /// newer or reverted proposal. Already committed changes are never undone.
+    pub(crate) fn with_committed_generation<T>(
+        &mut self,
+        workspace: Option<&Path>,
+        action: impl FnOnce(&mut Self, bool) -> StoreResult<T>,
+    ) -> StoreResult<T> {
+        let generation_lock = generation::lock(&self.base_path)?;
+        let expected = self.current_generation.as_deref().map(generation::payload);
+        let checkpoint = (self.index.load_metas()?.payload != expected).then(|| ReloadCheckpoint {
+            state: self.persisted_state(),
+            generation: self.current_generation.clone(),
+            vectors: self.vector_storage.clone(),
+            searcher: self.searcher(),
+            forced_collections: self.forced_collections.clone(),
+            new_vector_bytes: self.new_vector_bytes,
+            compacted_vector_bytes: self.compacted_vector_bytes,
+        });
+        let recovered = self.refresh_committed_generation(workspace);
+        drop(generation_lock);
+        let result = recovered.and_then(|recovered| action(self, recovered));
+        if result.is_err() {
+            if let Some(checkpoint) = checkpoint {
+                self.restore_persisted_state(checkpoint.state);
+                self.current_generation = checkpoint.generation;
+                self.vector_storage = checkpoint.vectors;
+                self.pinned_searcher = Some(checkpoint.searcher);
+                self.forced_collections = checkpoint.forced_collections;
+                self.new_vector_bytes = checkpoint.new_vector_bytes;
+                self.compacted_vector_bytes = checkpoint.compacted_vector_bytes;
             }
-            store
-                .file_states
-                .retain(|_, state| state.collection != name);
-            store
-                .chunking_fingerprints
-                .retain(|path, _| store.file_states.contains_key(path));
-            store
-                .embedded_files
-                .retain(|path, _| store.file_states.contains_key(path));
-            store.forced_collections.remove(name);
-            store.collection_ids.remove(name);
-            Ok(count)
-        })
+        }
+        result
+    }
+
+    /// Refresh an authoritative generation before a settings transaction. A
+    /// previous publication may have committed even when its reader reload failed.
+    /// Validate recovered provenance before making it visible in a scoped server.
+    fn refresh_committed_generation(&mut self, workspace: Option<&Path>) -> StoreResult<bool> {
+        if let Some(root) = workspace {
+            self.restrict_workspace(root)?;
+        }
+        let payload = self.index.load_metas()?.payload;
+        let expected = self.current_generation.as_deref().map(generation::payload);
+        if payload == expected {
+            return Ok(false);
+        }
+        let (_, generation) =
+            generation::load(&self.base_path, payload.as_deref())?.ok_or_else(|| {
+                DocumentStoreError::Index(
+                    "Committed document generation is missing; reader recovery is pending".into(),
+                )
+            })?;
+        if self.embedding_generator.is_some() {
+            if generation.state.embedding_identity != self.embedding_identity {
+                return Err(DocumentStoreError::Embedding("Committed document embedding identity changed; restart with the matching backend before recovery".into()));
+            }
+            let vectors = SegmentedVectors::open(&self.base_path, &generation.vectors)?;
+            if vectors
+                .dimension()?
+                .is_some_and(|dimension| dimension != self.dimension)
+            {
+                return Err(DocumentStoreError::Embedding("Committed document vector dimensions changed; restart with the matching backend before recovery".into()));
+            }
+        }
+        if let Some(root) = workspace {
+            for path in generation.state.file_states.keys() {
+                crate::indexing::facade::IndexFacade::contained_source(root, Path::new(path))
+                    .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+            }
+        }
+        let reservation = self.base_path.join("next-chunk-id.json");
+        let reserved: u64 = if reservation.exists() {
+            generation::read_json(&reservation, 128)?
+        } else {
+            0
+        };
+        let previous_generation = self.current_generation.clone();
+        if let Err(error) = self.recover_generation(payload.as_deref()) {
+            if self.current_generation == previous_generation {
+                return Err(DocumentStoreError::Index(format!(
+                    "Committed document reader recovery is pending: {error}"
+                )));
+            }
+            tracing::warn!(target: "documents", %error, "committed reader recovered; state mirror repair deferred");
+        }
+        self.next_chunk_id = self.next_chunk_id.max(reserved);
+        self.id_reservation_end = self.next_chunk_id;
+        Ok(true)
+    }
+
+    /// Replace changed collections and remove retired collections in one durable
+    /// generation. Retire sources that leave their collection before admitting
+    /// transfers, retaining unchanged states and vectors for incremental skips.
+    ///
+    /// A warning means metadata committed but a redundant state mirror failed;
+    /// callers must publish the matching policy rather than restore the old one.
+    pub(crate) fn reconfigure_collections(
+        &mut self,
+        removed: &[String],
+        changed: &[(String, CollectionConfig)],
+        defaults: &ChunkingConfig,
+    ) -> StoreResult<Option<String>> {
+        let previous_generation = self.current_generation.clone();
+        let validated = changed
+            .iter()
+            .map(|(name, config)| {
+                let chunks = ValidatedChunkingConfig::try_from(config.effective_chunking(defaults))
+                    .map_err(DocumentStoreError::InvalidChunkingConfig)?;
+                let fingerprint =
+                    chunking_fingerprint(&chunks, self.embedding_generator.as_deref())?;
+                // Admission/discovery errors must happen before deleting any old rows
+                // or passing source content to an embedding backend.
+                let files = self.collect_files(config)?;
+                Ok((name, config, chunks, fingerprint, files))
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
+        let result = self.transaction(|store| {
+            for name in removed {
+                store.delete_collection_inner(name)?;
+            }
+            for (name, _, _, _, files) in &validated {
+                let retained: HashSet<_> = files.iter().collect();
+                let retired: Vec<_> = store
+                    .file_states
+                    .iter()
+                    .filter(|(path, state)| state.collection == **name && !retained.contains(path))
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                for path in retired {
+                    store.remove_file_inner(&path)?;
+                }
+            }
+            for (name, config, chunks, fingerprint, _) in &validated {
+                store.index_collection_inner(name, config, chunks, fingerprint, |_| {})?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(None),
+            Err(error) if self.current_generation != previous_generation => Ok(Some(format!(
+                "Document configuration committed; publication cleanup failed: {error}"
+            ))),
+            Err(error) => {
+                let expected = previous_generation.as_deref().map(generation::payload);
+                match self.index.load_metas() {
+                    Ok(metadata) if metadata.payload != expected => {
+                        Err(DocumentStoreError::Index(format!(
+                            "Document metadata publication advanced; reader recovery is pending before retry: {error}"
+                        )))
+                    }
+                    Ok(_) => Err(error),
+                    Err(verification) => Err(DocumentStoreError::Index(format!(
+                        "Document publication could not be verified; recovery is required before retry: {error}; {verification}"
+                    ))),
+                }
+            }
+        }
     }
 
     /// Get statistics about a collection.
@@ -1317,7 +1488,14 @@ impl DocumentStore {
     fn collect_files(&self, config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
         let mut excluded = vec![normalize_source_path(&self.base_path)];
         excluded.extend(self.source_exclusion.iter().map(|path| path.to_path_buf()));
-        Self::discover_files(config, excluded.into())
+        let files = Self::discover_files(config, excluded.into())?;
+        if let Some(root) = &self.workspace_root {
+            for path in &files {
+                crate::indexing::facade::IndexFacade::contained_source(root, path)
+                    .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+            }
+        }
+        Ok(files)
     }
 
     /// Shared collection discovery for indexing and watcher reconciliation.
@@ -1661,6 +1839,7 @@ impl DocumentStore {
         }
         generation::publication_boundary("after_metadata_commit");
         self.reader.reload()?;
+        self.pinned_searcher = None;
         self.vector_storage = Some(vectors);
         self.current_generation = Some(name);
         self.new_vector_bytes = new_vector_bytes;
@@ -1750,7 +1929,16 @@ impl DocumentStore {
         })?;
         let vectors = SegmentedVectors::open(&self.base_path, &generation.vectors)?;
         self.reader.reload()?;
-        let state = generation.state;
+        self.pinned_searcher = None;
+        self.restore_persisted_state(generation.state);
+        self.vector_storage = Some(vectors);
+        self.current_generation = Some(name);
+        self.new_vector_bytes = generation.new_vector_bytes;
+        self.compacted_vector_bytes = generation.compacted_vector_bytes;
+        self.save_state()
+    }
+
+    fn restore_persisted_state(&mut self, state: PersistedState) {
         self.file_states = state
             .file_states
             .into_iter()
@@ -1773,11 +1961,6 @@ impl DocumentStore {
             .collect();
         self.next_chunk_id = self.next_chunk_id.max(state.next_chunk_id);
         self.embedding_identity = state.embedding_identity;
-        self.vector_storage = Some(vectors);
-        self.current_generation = Some(name);
-        self.new_vector_bytes = generation.new_vector_bytes;
-        self.compacted_vector_bytes = generation.compacted_vector_bytes;
-        self.save_state()
     }
 
     fn stage_vector_writes(&mut self) -> StoreResult<()> {
@@ -2966,11 +3149,21 @@ mod workspace_tests {
         writer
             .index_collection("local", &config(&root), &ChunkingConfig::default())
             .unwrap();
-        writer.restrict_workspace(&root).unwrap();
-        let mut snapshot = writer.query_snapshot();
-        // Simulate a later writer that does not observe this reader's in-memory
-        // scope. The existing query keeps its original safe generation; a fresh
-        // query must still reject any foreign provenance it encounters.
+        let mut reader =
+            DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
+        reader.restrict_workspace(&root).unwrap();
+        let mut snapshot = reader.query_snapshot();
+        let rejected = reader
+            .index_collection("blocked", &config(&foreign), &ChunkingConfig::default())
+            .unwrap_err();
+        assert!(matches!(
+            rejected,
+            DocumentStoreError::Index(reason)
+                if reason.contains("outside the authorized network workspace")
+        ));
+        // A distinct unscoped writer can publish foreign provenance. The scoped
+        // reader's existing query keeps its original safe generation; a fresh
+        // query must reject the foreign row after the reader reloads.
         writer
             .index_collection("foreign", &config(&foreign), &ChunkingConfig::default())
             .unwrap();
@@ -2978,6 +3171,11 @@ mod workspace_tests {
             text: "PRIVATE_WORKSPACE_TOPIC".into(),
             ..SearchQuery::default()
         };
+        let unscoped = writer.query_snapshot().search(query.clone()).unwrap();
+        assert!(unscoped.iter().any(|hit| {
+            hit.source_path.starts_with(&foreign) && hit.content_preview.contains("PRIVATE")
+        }));
+        reader.reader.reload().unwrap();
         let original = snapshot.search(query.clone()).unwrap();
         assert!(
             original
@@ -2989,7 +3187,7 @@ mod workspace_tests {
                 .iter()
                 .all(|hit| !hit.content_preview.contains("PRIVATE"))
         );
-        assert!(writer.query_snapshot().search(query).is_err());
+        assert!(reader.query_snapshot().search(query).is_err());
         let mut reopened =
             DocumentStore::new(root.join("index"), VectorDimension::new(4).unwrap()).unwrap();
         assert!(reopened.restrict_workspace(&root).is_err());

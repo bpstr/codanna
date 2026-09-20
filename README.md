@@ -170,7 +170,12 @@ backend, model and dimensions. With `semantic_search.enabled = false`, documents
 use lexical search over their text and headings without loading an embedding
 model. Queries read the indexed snapshot; run `codanna documents index` to refresh
 it, or use the persistent server's document watcher. Collection overrides also
-apply to watcher updates, including new files and recreated directories.
+apply to watcher updates, including new files and recreated directories. With an
+attached document store, settings edits also reload collection roots, globs and
+chunking, and reconcile additions or removals immediately. Removing a collection
+or disabling documents removes its derived indexed data while preserving source
+files. See [Live document collection reload](contributing/retrieval/embedding-followups/COLLECTION-RELOAD.md)
+for retry behavior and restart boundaries.
 
 `documents index --force` replaces the selected collections while preserving other
 collections' source tracking. A source can belong to one collection; overlapping

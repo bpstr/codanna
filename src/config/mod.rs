@@ -558,7 +558,7 @@ impl Settings {
         });
         Figment::new()
             .merge(Serialized::defaults(Settings::default()))
-            .merge(Toml::file(&path))
+            .merge(Toml::file_exact(&path))
             .merge(Env::prefixed("CI_").split("_"))
             .extract()
             .map(move |mut settings: Settings| {

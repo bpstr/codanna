@@ -1,0 +1,25 @@
+    Finished `test` profile [unoptimized] target(s) in 0.55s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 18 tests
+test watcher::unified::document_batching_tests::code_and_document_collections_reconcile_the_same_source_independently ... ok
+test watcher::unified::document_batching_tests::continuous_document_events_respect_quiet_window_and_maximum_delay ... ok
+test watcher::unified::document_batching_tests::custom_managed_index_events_do_not_enter_document_or_source_queues ... ok
+test watcher::unified::document_batching_tests::document_burst_reduces_measured_collection_scans_and_file_checks ... ok
+test watcher::unified::document_batching_tests::document_watch_roots_do_not_expand_code_indexing_on_reload ... ok
+test watcher::unified::document_batching_tests::events_and_overflow_during_reconciliation_survive_for_next_dispatch ... ok
+test watcher::unified::document_batching_tests::failed_collection_retries_on_idle_dispatch_after_backoff ... ok
+test watcher::unified::document_batching_tests::high_cardinality_document_events_keep_only_configured_collections_pending ... ok
+test watcher::unified::document_batching_tests::ignored_index_artifacts_cannot_requeue_broad_document_collections ... ok
+test watcher::unified::document_batching_tests::nested_root_ancestor_ignore_policy_is_observed ... ok
+test watcher::unified::document_batching_tests::observed_root_removal_does_not_treat_a_dangling_symlink_as_absence ... ok
+test watcher::unified::document_batching_tests::overlapping_source_handler_retains_modification_and_deletion_events ... ok
+test watcher::unified::document_batching_tests::pending_retry_does_not_delay_cooperative_shutdown ... ok
+test watcher::unified::document_batching_tests::relative_code_actions_use_workspace_paths_and_keep_notification_paths ... ok
+test watcher::unified::document_batching_tests::retry_backoff_is_capped_and_preserves_newer_pending_work ... ok
+test watcher::unified::document_batching_tests::root_recreation_ignore_and_source_changes_share_one_truth_scan ... ok
+test watcher::unified::document_collection_tests::document_watcher_catches_moved_subtrees_and_nested_ignore_changes ... ok
+test watcher::unified::document_collection_tests::document_watcher_indexes_new_and_recreated_files_with_collection_overrides ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1417 filtered out; finished in 2.15s
+

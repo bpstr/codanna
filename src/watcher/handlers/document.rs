@@ -23,7 +23,10 @@ pub struct DocumentFileHandler {
     cached_paths: RwLock<HashSet<PathBuf>>,
     /// Workspace root for path resolution.
     workspace_root: PathBuf,
-    /// Startup collection policy, shared by discovery and incremental updates.
+    /// Configured handlers never fall back to indexing stale cached paths.
+    configured: bool,
+    config: Option<DocumentsConfig>,
+    /// Accepted collection policy, shared by discovery and incremental updates.
     collections: Vec<(String, CollectionConfig)>,
     defaults: ChunkingConfig,
 }
@@ -35,6 +38,8 @@ impl DocumentFileHandler {
             store,
             cached_paths: RwLock::new(HashSet::new()),
             workspace_root,
+            configured: false,
+            config: None,
             collections: Vec::new(),
             defaults: ChunkingConfig::default(),
         }
@@ -43,21 +48,26 @@ impl DocumentFileHandler {
     /// Track configured roots even while empty, using collection overrides on
     /// every update. Relative roots are resolved against the same workspace.
     pub fn with_config(mut self, config: &DocumentsConfig) -> Self {
+        self.configured = true;
+        let mut config = config.clone();
+        for collection in config.collections.values_mut() {
+            collection.paths = collection
+                .paths
+                .iter()
+                .map(|path| self.to_absolute(path))
+                .collect();
+            collection.paths.sort();
+            collection.paths.dedup();
+        }
         self.defaults = config.defaults.clone();
         self.collections = config
             .collections
             .iter()
-            .map(|(name, collection)| {
-                let mut collection = collection.clone();
-                collection.paths = collection
-                    .paths
-                    .iter()
-                    .map(|path| self.to_absolute(path))
-                    .collect();
-                (name.clone(), collection)
-            })
+            .filter(|_| config.enabled)
+            .map(|(name, collection)| (name.clone(), collection.clone()))
             .collect();
         self.collections.sort_by(|a, b| a.0.cmp(&b.0));
+        self.config = Some(config);
         self
     }
 
@@ -153,8 +163,12 @@ impl WatchHandler for DocumentFileHandler {
         "document"
     }
 
+    fn document_config(&self) -> Option<DocumentsConfig> {
+        self.config.clone()
+    }
+
     fn coalesces_document_events(&self) -> bool {
-        !self.collections.is_empty()
+        self.configured
     }
 
     fn matches(&self, path: &Path) -> bool {
@@ -168,9 +182,11 @@ impl WatchHandler for DocumentFileHandler {
         {
             return true;
         }
-        if let Ok(cache) = self.cached_paths.try_read() {
-            if cache.contains(&absolute) {
-                return true;
+        if !self.configured {
+            if let Ok(cache) = self.cached_paths.try_read() {
+                if cache.contains(&absolute) {
+                    return true;
+                }
             }
         }
         self.collections.iter().any(|(_, collection)| {
@@ -259,7 +275,7 @@ impl WatchHandler for DocumentFileHandler {
 
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError> {
         let action = self.reconcile_action(path);
-        if !matches!(action, WatchAction::None) {
+        if self.configured || !matches!(action, WatchAction::None) {
             return Ok(action);
         }
         // DocumentStore.file_states uses absolute paths, so pass absolute
@@ -270,7 +286,7 @@ impl WatchHandler for DocumentFileHandler {
 
     async fn on_delete(&self, path: &Path) -> Result<WatchAction, WatchError> {
         let action = self.reconcile_action(path);
-        if !matches!(action, WatchAction::None) {
+        if self.configured || !matches!(action, WatchAction::None) {
             return Ok(action);
         }
         let path = self.to_absolute(path);

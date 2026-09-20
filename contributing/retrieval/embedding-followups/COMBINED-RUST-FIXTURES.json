@@ -1,0 +1,660 @@
+{
+  "schema_version": 1,
+  "summary": {
+    "new": 33,
+    "revised": 2,
+    "passed": 35,
+    "pending": 0
+  },
+  "source_identity": {
+    "source_tree_sha256": "66c9fa71dabb0dcd8a0306a610a38fac7332e4b3098fcc734af2123d83127510",
+    "source_file_count": 638,
+    "hash_definition": "SHA256 of json.dumps(mapping, sort_keys=True) where mapping contains src/**, tests/**, Cargo.toml and Cargo.lock relative file paths and SHA256 digests"
+  },
+  "scope": "These 35 new or revised Rust fixtures each pass in both complete feature-set suites. Repeated invocations and retained controls are not new fixtures. The 36 Python semantic evaluator contracts are documented separately in PR #40.",
+  "fixtures": [
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_add_remove_disable_and_reenable_publish_query_settings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_add_remove_disable_and_reenable_publish_query_settings",
+      "platform": "all",
+      "scenario": "Reload settings to add a relative-root collection, remove the old collection, disable documents and re-enable the attached store.",
+      "oracles": [
+        "Durable lexical hits and collection names match the accepted settings after every edit.",
+        "Facade preview settings and enabled flag reflect accepted settings.",
+        "Source files remain intact; removed root watches retire."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_globs_and_roots_preserve_retained_embeddings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_globs_and_roots_preserve_retained_embeddings",
+      "platform": "all",
+      "scenario": "Expand glob and root admission, then shrink roots with a fixed mock embedding model.",
+      "oracles": [
+        "Retained source chunk IDs remain unchanged.",
+        "Only newly admitted text reaches the mock embedding model.",
+        "Retired sources disappear from durable results."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_default_and_collection_chunking_replace_only_affected_chunks",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_default_and_collection_chunking_replace_only_affected_chunks",
+      "platform": "all",
+      "scenario": "Change default chunk size, then a collection override.",
+      "oracles": [
+        "Affected collections have the expected chunk counts and replacement IDs.",
+        "A collection with unchanged effective settings retains its chunk ID."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_invalid_settings_and_identity_changes_keep_working_policy",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_invalid_settings_and_identity_changes_keep_working_policy",
+      "platform": "all",
+      "scenario": "Propose malformed TOML, invalid glob/chunk settings, changed index/workspace roots and changed embedding settings.",
+      "oracles": [
+        "Accepted facade document settings and code roots remain unchanged.",
+        "The original durable chunk ID remains searchable.",
+        "Rejected proposals leave no pending apply."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_failed_batch_preserves_all_collections_then_retries_without_event",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_failed_batch_preserves_all_collections_then_retries_without_event",
+      "platform": "all",
+      "scenario": "Remove one collection and add another while the fixed mock model fails, then advance the idle retry clock.",
+      "oracles": [
+        "The old collection remains durable and the new collection is absent after failure.",
+        "Accepted settings and active watch registry remain unchanged on failure.",
+        "Idle retry publishes only the new collection without another source event."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions",
+      "platform": "all",
+      "scenario": "Remove a collection while an old retry and previously captured reconciliation action exist.",
+      "oracles": [
+        "Pending retry state is empty after removal.",
+        "Old actions and later source events do not recreate collection data.",
+        "Source files remain on disk."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries",
+      "platform": "all",
+      "scenario": "Move source ownership to a collection sorted earlier by name, then propose overlapping ownership.",
+      "oracles": [
+        "New durable results identify the new owning collection.",
+        "An already pinned query still identifies the old owner.",
+        "Overlapping ownership failure retains the accepted collection roots and results."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_committed_generation_wins_over_failed_state_mirror",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_committed_generation_wins_over_failed_state_mirror",
+      "platform": "all",
+      "scenario": "Obstruct state.json mirror publication with a directory while removing a collection.",
+      "oracles": [
+        "Durable results and accepted live configuration both reflect the committed removal.",
+        "The committed change does not remain queued as a failed proposal."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission",
+      "platform": "all",
+      "scenario": "Seed an existing code file through its absolute source lane, admit it as a document, then remove document collections.",
+      "oracles": [
+        "The same source is visible in both indexes while admitted.",
+        "Subsequent code updates still work after document removal.",
+        "Explicit managed roots admit no generated documents or managed-root watches."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_without_attached_store_requires_restart_without_loading_a_model",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_without_attached_store_requires_restart_without_loading_a_model",
+      "platform": "all",
+      "scenario": "Propose document settings in a watcher without an attached document store.",
+      "oracles": [
+        "Current settings and durable indexed data remain unchanged.",
+        "The unsupported proposal is rejected without constructing a model."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary",
+      "platform": "unix",
+      "scenario": "Reload alias/missing roots and reject dangling links, a foreign ACL root and a canonical file-symlink escape.",
+      "oracles": [
+        "Equivalent aliases retain source IDs; later missing-root creation is indexed.",
+        "Invalid and unauthorized roots preserve accepted settings.",
+        "Foreign source text never reaches durable results."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots",
+      "platform": "unix",
+      "scenario": "Retarget a startup symlink before the first settings reload.",
+      "oracles": [
+        "Comparison uses the previously accepted canonical root.",
+        "The old inventory is replaced immediately with the new target inventory."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings",
+      "platform": "all",
+      "scenario": "Lose a malformed/deleted settings event while an earlier failed proposal awaits retry, then reconcile overflow.",
+      "oracles": [
+        "Overflow cancels the old pending proposal.",
+        "Accepted settings and the original durable chunk ID remain unchanged."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_observed_settings_edits_cancel_retries_before_debounce",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_observed_settings_edits_cancel_retries_before_debounce",
+      "platform": "all",
+      "scenario": "Admit a newer malformed/deleted settings event, including a parent-directory event, while an old retry is due before the new debounce expires.",
+      "oracles": [
+        "The old proposal is canceled at event admission.",
+        "Expiring the old retry clock cannot change settings or the durable original chunk."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_missing_or_directory_settings_never_apply_defaults",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_missing_or_directory_settings_never_apply_defaults",
+      "platform": "all",
+      "scenario": "Remove the explicitly watched settings file or replace it with a directory before the real configuration handler reads it, while an earlier disable proposal is queued.",
+      "oracles": [
+        "The real handler returns a configuration read error instead of a default-settings proposal.",
+        "The newer settings event cancels the queued disable proposal.",
+        "After dispatch, accepted document settings, the durable original chunk ID and source file remain unchanged."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_recovers_a_committed_generation_before_a_reverted_proposal",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovers_a_committed_generation_before_a_reverted_proposal",
+      "platform": "all",
+      "scenario": "Recover an externally committed generation with a missing manifest, then fail latest-policy indexing on invalid UTF-8 and supersede it with a no-op proposal before retry.",
+      "oracles": [
+        "Missing-manifest and indexing failures retain the old live collection and pinned query generation.",
+        "A newer no-op proposal still requires complete reconciliation.",
+        "Idle retry removes staged data, restores the latest configured inventory and uses IDs at or above the external reservation."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "collection_reload_recovery_checks_workspace_before_exposing_foreign_sources",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovery_checks_workspace_before_exposing_foreign_sources",
+      "platform": "all",
+      "scenario": "Attempt recovery after another writer adds foreign source provenance to a workspace-bound server.",
+      "oracles": [
+        "Recovery remains pending and accepted settings stay unchanged.",
+        "The foreign source does not enter the live store state or live query results."
+      ],
+      "source": "src/watcher/collection_reload_tests.rs",
+      "status": "passed",
+      "new_or_revised": "new",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "d5610b5dab05a0fa07edb999af5a535dd7736ad740876a2c4984ad0756d241c9"
+      }
+    },
+    {
+      "group": "collection_reload",
+      "name": "hardening_workspace_document_snapshots_reject_foreign_hits_after_binding",
+      "test": "documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding",
+      "source": "src/documents/store.rs",
+      "platform": "all",
+      "scenario": "Open a separate workspace-bound reader after an unscoped writer publishes local data, pin its query, then use the original unscoped writer to publish foreign data and explicitly reload the scoped reader.",
+      "oracles": [
+        "The bound reader rejects a foreign-source indexing attempt with the specific workspace-boundary error before the unscoped writer publishes it.",
+        "An unscoped query confirms that the foreign row is present and contains the private fixture text.",
+        "The old pinned scoped snapshot returns no foreign paths or private text after reader reload.",
+        "A fresh scoped snapshot rejects the foreign query, and binding a newly reopened store rejects its foreign provenance."
+      ],
+      "status": "passed",
+      "new_or_revised": "revised",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fed3da417da31f2afeb78ee3e04f3b3481428176c2aaa06c632fdfc914641ef6"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_byte_splits_fill_budget_and_preserve_utf8",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Split multilingual body bytes under a 12-byte budget with breadcrumbs; also try an empty body, undersized scalar budget, and oversized heading.",
+      "oracles": [
+        "Exact ranges 0..6, 6..15, 15..22 cover the original UTF-8 body and validate; impossible byte capacities fail explicitly."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_splits_count_normalization_and_special_tokens_in_every_input",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Refine NFKC-expanding Arabic text with heading context and model special tokens, then try a one-token budget.",
+      "oracles": [
+        "The original input exceeds the budget, every nonempty source slice validates, and the tiny budget returns a bounded-search diagnostic naming special tokens."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_splits_try_nonmonotonic_normalized_prefixes",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Use local NFKC plus BPE where the first scalar expands to three tokens but a longer prefix merges to one.",
+      "oracles": [
+        "The singleton fails, the longer prefix passes, and exact ranges 0..4 and 4..5 cover the source without relying on monotonic counts."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_splits_validate_composed_heading_instead_of_prefix_alone",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Use local BPE merges across the heading separator into the body.",
+      "oracles": [
+        "The standalone heading exceeds the budget while the composed heading/body passes and remains one exact body range."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_splitting_bounds_tokenizer_work_and_output_parts",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Exhaust exact-tokenizer work, request too many byte-proxy parts, and amplify a large heading beside tiny bodies.",
+      "oracles": [
+        "Each case returns its specific tokenizer-work, part-count, or repeated-heading output allowance error."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "embedding_input::tests::document_splitting_handles_long_unbroken_inputs_above_byte_ceiling",
+      "source": "src/embedding_input.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Refine one unbroken token longer than the 1 MiB byte ceiling.",
+      "oracles": [
+        "Two exact source ranges cover the entire body and each complete input passes the normal budget validator."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "3eeaaa64f622ea781b56a924da3ba3bce6bceafce0da6b603f04fb753b53b4b2"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_splitting_preserves_source_bytes_headings_and_existing_overlap",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Index multilingual text, emoji, combining marks, CRLF, fenced code, tables, and a long line under a 64-byte budget.",
+      "oracles": [
+        "Stored chunks equal their source slices; per-byte coverage matches original overlap multiplicity; headings match parent chunks and complete recorded inputs fit the budget."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_splitting_matches_collection_and_watcher_and_skips_unchanged_files",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Replace the same source through collection and watcher indexing, repeat unchanged indexing, and reopen both stores.",
+      "oracles": [
+        "Both paths produce equal evidence; unchanged runs preserve IDs and avoid embedding calls; reopened chunks match the persisted results."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_late_heading_failure_preserves_both_collections_and_reopen",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Place an impossible heading after many otherwise valid replacement chunks; exercise collection and watcher updates.",
+      "oracles": [
+        "No new embedding calls occur; original IDs, bodies, vector scores, file state, generation, and the other collection survive failure and reopen."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_later_embedding_failure_rolls_back_splits_and_can_retry",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Fail the second embedding batch of a large replacement through collection and watcher paths.",
+      "oracles": [
+        "Both prior collections and reopen state remain exact after failure; retry restores full source coverage and leaves no unembedded chunks."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_invalid_generator_ranges_reject_without_publishing_partial_evidence",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Return invalid UTF-8 boundaries, gaps, overlap, or a missing tail from the public generator hook through both indexing paths.",
+      "oracles": [
+        "Each range error occurs before embedding calls; prior evidence, IDs, vector scores, the other collection, and reopened state remain intact."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_policy_migration_reprocesses_unchanged_source_once",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Replace a stored semantic fingerprint with the previous character-only fingerprint without changing the source.",
+      "oracles": [
+        "One run reprocesses with new IDs and compatible cache reuse; the new fingerprint persists and the reopened next run skips without new embeddings."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_bounds_custom_generator_heading_amplification_before_cloning",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Return many valid tiny ranges from a custom hook beneath a large heading.",
+      "oracles": [
+        "The store rejects repeated-heading output amplification before embedding, while preserving prior evidence and the other collection."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "documents::store::token_splitting_tests::document_budget_bounds_total_file_refinement_before_publication",
+      "source": "src/documents/token_splitting_tests.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Refine a large overlapping heading and a separate source that needs too many tiny fragments.",
+      "oracles": [
+        "The aggregate 64 MiB or 65,536-chunk guard fails before embedding; the prior generation remains exact both immediately and after reopening."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "fa6c578ad4fa6cd157533288c3334a424c32b712315e03b91015d8c08854358d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "semantic::pool::tests::document_batch_retains_whitespace_partitions_without_changing_code_filtering",
+      "source": "src/semantic/pool.rs",
+      "target": "--lib",
+      "new_or_revised": "new",
+      "scenario": "Partition an unheaded body into byte-budget slices that include whitespace-only fragments, then apply local batch selection.",
+      "oracles": [
+        "Document selection retains every nonempty source slice and reconstructs the original body; code selection retains only nonblank items, and empty document inputs remain excluded."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "c18aff51fd33fccd07197d3ea2783a20d4ba03ee99e657a7dbf4c9852e84e30b"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "configured_remote_splits_document_bodies_to_the_effective_budget",
+      "source": "tests/document_backend_regressions.rs",
+      "target": "--test document_backend_regressions",
+      "new_or_revised": "new",
+      "scenario": "Index a headed document against a loopback mock backend with an 80-byte configured budget.",
+      "oracles": [
+        "Four complete inputs keep the full breadcrumb prefix, each fits 80 bytes, and removing prefixes reconstructs the original heading body and paragraph body."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
+      }
+    },
+    {
+      "group": "document_splitting",
+      "test": "remote_document_budget_includes_heading_breadcrumbs_and_rolls_back",
+      "source": "tests/document_backend_regressions.rs",
+      "target": "--test document_backend_regressions",
+      "new_or_revised": "revised",
+      "scenario": "Revise the previous heading-budget fixture to a 40-byte budget that leaves no body capacity after full breadcrumbs.",
+      "oracles": [
+        "The actionable error identifies budget, heading breadcrumbs, and no truncation; no indexed evidence or document-embedding transport request is published."
+      ],
+      "status": "passed",
+      "verification": {
+        "default_log": "collection-reload-results/default-tests.txt",
+        "all_features_log": "collection-reload-results/all-features-tests.txt",
+        "source_file_sha256": "24e89359f60d41d95a49a1096cf678eba7e525afcccc7a610f0af4e100b30e7d"
+      }
+    }
+  ]
+}

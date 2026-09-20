@@ -1,0 +1,9 @@
+   Compiling codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-reload)
+    Finished `test` profile [unoptimized] target(s) in 59.14s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 1 test
+test documents::store::workspace_tests::hardening_workspace_document_snapshots_reject_foreign_hits_after_binding ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1434 filtered out; finished in 0.07s
+

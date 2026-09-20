@@ -20,6 +20,10 @@ use super::error::WatchError;
 use super::handler::{WatchAction, WatchHandler};
 use super::path_registry::PathRegistry;
 
+#[path = "config_reload.rs"]
+mod config_reload;
+use config_reload::PendingConfigReload;
+
 /// Above this size, reconcile a modification burst through the shared batch
 /// lane. This avoids one semantic-index save per path after large filesystem
 /// event bursts such as a macOS wake or branch checkout.
@@ -53,6 +57,8 @@ impl PendingDocumentCollection {
 struct DocumentReconciliations {
     pending: BTreeMap<String, PendingDocumentCollection>,
     debounce: Duration,
+    /// Accepted reload policy gates even actions captured before a reload.
+    active: Option<crate::documents::DocumentsConfig>,
 }
 
 impl DocumentReconciliations {
@@ -60,6 +66,7 @@ impl DocumentReconciliations {
         Self {
             pending: BTreeMap::new(),
             debounce: Duration::from_millis(debounce_ms).min(MAX_DOCUMENT_BATCH_DELAY),
+            active: None,
         }
     }
 
@@ -70,6 +77,21 @@ impl DocumentReconciliations {
         defaults: ChunkingConfig,
         now: Instant,
     ) {
+        let (collections, defaults) = if let Some(active) = &self.active {
+            let collections = collections
+                .into_iter()
+                .filter_map(|(name, _)| {
+                    active
+                        .enabled
+                        .then(|| active.collections.get(&name).cloned())
+                        .flatten()
+                        .map(|config| (name, config))
+                })
+                .collect();
+            (collections, active.defaults.clone())
+        } else {
+            (collections, defaults)
+        };
         let refresh_watches = path.is_dir()
             || !path.exists()
             || path
@@ -166,6 +188,8 @@ pub struct UnifiedWatcher {
     document_store: Option<Arc<RwLock<DocumentStore>>>,
     /// Coalesced collection work, bounded by configured collection count.
     document_reconciliations: RwLock<DocumentReconciliations>,
+    /// Latest proposed configuration; failures retry without another file event.
+    pending_config: RwLock<Option<PendingConfigReload>>,
     /// Chunking config for document re-indexing.
     chunking_config: ChunkingConfig,
     /// Path for semantic search persistence.
@@ -382,7 +406,9 @@ impl UnifiedWatcher {
             // Managed artifacts are never source events, including when the
             // configured index lives outside the conventional .codanna tree.
             // Parent policy edits and workspace/root recreation remain visible.
-            if absolute.starts_with(&self.index_path) {
+            if crate::documents::store::normalize_source_path(&absolute)
+                .starts_with(&self.index_path)
+            {
                 continue;
             }
             crate::trace_event!(
@@ -403,6 +429,24 @@ impl UnifiedWatcher {
                 event.kind,
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
             ) {
+                // An observed newer settings edit supersedes a failed proposal
+                // immediately; its debounce must not let the old retry win.
+                for handler in self
+                    .handlers
+                    .iter()
+                    .filter(|handler| handler.reloads_config())
+                {
+                    if handler.matches(&path)
+                        || ((is_directory || removed_directory)
+                            && handler
+                                .tracked_paths()
+                                .await
+                                .iter()
+                                .any(|settings| settings.starts_with(&absolute)))
+                    {
+                        *self.pending_config.write().await = None;
+                    }
+                }
                 for handler in &self.handlers {
                     if !handler.coalesces_document_events()
                         || !(is_directory || removed_directory || handler.matches(&path))
@@ -535,6 +579,7 @@ impl UnifiedWatcher {
             }
             roots.extend(handler_roots);
         }
+        roots.retain(|root| !root.starts_with(&self.index_path));
         let new_roots: Vec<_> = roots
             .iter()
             .filter(|root| {
@@ -738,14 +783,24 @@ impl UnifiedWatcher {
                             );
                         }
                     }
-                    Err(e) => tracing::error!("[{}] overflow delete error: {e}", handler.name()),
+                    Err(e) => {
+                        if handler.reloads_config() {
+                            *self.pending_config.write().await = None;
+                        }
+                        tracing::error!("[{}] overflow delete error: {e}", handler.name());
+                    }
                 }
             }
             for path in &after_set {
-                if !path.exists() {
+                if !path.exists() && !handler.reloads_config() {
                     continue;
                 }
-                match handler.on_modify(path).await {
+                let action = if path.exists() {
+                    handler.on_modify(path).await
+                } else {
+                    handler.on_delete(path).await
+                };
+                match action {
                     Ok(action) => {
                         if let Err(e) = self.execute_action(action, handler.name()).await {
                             tracing::error!(
@@ -754,7 +809,12 @@ impl UnifiedWatcher {
                             );
                         }
                     }
-                    Err(e) => tracing::error!("[{}] overflow modify error: {e}", handler.name()),
+                    Err(e) => {
+                        if handler.reloads_config() {
+                            *self.pending_config.write().await = None;
+                        }
+                        tracing::error!("[{}] overflow modify error: {e}", handler.name());
+                    }
                 }
             }
         }
@@ -799,6 +859,12 @@ impl UnifiedWatcher {
                 }
             }
         }
+        self.flush_config_reload(now).await;
+        // Keep the previous generation intact while a configuration transaction
+        // is waiting to retry. Native source events remain bounded/coalesced.
+        if self.pending_config.read().await.is_some() {
+            return DocumentBatchStats::default();
+        }
         // This also runs on otherwise idle ticks, making failed collections
         // retry without requiring another filesystem event.
         self.flush_document_reconciliations(now).await
@@ -832,6 +898,9 @@ impl UnifiedWatcher {
                     }
                 }
                 Err(e) => {
+                    if handler.reloads_config() {
+                        *self.pending_config.write().await = None;
+                    }
                     tracing::error!("[{}] handler error: {e}", handler.name());
                 }
             }
@@ -941,6 +1010,9 @@ impl UnifiedWatcher {
                     }
                 }
                 Err(e) => {
+                    if handler.reloads_config() {
+                        *self.pending_config.write().await = None;
+                    }
                     tracing::error!("[{}] handler error: {e}", handler.name());
                 }
             }
@@ -1140,6 +1212,10 @@ impl UnifiedWatcher {
                     );
                 }
                 Ok(changed.then_some(FileChangeEvent::IndexReloaded))
+            }
+            WatchAction::ReloadSettings { settings } => {
+                *self.pending_config.write().await = Some(PendingConfigReload::new(settings));
+                Ok(None)
             }
             WatchAction::None => Ok(None),
         };
@@ -1443,6 +1519,7 @@ impl UnifiedWatcherBuilder {
             facade,
             document_store: self.document_store,
             document_reconciliations: RwLock::new(DocumentReconciliations::new(self.debounce_ms)),
+            pending_config: RwLock::new(None),
             chunking_config: self.chunking_config,
             index_path,
             workspace_root,
@@ -1713,6 +1790,10 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "collection_reload_tests.rs"]
+mod collection_reload_tests;
+
+#[cfg(test)]
 #[path = "document_batching_tests.rs"]
 mod document_batching_tests;
 
@@ -1752,6 +1833,7 @@ mod document_collection_tests {
         }
         let store = Arc::new(RwLock::new(store));
         let mut config = DocumentsConfig {
+            enabled: true,
             defaults: ChunkingConfig {
                 min_chunk_chars: 1,
                 max_chunk_chars: 256,
