@@ -1,0 +1,879 @@
+{
+  "schema_version": 1,
+  "profile": "lexical",
+  "cases": [
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G01",
+      "title": "Index real source symbols, including colliding cross-language names",
+      "tier": "invariant",
+      "elapsed_seconds": 0.00022476899903267622
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G02",
+      "title": "Preserve the direct receive to settle_once call",
+      "tier": "invariant",
+      "elapsed_seconds": 4.863399954047054e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G03",
+      "title": "Resolve an imported alias without a name-based false edge",
+      "tier": "target",
+      "elapsed_seconds": 2.716099697863683e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G04",
+      "title": "Resolve an explicit documentation symbol mention",
+      "tier": "invariant",
+      "elapsed_seconds": 2.9765004001092166e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G05",
+      "title": "Attach in-body WHY rationale to its actual owner",
+      "tier": "invariant",
+      "elapsed_seconds": 4.3104999349452555e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G06",
+      "title": "Associate declaration-leading rationale rather than only the file",
+      "tier": "target",
+      "elapsed_seconds": 2.1152001863811165e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G07",
+      "title": "Keep duplicate short symbol names unresolved",
+      "tier": "invariant",
+      "elapsed_seconds": 2.543899609008804e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G08",
+      "title": "Do not interpret unknown inline literals as broken symbols",
+      "tier": "invariant",
+      "elapsed_seconds": 1.586299913469702e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G09",
+      "title": "Exclude fenced examples from explicit relationships",
+      "tier": "invariant",
+      "elapsed_seconds": 4.486800025915727e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G10",
+      "title": "Report broken references instead of guessing dependencies",
+      "tier": "invariant",
+      "elapsed_seconds": 5.417998181656003e-06
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G11",
+      "title": "Resolve a parent-relative Markdown section link",
+      "tier": "invariant",
+      "elapsed_seconds": 2.2954001906327903e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G12",
+      "title": "Disambiguate duplicate heading anchors",
+      "tier": "invariant",
+      "elapsed_seconds": 2.2332998923957348e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G13",
+      "title": "Resolve a Unicode heading anchor with real source spans",
+      "tier": "invariant",
+      "elapsed_seconds": 2.490699989721179e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G14",
+      "title": "Support reference-style local Markdown links",
+      "tier": "target",
+      "elapsed_seconds": 1.7867001588456333e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G15",
+      "title": "Decode an escaped local filename without escaping the root",
+      "tier": "target",
+      "elapsed_seconds": 2.107200270984322e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G16",
+      "title": "Never index explicitly excluded source or document canaries",
+      "tier": "invariant",
+      "elapsed_seconds": 2.4656997993588448e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G17",
+      "title": "Carry symbol-free configuration references into evidence",
+      "tier": "target",
+      "elapsed_seconds": 2.204300108132884e-05
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "forbidden_evidence": 0,
+      "id": "G18",
+      "title": "Keep independent peer graphs separate despite identical identifiers",
+      "tier": "invariant",
+      "elapsed_seconds": 0.00044280700240051374
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true,
+        true
+      ],
+      "returned_nodes": 20,
+      "payload_bytes": 22236,
+      "truncated": false,
+      "id": "C01",
+      "title": "Return implementation, policy and a real static test reference",
+      "tier": "invariant",
+      "elapsed_seconds": 0.06326553500548471
+    },
+    {
+      "passed": true,
+      "checks": [],
+      "returned_nodes": 2,
+      "payload_bytes": 2004,
+      "truncated": true,
+      "id": "C02",
+      "title": "Preserve valid evidence and disclose truncation under a tiny budget",
+      "tier": "invariant",
+      "elapsed_seconds": 0.008170936001988593
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "returned_nodes": 5,
+      "payload_bytes": 5143,
+      "truncated": true,
+      "id": "C03",
+      "title": "Discover delivery semantics without handing over a symbol name",
+      "tier": "target",
+      "elapsed_seconds": 0.01650687400251627
+    },
+    {
+      "passed": true,
+      "checks": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "returned_nodes": 7,
+      "payload_bytes": 6785,
+      "truncated": false,
+      "id": "C04",
+      "title": "Inspect every independently implemented upload policy entrypoint",
+      "tier": "invariant",
+      "elapsed_seconds": 0.009109990998695139
+    },
+    {
+      "passed": true,
+      "checks": [
+        true
+      ],
+      "returned_nodes": 4,
+      "payload_bytes": 4934,
+      "truncated": false,
+      "id": "C05",
+      "title": "Terminate graph expansion through a real call cycle",
+      "tier": "invariant",
+      "elapsed_seconds": 0.00887840300129028
+    },
+    {
+      "passed": true,
+      "ranks": [
+        1
+      ],
+      "paths": [
+        "docs/ADR-004.md"
+      ],
+      "hit_at_5": 1,
+      "reciprocal_rank_at_5": 1.0,
+      "required_evidence_recall_at_5": 1.0,
+      "forbidden_evidence": 0,
+      "id": "D01",
+      "title": "Find the exact inclusive boundary, not the archived prototype",
+      "tier": "target",
+      "elapsed_seconds": 0.03237852999882307
+    },
+    {
+      "passed": true,
+      "ranks": [
+        1
+      ],
+      "paths": [
+        "docs/ADR-009.md",
+        "docs/navigation.md"
+      ],
+      "hit_at_5": 1,
+      "reciprocal_rank_at_5": 1.0,
+      "required_evidence_recall_at_5": 1.0,
+      "forbidden_evidence": 0,
+      "id": "D02",
+      "title": "Retrieve the acknowledgement-loss policy by user intent",
+      "tier": "target",
+      "elapsed_seconds": 0.03260223699908238
+    },
+    {
+      "passed": true,
+      "ranks": [
+        1
+      ],
+      "paths": [
+        "docs/long-runbook.md"
+      ],
+      "hit_at_5": 1,
+      "reciprocal_rank_at_5": 1.0,
+      "required_evidence_recall_at_5": 1.0,
+      "forbidden_evidence": 0,
+      "id": "D03",
+      "title": "Retrieve a late fact and return the chunk that actually contains it",
+      "tier": "target",
+      "elapsed_seconds": 0.03234889600571478
+    },
+    {
+      "passed": true,
+      "ranks": [],
+      "paths": [],
+      "hit_at_5": null,
+      "reciprocal_rank_at_5": null,
+      "required_evidence_recall_at_5": null,
+      "forbidden_evidence": 0,
+      "id": "D04",
+      "title": "Do not return arbitrary documents for an absent exact term",
+      "tier": "target",
+      "elapsed_seconds": 0.032138679001946
+    },
+    {
+      "passed": true,
+      "ranks": [],
+      "paths": [],
+      "hit_at_5": null,
+      "reciprocal_rank_at_5": null,
+      "required_evidence_recall_at_5": null,
+      "forbidden_evidence": 0,
+      "id": "D05",
+      "title": "Honor an unknown collection filter without cross-collection fallback",
+      "tier": "invariant",
+      "elapsed_seconds": 0.0324320119980257
+    },
+    {
+      "passed": true,
+      "ranks": [
+        1,
+        5
+      ],
+      "paths": [
+        "docs/ADR-004.md",
+        "docs/ADR-004.md",
+        "docs/reference-style.md",
+        "docs/archive/prototype.md",
+        "docs/guides/attachments.md"
+      ],
+      "hit_at_5": 1,
+      "reciprocal_rank_at_5": 1.0,
+      "required_evidence_recall_at_5": 1.0,
+      "forbidden_evidence": 0,
+      "id": "D06",
+      "title": "Keep a long document from consuming the entire result budget",
+      "tier": "target",
+      "elapsed_seconds": 0.03332669800147414
+    }
+  ],
+  "fixture_sha256": "3dcca038ed61c665c264b6b4d03ce40df10dc6f85bd0ea0c901dc5bcc7e2b66c",
+  "peer_fixture_sha256": "876b8e24bf891d4abac188c2bef575cbb1981734b1fe4f865025eeacdc4f4253",
+  "cases_sha256": "a5ecff723a277da35c185d110be3566e54f98d416638681510af29430c1b6a3e",
+  "binary_sha256": "ba1aec428284132763f87339b1366aec45e09f3b95cb520cf760b8171fb6cd1b",
+  "knowledge_binary_sha256": "93059afb5faeb67edd823101ad1e5b1c21d622aa4ff9d274482fa2cd7f03f315",
+  "manual_pending": [
+    {
+      "id": "M01",
+      "title": "Freshness after edit, deletion and rename",
+      "paths": [
+        "src/storage.py",
+        "docs/ADR-004.md"
+      ],
+      "requirement": "Change the primary boundary, then rename/delete a referenced file in a disposable copy. An old snapshot must remain explicitly stale; after reindex, old nodes/edges/chunks disappear and replacement spans match current bytes. Never treat an unrefreshed snapshot as live."
+    },
+    {
+      "id": "M02",
+      "title": "Same-size edit with preserved mtime",
+      "paths": [
+        "docs/ADR-004.md"
+      ],
+      "requirement": "Replace eight with seven while preserving length and mtime. Document refresh must either detect the edit or explicitly document metadata-only freshness; a hash-verified claim must not remain true."
+    },
+    {
+      "id": "M03",
+      "title": "CLI JSON and persistent MCP parity",
+      "paths": [
+        "docs/ADR-009.md"
+      ],
+      "requirement": "Run documents search, mcp search_documents --json, and a persistent MCP search against the same generation. Compare identities/ranks/evidence, and record index writes. Querying must not secretly rebuild one surface while another pins stale data."
+    },
+    {
+      "id": "M04",
+      "title": "Automatic workspace routing with independent client roots",
+      "paths": [
+        "src/storage.py"
+      ],
+      "requirement": "Using PR #34, open primary and peer as separate cwd/root sessions on one generic MCP entry. No manual workspace names. Repeated identical queries must never return the other graph, canary, document or symbol ID. Test both directions and after reopening. The runner only verifies separately built local indexes, not this protocol claim."
+    },
+    {
+      "id": "M05",
+      "title": "Precise source-link target range",
+      "paths": [
+        "docs/guides/attachments.md",
+        "src/storage.py"
+      ],
+      "requirement": "Resolve storage.py#L4-L7 to evidence retaining the target line range or exact symbol, not just a file-level association. Invalid/reversed/out-of-bounds fragments must remain unresolved."
+    },
+    {
+      "id": "M06",
+      "title": "Counterfactual policy change across languages",
+      "paths": [
+        "docs/ADR-004.md",
+        "clients/api/UploadPolicy.php",
+        "clients/web/upload.ts",
+        "clients/mobile/upload.ts",
+        "config/limits.toml"
+      ],
+      "requirement": "Ask which files need changes to use twelve mebibytes. Find authoritative rationale, server guards, both clients, the stale seven-mebibyte copy, configuration and boundary tests. Treat these as policy associations, not fabricated cross-language calls."
+    },
+    {
+      "id": "M07",
+      "title": "Multilingual natural-language recall",
+      "paths": [
+        "docs/unicode.md",
+        "src/storage.py"
+      ],
+      "requirement": "Ask in Hungarian which rule rejects an oversized attachment. Retrieve the authoritative code and policy with valid Unicode spans. Report this challenge separately for an English-only versus multilingual embedding model."
+    },
+    {
+      "id": "M08",
+      "title": "Candidate saturation and repeatability",
+      "paths": [
+        "docs/long-runbook.md",
+        "docs/ADR-009.md"
+      ],
+      "requirement": "In a disposable copy, generate more than 10,000 distractor chunks before the relevant document and vary insertion order. The relevant item must remain discoverable or candidate truncation must be surfaced. Measure fixed cold/warm repetitions and ranking variance; do not infer a speedup from a small corpus."
+    },
+    {
+      "id": "M09",
+      "title": "Root traversal, symlinks and ignored-path changes",
+      "paths": [
+        "docs/broken.md",
+        "docs/private/secret.md"
+      ],
+      "requirement": "Add a local link and a symlink to the peer/outside root. Neither document nor knowledge retrieval may read through that boundary. Then exclude a previously indexed file and verify its old content disappears after refresh."
+    },
+    {
+      "id": "M10",
+      "title": "Invalid parameters and unavailable embeddings are not empty retrieval",
+      "paths": [
+        "docs/ADR-004.md"
+      ],
+      "requirement": "Submit malformed filters, invalid limits and a deliberately unavailable local model, followed by a valid lexical request. Preserve explicit errors and reader usability. An error or unrun embedding profile must never score as not_found or pass."
+    }
+  ],
+  "full_qualification": false,
+  "commands": [
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--version"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical",
+      "stdout": "raw/000.out",
+      "stderr": "raw/000.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.01735453599394532
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "--version"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical",
+      "stdout": "raw/001.out",
+      "stderr": "raw/001.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.003496967001410667
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "index",
+        "src",
+        "clients",
+        "tests",
+        "--threads",
+        "2",
+        "--no-progress"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/002.out",
+      "stderr": "raw/002.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.41513536700222176
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "dump"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/003.out",
+      "stderr": "raw/003.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03199013599805767
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "index",
+        "--root",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+        "--repo",
+        "primary",
+        "--dump",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/dump.jsonl"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/004.out",
+      "stderr": "raw/004.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.0640560660031042
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer/.codanna/settings.toml",
+        "index",
+        "src",
+        "--threads",
+        "2",
+        "--no-progress"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer",
+      "stdout": "raw/005.out",
+      "stderr": "raw/005.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.11522140400484204
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer/.codanna/settings.toml",
+        "dump"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer",
+      "stdout": "raw/006.out",
+      "stderr": "raw/006.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03202809299546061
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "index",
+        "--root",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer",
+        "--repo",
+        "peer",
+        "--dump",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer/.codanna/dump.jsonl"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/peer",
+      "stdout": "raw/007.out",
+      "stderr": "raw/007.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03243367299728561
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "index",
+        "--collection",
+        "docs",
+        "--no-progress"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/008.out",
+      "stderr": "raw/008.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.11538740299874917
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "context",
+        "--graph",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/knowledge.json",
+        "--repo",
+        "primary",
+        "--max-bytes",
+        "24000",
+        "--max-nodes",
+        "40",
+        "--max-depth",
+        "2",
+        "--entity",
+        "primary:Symbol:8a407f373a6a8634bd386df87d394f40608f842bb2d1695cd5babe35f48799cd",
+        ""
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/009.out",
+      "stderr": "raw/009.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03216625100321835
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "context",
+        "--graph",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/knowledge.json",
+        "--repo",
+        "primary",
+        "--max-bytes",
+        "2048",
+        "--max-nodes",
+        "2",
+        "--max-depth",
+        "2",
+        "--file",
+        "src/storage.py",
+        ""
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/010.out",
+      "stderr": "raw/010.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.007684192998567596
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "context",
+        "--graph",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/knowledge.json",
+        "--repo",
+        "primary",
+        "--max-bytes",
+        "24000",
+        "--max-nodes",
+        "5",
+        "--max-depth",
+        "0",
+        "avoid duplicate processing of redelivered packets"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/011.out",
+      "stderr": "raw/011.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.01566393399843946
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "context",
+        "--graph",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/knowledge.json",
+        "--repo",
+        "primary",
+        "--max-bytes",
+        "24000",
+        "--max-nodes",
+        "40",
+        "--max-depth",
+        "1",
+        "--entity",
+        "primary:Section:bb55c6f8bb005ff215324a7d86c87b6fe41bc783992ab9911911dc7e97a4ddf1",
+        ""
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/012.out",
+      "stderr": "raw/012.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.007637803995748982
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna-knowledge",
+        "context",
+        "--graph",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/knowledge.json",
+        "--repo",
+        "primary",
+        "--max-bytes",
+        "24000",
+        "--max-nodes",
+        "12",
+        "--max-depth",
+        "4",
+        "--entity",
+        "primary:Symbol:d6296f0f10d5853396419fabf2ec93b6d7a5b674391aab146d377449e5d66a66",
+        ""
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/013.out",
+      "stderr": "raw/013.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.0076514550019055605
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "8,388,609",
+        "--collection",
+        "docs",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/014.out",
+      "stderr": "raw/014.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03177067400247324
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "courier resend after losing acknowledgement",
+        "--collection",
+        "docs",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/015.out",
+      "stderr": "raw/015.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03183464100584388
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "violet-heron",
+        "--collection",
+        "docs",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/016.out",
+      "stderr": "raw/016.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.0318285020039184
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "qzvnoexist75391",
+        "--collection",
+        "docs",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/017.out",
+      "stderr": "raw/017.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.03184722000150941
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "attachment",
+        "--collection",
+        "missing-collection",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/018.out",
+      "stderr": "raw/018.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.032093780995637644
+    },
+    {
+      "argv": [
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-bin/codanna",
+        "--config",
+        "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary/.codanna/settings.toml",
+        "documents",
+        "search",
+        "attachment policy",
+        "--collection",
+        "docs",
+        "--limit",
+        "5",
+        "--json"
+      ],
+      "cwd": "/workspace/scratch/aafac310ccab/investigation/followups/splitting-lexical/primary",
+      "stdout": "raw/019.out",
+      "stderr": "raw/019.err",
+      "returncode": 0,
+      "elapsed_seconds": 0.031969334006134886
+    }
+  ],
+  "inspected_main": "f776840bf9a2a6241c0b62975ea2bf4e44e93e0d",
+  "model": null,
+  "codanna_version": "codanna 1.0.0-rc1 (94ad41a-dirty)",
+  "knowledge_version": "codanna 1.0.0-rc1",
+  "not_selected": [
+    "S01",
+    "S02",
+    "S03"
+  ],
+  "metrics": {
+    "invariant_pass_rate": 1.0,
+    "hit_at_5": 1.0,
+    "mrr_at_5": 1.0,
+    "mean_required_evidence_recall_at_5": 1.0,
+    "forbidden_evidence": 0
+  },
+  "measured_minimums_met": true,
+  "selected_cases_passed": true,
+  "passed": 29,
+  "failed": 0,
+  "status": "pass_for_selected_profile"
+}

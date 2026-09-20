@@ -1,0 +1,14 @@
+   Compiling codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-splitting)
+    Finished `test` profile [unoptimized] target(s) in 54.61s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 6 tests
+test embedding_input::tests::document_byte_splits_fill_budget_and_preserve_utf8 ... ok
+test embedding_input::tests::document_splits_try_nonmonotonic_normalized_prefixes ... ok
+test embedding_input::tests::document_splits_validate_composed_heading_instead_of_prefix_alone ... ok
+test embedding_input::tests::document_splits_count_normalization_and_special_tokens_in_every_input ... ok
+test embedding_input::tests::document_splitting_bounds_tokenizer_work_and_output_parts ... ok
+test embedding_input::tests::document_splitting_handles_long_unbroken_inputs_above_byte_ceiling ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1412 filtered out; finished in 1.68s
+

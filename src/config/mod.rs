@@ -234,7 +234,8 @@ pub struct SemanticSearchConfig {
 
     /// Complete embedding input budget, including heading breadcrumbs and special
     /// tokens. Local defaults to the loaded tokenizer limit; remote defaults to
-    /// 8192. Inputs that exceed the budget fail without truncation.
+    /// 8192. Documents refine oversized chunks into complete source slices;
+    /// oversized code/query inputs and unsplittable documents fail without truncation.
     #[serde(default)]
     pub max_input_tokens: Option<usize>,
 

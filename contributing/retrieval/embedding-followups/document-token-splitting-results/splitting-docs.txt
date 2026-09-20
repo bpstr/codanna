@@ -1,0 +1,4 @@
+   Compiling codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-splitting)
+ Documenting codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-splitting)
+    Finished `dev` profile [unoptimized] target(s) in 18.07s
+   Generated /workspace/scratch/aafac310ccab/runtime/target/doc/codanna/index.html and 3 other files

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running unittests src/lib.rs (/workspace/scratch/aafac310ccab/runtime/target/debug/deps/codanna-80a64d71bd18bb39)
+
+running 1 test
+test semantic::pool::tests::document_batch_retains_whitespace_partitions_without_changing_code_filtering ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1417 filtered out; finished in 0.00s
+

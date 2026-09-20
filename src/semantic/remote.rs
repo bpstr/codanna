@@ -172,6 +172,10 @@ impl RemoteEmbedder {
         self.dim
     }
 
+    pub(crate) fn input_budget(&self) -> &InputBudget {
+        &self.input_budget
+    }
+
     pub(crate) fn identity(&self, revision: Option<&str>) -> String {
         crate::embedding_input::backend_identity(
             "remote",

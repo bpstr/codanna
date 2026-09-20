@@ -56,7 +56,7 @@ impl EmbeddingGenerator for ConfiguredGenerator {
                     })
                     .collect::<Result<_, VectorError>>()?;
                 let mut results = pool
-                    .embed_parallel(&items)
+                    .embed_document_batch(&items)
                     .map_err(|error| VectorError::EmbeddingFailed(error.to_string()))?;
                 results.sort_by_key(|(id, _, _)| id.to_u32());
                 if results.len() != items.len()
@@ -93,6 +93,17 @@ impl EmbeddingGenerator for ConfiguredGenerator {
     }
     fn cache_identity(&self) -> String {
         self.identity.clone()
+    }
+
+    fn document_input_ranges(
+        &self,
+        prefix: &str,
+        body: &str,
+    ) -> Result<Vec<std::ops::Range<usize>>, VectorError> {
+        self.backend
+            .input_budget()
+            .document_ranges(prefix, body)
+            .map_err(VectorError::EmbeddingFailed)
     }
 }
 

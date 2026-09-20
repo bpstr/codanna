@@ -24,6 +24,8 @@ pub enum IndexProgress<'a> {
 /// Default batch size for embedding generation.
 /// Smaller batches reduce memory pressure and provide smoother progress.
 const EMBEDDING_BATCH_SIZE: usize = 64;
+const MAX_REFINED_FILE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_REFINED_FILE_CHUNKS: usize = 65_536;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -677,7 +679,8 @@ impl DocumentStore {
     {
         let chunking_config = ValidatedChunkingConfig::try_from(chunking_config.clone())
             .map_err(DocumentStoreError::InvalidChunkingConfig)?;
-        let fingerprint = chunking_fingerprint(&chunking_config)?;
+        let fingerprint =
+            chunking_fingerprint(&chunking_config, self.embedding_generator.as_deref())?;
         self.transaction(|store| {
             store.index_collection_inner(
                 name,
@@ -778,7 +781,7 @@ impl DocumentStore {
             });
 
             let content = std::fs::read_to_string(path)?;
-            let raw_chunks = self.chunker.chunk(&content, chunking_config);
+            let raw_chunks = self.chunks_for_indexing(&content, chunking_config)?;
 
             let mut chunk_ids = Vec::new();
 
@@ -889,7 +892,7 @@ impl DocumentStore {
         let content = std::fs::read_to_string(path)?;
 
         // Chunk the content
-        let raw_chunks = self.chunker.chunk(&content, chunking_config);
+        let raw_chunks = self.chunks_for_indexing(&content, chunking_config)?;
 
         // Delete existing chunks
         self.delete_chunks_by_file(path, &collection)?;
@@ -935,8 +938,10 @@ impl DocumentStore {
             mtime: crate::indexing::file_info::get_file_mtime(path).unwrap_or(0),
         };
         self.file_states.insert(path.to_path_buf(), file_state);
-        self.chunking_fingerprints
-            .insert(path.to_path_buf(), chunking_fingerprint(chunking_config)?);
+        self.chunking_fingerprints.insert(
+            path.to_path_buf(),
+            chunking_fingerprint(chunking_config, self.embedding_generator.as_deref())?,
+        );
         self.embedded_files.remove(path);
         if self.embedding_generator.is_some() {
             if let Some(identity) = &self.embedding_identity {
@@ -1453,6 +1458,81 @@ impl DocumentStore {
         );
 
         Ok((changed, unchanged, removed))
+    }
+
+    /// Refine character chunks only when a document generator supplies a budget.
+    /// Validate the public generator hook before translating ranges to provenance.
+    fn chunks_for_indexing(
+        &self,
+        content: &str,
+        config: &ValidatedChunkingConfig,
+    ) -> StoreResult<Vec<RawChunk>> {
+        let chunks = self.chunker.chunk(content, config);
+        let Some(generator) = &self.embedding_generator else {
+            return Ok(chunks);
+        };
+        let mut refined = Vec::new();
+        let mut output_bytes = 0usize;
+        for chunk in chunks {
+            let prefix = embedding_prefix(&chunk);
+            let ranges = generator
+                .document_input_ranges(&prefix, &chunk.content)
+                .map_err(|error| {
+                    DocumentStoreError::Embedding(format!(
+                        "Document chunk at source bytes {:?}: {error}",
+                        chunk.byte_range
+                    ))
+                })?;
+            let bytes = crate::embedding_input::document_output_bytes(
+                prefix.len(),
+                chunk.content.len(),
+                ranges.len(),
+            )
+            .map_err(DocumentStoreError::Embedding)?;
+            output_bytes = output_bytes.checked_add(bytes)
+                .filter(|n| *n <= MAX_REFINED_FILE_BYTES).ok_or_else(||
+                    DocumentStoreError::Embedding("Document refinement exceeded the 64 MiB complete-input safety limit for one source file; reduce heading context or source size. No input was truncated.".into())
+                )?;
+            if ranges.len() > MAX_REFINED_FILE_CHUNKS.saturating_sub(refined.len()) {
+                return Err(DocumentStoreError::Embedding(
+                    "Document refinement exceeded the 65536-chunk safety limit for one source file; increase the input budget or reduce heading context. No input was truncated.".into()
+                ));
+            }
+            let mut covered = 0;
+            for range in &ranges {
+                if range.start != covered
+                    || range.end <= range.start
+                    || range.end > chunk.content.len()
+                    || !chunk.content.is_char_boundary(range.start)
+                    || !chunk.content.is_char_boundary(range.end)
+                {
+                    return Err(DocumentStoreError::Embedding(
+                        "Document generator returned invalid source ranges; expected an exact UTF-8 body partition".into()
+                    ));
+                }
+                covered = range.end;
+            }
+            if covered != chunk.content.len() {
+                return Err(DocumentStoreError::Embedding(
+                    "Document generator ranges did not cover the entire original body".into(),
+                ));
+            }
+            if ranges.len() == 1 {
+                refined.push(chunk);
+                continue;
+            }
+            for range in ranges {
+                refined.push(RawChunk::new(
+                    (
+                        chunk.byte_range.0 + range.start,
+                        chunk.byte_range.0 + range.end,
+                    ),
+                    chunk.content[range].to_string(),
+                    chunk.heading_context.clone(),
+                ));
+            }
+        }
+        Ok(refined)
     }
 
     fn store_chunk(
@@ -2240,19 +2320,34 @@ pub(crate) fn normalize_source_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn chunking_fingerprint(config: &ValidatedChunkingConfig) -> StoreResult<String> {
+fn chunking_fingerprint(
+    config: &ValidatedChunkingConfig,
+    generator: Option<&dyn EmbeddingGenerator>,
+) -> StoreResult<String> {
     let encoded = serde_json::to_string(&**config)
         .map_err(|error| DocumentStoreError::InvalidChunkingConfig(error.to_string()))?;
-    Ok(calculate_hash(&format!(
-        "hybrid-source-spans-v2\n{encoded}"
-    )))
+    let mut policy = format!("hybrid-source-spans-v2\n{encoded}");
+    if let Some(generator) = generator {
+        policy.push_str(&format!(
+            "\n{}\n{}",
+            crate::embedding_input::DOCUMENT_SPLITTING_POLICY,
+            generator.cache_identity(),
+        ));
+    }
+    Ok(calculate_hash(&policy))
 }
 
 fn embedding_input(chunk: &RawChunk) -> String {
+    let mut input = embedding_prefix(chunk);
+    input.push_str(&chunk.content);
+    input
+}
+
+fn embedding_prefix(chunk: &RawChunk) -> String {
     if chunk.heading_context.is_empty() {
-        chunk.content.clone()
+        String::new()
     } else {
-        format!("{}\n\n{}", chunk.heading_context.join(" > "), chunk.content)
+        format!("{}\n\n", chunk.heading_context.join(" > "))
     }
 }
 
@@ -2313,6 +2408,10 @@ impl DocumentQuery {
 #[cfg(test)]
 #[path = "generation_tests.rs"]
 mod generation_tests;
+
+#[cfg(test)]
+#[path = "token_splitting_tests.rs"]
+mod token_splitting_tests;
 
 #[cfg(test)]
 mod tests {
