@@ -348,6 +348,19 @@ pub struct SearchResult {
     pub similarity: f32,
 }
 
+/// Live state retained while a recovered generation is reconciled to settings.
+/// Searchers/vector maps remain readable even if durable garbage collection
+/// unlinks their files; failed recovery never rewinds reserved chunk IDs.
+struct ReloadCheckpoint {
+    state: PersistedState,
+    generation: Option<String>,
+    vectors: Option<SegmentedVectors>,
+    searcher: tantivy::Searcher,
+    forced_collections: HashSet<String>,
+    new_vector_bytes: u64,
+    compacted_vector_bytes: u64,
+}
+
 /// Document store combining tantivy metadata with vector embeddings.
 pub struct DocumentStore {
     /// Base path for all storage files.
@@ -1217,14 +1230,47 @@ impl DocumentStore {
         Ok(count)
     }
 
+    /// Recover and reconcile as one live publication boundary. If the latest
+    /// policy fails after recovery, retain the old reader and metadata in memory;
+    /// the durable pointer stays authoritative for the next attempt, including a
+    /// newer or reverted proposal. Already committed changes are never undone.
+    pub(crate) fn with_committed_generation<T>(
+        &mut self,
+        workspace: Option<&Path>,
+        action: impl FnOnce(&mut Self, bool) -> StoreResult<T>,
+    ) -> StoreResult<T> {
+        let generation_lock = generation::lock(&self.base_path)?;
+        let expected = self.current_generation.as_deref().map(generation::payload);
+        let checkpoint = (self.index.load_metas()?.payload != expected).then(|| ReloadCheckpoint {
+            state: self.persisted_state(),
+            generation: self.current_generation.clone(),
+            vectors: self.vector_storage.clone(),
+            searcher: self.searcher(),
+            forced_collections: self.forced_collections.clone(),
+            new_vector_bytes: self.new_vector_bytes,
+            compacted_vector_bytes: self.compacted_vector_bytes,
+        });
+        let recovered = self.refresh_committed_generation(workspace);
+        drop(generation_lock);
+        let result = recovered.and_then(|recovered| action(self, recovered));
+        if result.is_err() {
+            if let Some(checkpoint) = checkpoint {
+                self.restore_persisted_state(checkpoint.state);
+                self.current_generation = checkpoint.generation;
+                self.vector_storage = checkpoint.vectors;
+                self.pinned_searcher = Some(checkpoint.searcher);
+                self.forced_collections = checkpoint.forced_collections;
+                self.new_vector_bytes = checkpoint.new_vector_bytes;
+                self.compacted_vector_bytes = checkpoint.compacted_vector_bytes;
+            }
+        }
+        result
+    }
+
     /// Refresh an authoritative generation before a settings transaction. A
     /// previous publication may have committed even when its reader reload failed.
     /// Validate recovered provenance before making it visible in a scoped server.
-    pub(crate) fn refresh_committed_generation(
-        &mut self,
-        workspace: Option<&Path>,
-    ) -> StoreResult<bool> {
-        let _generation_lock = generation::lock(&self.base_path)?;
+    fn refresh_committed_generation(&mut self, workspace: Option<&Path>) -> StoreResult<bool> {
         if let Some(root) = workspace {
             self.restrict_workspace(root)?;
         }
@@ -1257,6 +1303,12 @@ impl DocumentStore {
                     .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
             }
         }
+        let reservation = self.base_path.join("next-chunk-id.json");
+        let reserved: u64 = if reservation.exists() {
+            generation::read_json(&reservation, 128)?
+        } else {
+            0
+        };
         let previous_generation = self.current_generation.clone();
         if let Err(error) = self.recover_generation(payload.as_deref()) {
             if self.current_generation == previous_generation {
@@ -1266,6 +1318,8 @@ impl DocumentStore {
             }
             tracing::warn!(target: "documents", %error, "committed reader recovered; state mirror repair deferred");
         }
+        self.next_chunk_id = self.next_chunk_id.max(reserved);
+        self.id_reservation_end = self.next_chunk_id;
         Ok(true)
     }
 
@@ -1704,6 +1758,7 @@ impl DocumentStore {
         }
         generation::publication_boundary("after_metadata_commit");
         self.reader.reload()?;
+        self.pinned_searcher = None;
         self.vector_storage = Some(vectors);
         self.current_generation = Some(name);
         self.new_vector_bytes = new_vector_bytes;
@@ -1793,7 +1848,16 @@ impl DocumentStore {
         })?;
         let vectors = SegmentedVectors::open(&self.base_path, &generation.vectors)?;
         self.reader.reload()?;
-        let state = generation.state;
+        self.pinned_searcher = None;
+        self.restore_persisted_state(generation.state);
+        self.vector_storage = Some(vectors);
+        self.current_generation = Some(name);
+        self.new_vector_bytes = generation.new_vector_bytes;
+        self.compacted_vector_bytes = generation.compacted_vector_bytes;
+        self.save_state()
+    }
+
+    fn restore_persisted_state(&mut self, state: PersistedState) {
         self.file_states = state
             .file_states
             .into_iter()
@@ -1816,11 +1880,6 @@ impl DocumentStore {
             .collect();
         self.next_chunk_id = self.next_chunk_id.max(state.next_chunk_id);
         self.embedding_identity = state.embedding_identity;
-        self.vector_storage = Some(vectors);
-        self.current_generation = Some(name);
-        self.new_vector_bytes = generation.new_vector_bytes;
-        self.compacted_vector_bytes = generation.compacted_vector_bytes;
-        self.save_state()
     }
 
     fn stage_vector_writes(&mut self) -> StoreResult<()> {

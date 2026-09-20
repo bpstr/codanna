@@ -639,10 +639,39 @@ async fn collection_reload_managed_roots_and_code_document_overlap_keep_separate
     let mut fixture = ReloadFixture::new(None).await;
     let code = fixture.root.join("docs/shared.rs");
     fs::write(&code, "pub fn shared_reload_fixture() {}\n").unwrap();
+    fixture.settings.indexing.indexed_paths = vec![fixture.root.join("docs")];
+    let code_roots = fixture.settings.indexing.indexed_paths.clone();
+    crate::runtime::mutate(&fixture.watcher.facade, move |facade| {
+        facade.reload_indexed_paths(code_roots)
+    })
+    .await
+    .unwrap();
+    // Existing code is indexed through its absolute source lane. Directory
+    // catch-up's older CWD coupling is separate from document policy reload.
+    fixture
+        .watcher
+        .execute_action(
+            WatchAction::ReindexCode {
+                path: code.clone(),
+                created: true,
+            },
+            "code",
+        )
+        .await
+        .unwrap();
     fixture.watcher.handlers.push(Box::new(CodeFileHandler::new(
         Arc::clone(&fixture.watcher.facade),
         fixture.root.clone(),
     )));
+    fixture
+        .watcher
+        .handlers
+        .last()
+        .unwrap()
+        .refresh_paths()
+        .await
+        .unwrap();
+    fixture.watcher.register_handler_roots().await.unwrap();
     let artifact = fixture.settings.index_path.join("generated.md");
     fs::write(&artifact, "managed artifact evidence").unwrap();
     let mut next = fixture.settings.clone();
@@ -917,7 +946,7 @@ async fn collection_reload_overflow_cancels_pending_proposals_after_invalid_or_d
 
 #[tokio::test]
 async fn collection_reload_observed_settings_edits_cancel_retries_before_debounce() {
-    for deleted in [false, true] {
+    for change in 0..3 {
         let fail = Arc::new(AtomicBool::new(false));
         let mut fixture = ReloadFixture::new(Some(Box::new(ReloadModel {
             inputs: Arc::new(Mutex::new(Vec::new())),
@@ -932,17 +961,19 @@ async fn collection_reload_observed_settings_edits_cancel_retries_before_debounc
         assert!(fixture.watcher.pending_config.read().await.is_some());
         fixture.watcher.debouncer = Debouncer::new(60_000);
         fail.store(false, Ordering::SeqCst);
-        if deleted {
+        if change != 0 {
             fs::remove_file(&fixture.settings_path).unwrap();
         } else {
             fs::write(&fixture.settings_path, "[invalid toml").unwrap();
         }
+        let event_path = if change == 2 {
+            fixture.settings_path.parent().unwrap().to_path_buf()
+        } else {
+            fixture.settings_path.clone()
+        };
         fixture
             .watcher
-            .handle_event(
-                Event::new(EventKind::Modify(ModifyKind::Any))
-                    .add_path(fixture.settings_path.clone()),
-            )
+            .handle_event(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(event_path))
             .await;
         assert!(
             fixture.watcher.pending_config.read().await.is_none(),
@@ -980,6 +1011,8 @@ async fn collection_reload_recovers_a_committed_generation_before_a_reverted_pro
         )
         .unwrap();
     drop(external);
+    let reserved: u64 =
+        serde_json::from_slice(&fs::read(base.join("next-chunk-id.json")).unwrap()).unwrap();
     let metadata: serde_json::Value =
         serde_json::from_slice(&fs::read(base.join("tantivy/meta.json")).unwrap()).unwrap();
     let name = metadata["payload"]
@@ -1011,11 +1044,46 @@ async fn collection_reload_recovers_a_committed_generation_before_a_reverted_pro
         1
     );
     fs::write(generation, bytes).unwrap();
+    let original_source = fixture.root.join("docs/alpha.md");
+    fs::write(&original_source, [0xff, 0xfe]).unwrap();
+    fixture
+        .watcher
+        .dispatch_ready_changes(Instant::now() + Duration::from_secs(60))
+        .await;
+    assert!(fixture.watcher.pending_config.read().await.is_some());
+    assert_eq!(
+        fixture.store.read().await.list_collections(),
+        vec!["alpha"],
+        "failed latest-policy apply restores the prior live generation"
+    );
+    let live = fixture
+        .store
+        .read()
+        .await
+        .query_snapshot()
+        .search(SearchQuery {
+            text: "alpha".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        live.len(),
+        1,
+        "a shared reader reload cannot change the restored live snapshot"
+    );
+    // A new no-op proposal must not lose the need for full reconciliation.
+    fixture.reload(&latest).await;
+    assert!(fixture.watcher.pending_config.read().await.is_some());
+    fs::write(original_source, "alpha restored original evidence").unwrap();
     fixture
         .watcher
         .dispatch_ready_changes(Instant::now() + Duration::from_secs(60))
         .await;
     assert!(fixture.watcher.pending_config.read().await.is_none());
+    assert!(
+        fixture.lexical_hits("alpha")[0].chunk_id.get() as u64 >= reserved,
+        "recovery must honor another writer's reserved chunk IDs"
+    );
     assert_eq!(fixture.store.read().await.list_collections(), vec!["alpha"]);
     assert!(fixture.lexical_hits("staged").is_empty());
     assert_eq!(fixture.lexical_hits("alpha").len(), 1);

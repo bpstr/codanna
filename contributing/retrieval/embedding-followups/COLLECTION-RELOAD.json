@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "source": "src/watcher/collection_reload_tests.rs",
+  "module": "watcher::unified::collection_reload_tests",
+  "fixture_count": 16,
+  "commands": [
+    "cargo test --lib collection_reload -- --test-threads=1",
+    "cargo test --lib watcher::unified::document_ -- --test-threads=1"
+  ],
+  "isolation": "Temporary local sources, settings and indexes; injected watcher events and dispatch times; fixed local two-dimensional mock embeddings; no provider transport, credentials or model downloads.",
+  "validation": {
+    "status": "pending rerun of revised 16-fixture snapshot",
+    "previous_snapshot": "Initial 13-fixture run compiled and passed 11; both initial fixture failures have been addressed."
+  },
+  "fixtures": [
+    {
+      "name": "collection_reload_add_remove_disable_and_reenable_publish_query_settings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_add_remove_disable_and_reenable_publish_query_settings",
+      "platform": "all",
+      "scenario": "Reload settings to add a relative-root collection, remove the old collection, disable documents and re-enable the attached store.",
+      "oracles": [
+        "Durable lexical hits and collection names match the accepted settings after every edit.",
+        "Facade preview settings and enabled flag reflect accepted settings.",
+        "Source files remain intact; removed root watches retire."
+      ]
+    },
+    {
+      "name": "collection_reload_globs_and_roots_preserve_retained_embeddings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_globs_and_roots_preserve_retained_embeddings",
+      "platform": "all",
+      "scenario": "Expand glob and root admission, then shrink roots with a fixed mock embedding model.",
+      "oracles": [
+        "Retained source chunk IDs remain unchanged.",
+        "Only newly admitted text reaches the mock embedding model.",
+        "Retired sources disappear from durable results."
+      ]
+    },
+    {
+      "name": "collection_reload_default_and_collection_chunking_replace_only_affected_chunks",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_default_and_collection_chunking_replace_only_affected_chunks",
+      "platform": "all",
+      "scenario": "Change default chunk size, then a collection override.",
+      "oracles": [
+        "Affected collections have the expected chunk counts and replacement IDs.",
+        "A collection with unchanged effective settings retains its chunk ID."
+      ]
+    },
+    {
+      "name": "collection_reload_invalid_settings_and_identity_changes_keep_working_policy",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_invalid_settings_and_identity_changes_keep_working_policy",
+      "platform": "all",
+      "scenario": "Propose malformed TOML, invalid glob/chunk settings, changed index/workspace roots and changed embedding settings.",
+      "oracles": [
+        "Accepted facade document settings and code roots remain unchanged.",
+        "The original durable chunk ID remains searchable.",
+        "Rejected proposals leave no pending apply."
+      ]
+    },
+    {
+      "name": "collection_reload_failed_batch_preserves_all_collections_then_retries_without_event",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_failed_batch_preserves_all_collections_then_retries_without_event",
+      "platform": "all",
+      "scenario": "Remove one collection and add another while the fixed mock model fails, then advance the idle retry clock.",
+      "oracles": [
+        "The old collection remains durable and the new collection is absent after failure.",
+        "Accepted settings and active watch registry remain unchanged on failure.",
+        "Idle retry publishes only the new collection without another source event."
+      ]
+    },
+    {
+      "name": "collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_removal_prunes_pending_retry_and_rejects_captured_old_actions",
+      "platform": "all",
+      "scenario": "Remove a collection while an old retry and previously captured reconciliation action exist.",
+      "oracles": [
+        "Pending retry state is empty after removal.",
+        "Old actions and later source events do not recreate collection data.",
+        "Source files remain on disk."
+      ]
+    },
+    {
+      "name": "collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_transfers_source_ownership_atomically_and_preserves_pinned_queries",
+      "platform": "all",
+      "scenario": "Move source ownership to a collection sorted earlier by name, then propose overlapping ownership.",
+      "oracles": [
+        "New durable results identify the new owning collection.",
+        "An already pinned query still identifies the old owner.",
+        "Overlapping ownership failure retains the accepted collection roots and results."
+      ]
+    },
+    {
+      "name": "collection_reload_committed_generation_wins_over_failed_state_mirror",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_committed_generation_wins_over_failed_state_mirror",
+      "platform": "all",
+      "scenario": "Obstruct state.json mirror publication with a directory while removing a collection.",
+      "oracles": [
+        "Durable results and accepted live configuration both reflect the committed removal.",
+        "The committed change does not remain queued as a failed proposal."
+      ]
+    },
+    {
+      "name": "collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_managed_roots_and_code_document_overlap_keep_separate_admission",
+      "platform": "all",
+      "scenario": "Seed an existing code file through its absolute source lane, admit it as a document, then remove document collections.",
+      "oracles": [
+        "The same source is visible in both indexes while admitted.",
+        "Subsequent code updates still work after document removal.",
+        "Explicit managed roots admit no generated documents or managed-root watches."
+      ]
+    },
+    {
+      "name": "collection_reload_without_attached_store_requires_restart_without_loading_a_model",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_without_attached_store_requires_restart_without_loading_a_model",
+      "platform": "all",
+      "scenario": "Propose document settings in a watcher without an attached document store.",
+      "oracles": [
+        "Current settings and durable indexed data remain unchanged.",
+        "The unsupported proposal is rejected without constructing a model."
+      ]
+    },
+    {
+      "name": "collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_alias_missing_roots_and_dangling_links_respect_workspace_boundary",
+      "platform": "unix",
+      "scenario": "Reload alias/missing roots and reject dangling links, a foreign ACL root and a canonical file-symlink escape.",
+      "oracles": [
+        "Equivalent aliases retain source IDs; later missing-root creation is indexed.",
+        "Invalid and unauthorized roots preserve accepted settings.",
+        "Foreign source text never reaches durable results."
+      ]
+    },
+    {
+      "name": "collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_retargeted_startup_alias_compares_accepted_canonical_roots",
+      "platform": "unix",
+      "scenario": "Retarget a startup symlink before the first settings reload.",
+      "oracles": [
+        "Comparison uses the previously accepted canonical root.",
+        "The old inventory is replaced immediately with the new target inventory."
+      ]
+    },
+    {
+      "name": "collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_overflow_cancels_pending_proposals_after_invalid_or_deleted_settings",
+      "platform": "all",
+      "scenario": "Lose a malformed/deleted settings event while an earlier failed proposal awaits retry, then reconcile overflow.",
+      "oracles": [
+        "Overflow cancels the old pending proposal.",
+        "Accepted settings and the original durable chunk ID remain unchanged."
+      ]
+    },
+    {
+      "name": "collection_reload_observed_settings_edits_cancel_retries_before_debounce",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_observed_settings_edits_cancel_retries_before_debounce",
+      "platform": "all",
+      "scenario": "Admit a newer malformed/deleted settings event, including a parent-directory event, while an old retry is due before the new debounce expires.",
+      "oracles": [
+        "The old proposal is canceled at event admission.",
+        "Expiring the old retry clock cannot change settings or the durable original chunk."
+      ]
+    },
+    {
+      "name": "collection_reload_recovers_a_committed_generation_before_a_reverted_proposal",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovers_a_committed_generation_before_a_reverted_proposal",
+      "platform": "all",
+      "scenario": "Recover an externally committed generation with a missing manifest, then fail latest-policy indexing on invalid UTF-8 and supersede it with a no-op proposal before retry.",
+      "oracles": [
+        "Missing-manifest and indexing failures retain the old live collection and pinned query generation.",
+        "A newer no-op proposal still requires complete reconciliation.",
+        "Idle retry removes staged data, restores the latest configured inventory and uses IDs at or above the external reservation."
+      ]
+    },
+    {
+      "name": "collection_reload_recovery_checks_workspace_before_exposing_foreign_sources",
+      "test": "watcher::unified::collection_reload_tests::collection_reload_recovery_checks_workspace_before_exposing_foreign_sources",
+      "platform": "all",
+      "scenario": "Attempt recovery after another writer adds foreign source provenance to a workspace-bound server.",
+      "oracles": [
+        "Recovery remains pending and accepted settings stay unchanged.",
+        "The foreign source does not enter the live store state or live query results."
+      ]
+    }
+  ]
+}

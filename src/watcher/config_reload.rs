@@ -301,28 +301,44 @@ impl UnifiedWatcher {
             let mut recovered = false;
             if let Some(store) = store {
                 let mut store = store.blocking_write();
-                recovered = store.refresh_committed_generation(boundary.as_deref())
-                    .map_err(|error| config_error(format!("Committed document recovery must finish before applying settings: {error}")))?;
-                if recovered {
-                    // The latest proposal may revert an earlier committed reload,
-                    // or an external writer may have advanced the store. Its full
-                    // configured collection set is authoritative after recovery.
-                    changed = if settings.documents.enabled {
-                        settings.documents.collections.iter().map(|(name, config)| (name.clone(), config.clone())).collect()
-                    } else { Vec::new() };
-                    changed.sort_by(|a, b| a.0.cmp(&b.0));
-                    removed = store.list_collections().into_iter().filter(|name| {
-                        !settings.documents.enabled || !settings.documents.collections.contains_key(name)
-                    }).collect();
-                }
-                if !changed.is_empty() || !removed.is_empty() {
-                    if let Some(warning) = store
-                        .reconfigure_collections(&removed, &changed, &settings.documents.defaults)
-                        .map_err(|error| config_error(error.to_string()))?
-                    {
-                        tracing::warn!("[config] {warning}");
-                    }
-                }
+                recovered = store
+                    .with_committed_generation(boundary.as_deref(), |store, recovered| {
+                        if recovered {
+                            // A recovered publication may belong to an earlier proposal
+                            // or another writer. Reconcile the complete latest policy,
+                            // even when it is unchanged from the old live settings.
+                            changed = if settings.documents.enabled {
+                                settings
+                                    .documents
+                                    .collections
+                                    .iter()
+                                    .map(|(name, config)| (name.clone(), config.clone()))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            changed.sort_by(|a, b| a.0.cmp(&b.0));
+                            removed = store
+                                .list_collections()
+                                .into_iter()
+                                .filter(|name| {
+                                    !settings.documents.enabled
+                                        || !settings.documents.collections.contains_key(name)
+                                })
+                                .collect();
+                        }
+                        if !changed.is_empty() || !removed.is_empty() {
+                            if let Some(warning) = store.reconfigure_collections(
+                                &removed,
+                                &changed,
+                                &settings.documents.defaults,
+                            )? {
+                                tracing::warn!("[config] {warning}");
+                            }
+                        }
+                        Ok(recovered)
+                    })
+                    .map_err(|error| config_error(error.to_string()))?;
             }
             facade.reload_watched_settings(settings.indexed_paths_cache, settings.documents);
             Ok::<_, WatchError>(recovered)
