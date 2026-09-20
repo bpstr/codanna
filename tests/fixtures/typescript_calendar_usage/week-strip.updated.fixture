@@ -1,0 +1,11 @@
+export function WeekStrip() {
+  return (
+    <nav aria-label="Week">
+      <WeekStripDay />
+    </nav>
+  );
+}
+
+function WeekStripDay() {
+  return <button type="button">Today</button>;
+}

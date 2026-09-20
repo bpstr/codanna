@@ -43,6 +43,12 @@ mod test_provider_initialization;
 #[path = "integration/test_typescript_alias_relationships.rs"]
 mod test_typescript_alias_relationships;
 
+#[path = "integration/test_typescript_calendar_usage_fixture.rs"]
+mod test_typescript_calendar_usage_fixture;
+
+#[path = "integration/test_semantic_server_query_initialization.rs"]
+mod test_semantic_server_query_initialization;
+
 #[path = "integration/test_external_import_resolution.rs"]
 mod test_external_import_resolution;
 

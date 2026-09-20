@@ -237,6 +237,11 @@ impl IndexFacade {
         self.semantic_search.is_some()
     }
 
+    /// Whether semantic vectors and their query embedding backend are both ready.
+    pub(crate) fn is_semantic_query_ready(&self) -> bool {
+        self.semantic_search.is_some() && self.embedding_pool.get().is_some()
+    }
+
     /// Returns true if a previous load_semantic_search call failed with
     /// DimensionMismatch, meaning retrying would always fail until re-indexed.
     pub fn is_semantic_incompatible(&self) -> bool {

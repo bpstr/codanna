@@ -135,6 +135,34 @@ impl CodeIntelligenceServer {
         self.facade.clone()
     }
 
+    /// Lazily prepare the shared query backend before semantic tool reads.
+    ///
+    /// Persisted semantic indexes intentionally load without a model owner.
+    /// Every MCP transport reaches the tool handlers, so this is the common
+    /// boundary that keeps stdio, HTTP, and direct server calls consistent.
+    pub(crate) async fn prepare_semantic_query(&self) -> Result<(), crate::IndexError> {
+        {
+            let indexer = self.facade.read().await;
+            if !indexer.settings().semantic_search.enabled || indexer.is_semantic_query_ready() {
+                return Ok(());
+            }
+        }
+
+        crate::runtime::mutate(&self.facade, |indexer| {
+            if !indexer.settings().semantic_search.enabled || indexer.is_semantic_query_ready() {
+                return Ok(());
+            }
+
+            match indexer.prepare_semantic_query() {
+                // Preserve the tool handlers' existing diagnostic for an
+                // enabled setting with no persisted semantic index.
+                Err(crate::IndexError::SemanticSearchNotEnabled) => Ok(()),
+                result => result,
+            }
+        })
+        .await?
+    }
+
     /// Send a notification when a file is re-indexed. Transport failures are
     /// returned to the caller, not reported as successful delivery.
     pub async fn notify_file_reindexed(&self, file_path: &str) -> anyhow::Result<()> {

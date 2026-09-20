@@ -73,6 +73,11 @@ impl CodeIntelligenceServer {
         }): Parameters<SemanticSearchRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
+        if let Err(error) = self.prepare_semantic_query().await {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Semantic search failed: {error}"
+            ))]));
+        }
         crate::runtime::read(&self.facade, move |indexer| {
 
         tracing::debug!(
@@ -202,6 +207,11 @@ impl CodeIntelligenceServer {
         }): Parameters<SemanticSearchWithContextRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
+        if let Err(error) = self.prepare_semantic_query().await {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Semantic search failed: {error}"
+            ))]));
+        }
         crate::runtime::read(&self.facade, move |indexer| {
 
         if !indexer.has_semantic_search() {
