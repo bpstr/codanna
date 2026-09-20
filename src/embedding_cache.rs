@@ -6,13 +6,17 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 const FORMAT_VERSION: u32 = 1;
-const PREPROCESSING_VERSION: u32 = 1;
+const PREPROCESSING_VERSION: u32 = 2;
 const DEFAULT_MAX_ENTRIES: usize = 4096;
+const MAX_CACHE_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_VECTOR_DIMENSION: usize = 16_384;
+const MAX_VECTOR_BYTES: usize = 16 * 1024 * 1024;
+const ENTRY_OVERHEAD_BYTES: usize = 256;
 
 #[derive(Clone, Debug)]
 pub(crate) struct EmbeddingCache {
@@ -29,13 +33,85 @@ struct PersistedCache {
     preprocessing_version: u32,
     model_identity: String,
     dimension: usize,
+    #[serde(deserialize_with = "bounded_entries")]
     entries: Vec<PersistedEntry>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct PersistedEntry {
+    #[serde(deserialize_with = "bounded_hash")]
     input_sha256: String,
+    #[serde(deserialize_with = "bounded_embedding")]
     embedding: Vec<f32>,
+}
+
+fn bounded_hash<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+    if !is_sha256_hex(&value) {
+        return Err(serde::de::Error::custom(
+            "invalid embedding cache input hash",
+        ));
+    }
+    Ok(value.into_owned())
+}
+
+fn bounded_embedding<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<f32>, D::Error> {
+    struct BoundedVector;
+    impl<'de> serde::de::Visitor<'de> for BoundedVector {
+        type Value = Vec<f32>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an embedding within the vector dimension limit")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                if values.len() >= MAX_VECTOR_DIMENSION {
+                    return Err(serde::de::Error::custom(
+                        "embedding cache vector exceeds dimension limit",
+                    ));
+                }
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_seq(BoundedVector)
+}
+
+fn bounded_entries<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<PersistedEntry>, D::Error> {
+    struct BoundedEntries;
+    impl<'de> serde::de::Visitor<'de> for BoundedEntries {
+        type Value = Vec<PersistedEntry>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("bounded embedding cache entries")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut entries = Vec::new();
+            let mut memory_bytes = 0usize;
+            while let Some(entry) = sequence.next_element::<PersistedEntry>()? {
+                memory_bytes +=
+                    entry.embedding.len() * std::mem::size_of::<f32>() + ENTRY_OVERHEAD_BYTES;
+                if entries.len() >= DEFAULT_MAX_ENTRIES || memory_bytes > MAX_VECTOR_BYTES {
+                    return Err(serde::de::Error::custom(
+                        "embedding cache exceeds entry or memory limit",
+                    ));
+                }
+                entries.push(entry);
+            }
+            Ok(entries)
+        }
+    }
+    deserializer.deserialize_seq(BoundedEntries)
 }
 
 impl EmbeddingCache {
@@ -48,6 +124,16 @@ impl EmbeddingCache {
         dimension: usize,
         max_entries: usize,
     ) -> Self {
+        let entry_bytes = dimension
+            .saturating_mul(std::mem::size_of::<f32>())
+            .saturating_add(ENTRY_OVERHEAD_BYTES);
+        let max_entries = if dimension == 0 || dimension > MAX_VECTOR_DIMENSION {
+            0
+        } else {
+            max_entries
+                .min(DEFAULT_MAX_ENTRIES)
+                .min(MAX_VECTOR_BYTES / entry_bytes)
+        };
         Self {
             model_identity: model_identity.into(),
             dimension,
@@ -59,9 +145,30 @@ impl EmbeddingCache {
 
     pub(crate) fn load(path: &Path, model_identity: &str, dimension: usize) -> Self {
         let mut cache = Self::empty(model_identity, dimension);
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
+        if cache.max_entries == 0 {
+            return cache;
+        }
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return cache,
+            Err(error) => {
+                tracing::warn!(target: "embedding_cache", %error, path = %path.display(), "ignoring unreadable embedding cache");
+                return cache;
+            }
+        };
+        // Check the already-open handle before allocation, then bound the read as
+        // well so a concurrently growing cache cannot bypass the size check.
+        match file.metadata() {
+            Ok(metadata) if metadata.len() <= MAX_CACHE_FILE_BYTES => {}
+            _ => {
+                tracing::warn!(target: "embedding_cache", path = %path.display(), "ignoring oversized or unreadable embedding cache");
+                return cache;
+            }
+        }
+        let mut bytes = Vec::new();
+        let bytes = match file.take(MAX_CACHE_FILE_BYTES + 1).read_to_end(&mut bytes) {
+            Ok(_) if bytes.len() as u64 <= MAX_CACHE_FILE_BYTES => bytes,
+            Ok(_) => return cache,
             Err(error) => {
                 tracing::warn!(target: "embedding_cache", %error, path = %path.display(), "ignoring unreadable embedding cache");
                 return cache;
@@ -98,7 +205,10 @@ impl EmbeddingCache {
     }
 
     pub(crate) fn insert(&mut self, input: &str, embedding: Arc<[f32]>) -> bool {
-        if embedding.len() != self.dimension || !embedding.iter().all(|value| value.is_finite()) {
+        if self.max_entries == 0
+            || embedding.len() != self.dimension
+            || !embedding.iter().all(|value| value.is_finite())
+        {
             return false;
         }
         self.insert_hash(input_hash(input), embedding);
@@ -138,11 +248,39 @@ impl EmbeddingCache {
                 .collect(),
         };
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer(&mut temp, &persisted).map_err(io::Error::other)?;
+        serde_json::to_writer(
+            &mut LimitedWriter {
+                inner: &mut temp,
+                remaining: MAX_CACHE_FILE_BYTES,
+            },
+            &persisted,
+        )
+        .map_err(io::Error::other)?;
         temp.flush()?;
         temp.as_file().sync_all()?;
         temp.persist(path).map_err(|error| error.error)?;
         Ok(())
+    }
+}
+
+struct LimitedWriter<W> {
+    inner: W,
+    remaining: u64,
+}
+
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(io::Error::other(
+                "embedding cache exceeds its file size limit",
+            ));
+        }
+        let count = self.inner.write(bytes)?;
+        self.remaining -= count as u64;
+        Ok(count)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
     }
 }
 
@@ -205,5 +343,54 @@ mod tests {
 
         std::fs::write(&path, b"not json").unwrap();
         assert!(EmbeddingCache::load(&path, "model", 1).get("two").is_none());
+    }
+
+    #[test]
+    fn oversized_cache_is_ignored_before_reading_or_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oversized-cache.json");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"{\"entries\":[").unwrap();
+        // A sparse malformed file exercises the metadata guard without allocating
+        // or reading its apparent length into the test process.
+        file.set_len(MAX_CACHE_FILE_BYTES + 1).unwrap();
+        let cache = EmbeddingCache::load(&path, "model", 2);
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn bounded_decoder_rejects_large_vectors_and_excess_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let entry = |dimension| PersistedEntry {
+            input_sha256: input_hash("oversized"),
+            embedding: vec![1.0; dimension],
+        };
+        for entries in [
+            vec![entry(MAX_VECTOR_DIMENSION + 1)],
+            (0..=DEFAULT_MAX_ENTRIES).map(|_| entry(1)).collect(),
+        ] {
+            let persisted = PersistedCache {
+                format_version: FORMAT_VERSION,
+                preprocessing_version: PREPROCESSING_VERSION,
+                model_identity: "model".into(),
+                dimension: 1,
+                entries,
+            };
+            std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
+            assert!(EmbeddingCache::load(&path, "model", 1).entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn in_memory_capacity_accounts_for_vector_bytes() {
+        let cache = EmbeddingCache::empty("model", MAX_VECTOR_DIMENSION);
+        assert!(cache.max_entries < DEFAULT_MAX_ENTRIES);
+        assert!(
+            cache.max_entries * (MAX_VECTOR_DIMENSION * 4 + ENTRY_OVERHEAD_BYTES)
+                <= MAX_VECTOR_BYTES
+        );
+        let mut invalid = EmbeddingCache::empty("model", MAX_VECTOR_DIMENSION + 1);
+        assert!(!invalid.insert("input", Arc::from(vec![1.0; MAX_VECTOR_DIMENSION + 1])));
     }
 }

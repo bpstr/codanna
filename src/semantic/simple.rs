@@ -65,6 +65,7 @@ pub struct SimpleSemanticSearch {
     /// The embedding model for query-time embedding (None in remote mode — caller
     /// must use `search_with_embedding` and provide the query vector externally).
     model: Option<Arc<Mutex<TextEmbedding>>>,
+    input_budget: Option<crate::embedding_input::InputBudget>,
 
     /// Model dimensions for validation
     dimensions: usize,
@@ -157,22 +158,30 @@ impl SimpleSemanticSearch {
             .len();
 
         // Create initial metadata
-        let metadata = crate::semantic::SemanticMetadata::new(
+        let mut metadata = crate::semantic::SemanticMetadata::new(
             model_name.clone(),
             dimensions,
             0, // No embeddings yet
         );
+        let input_budget = crate::embedding_input::InputBudget::local(&text_model.tokenizer, None)
+            .map_err(SemanticSearchError::ModelInitError)?;
+        let identity = crate::embedding_input::backend_identity(
+            "local",
+            &model_name,
+            None,
+            None,
+            &input_budget,
+        );
+        metadata.embedding_identity = Some(identity.clone());
 
         Ok(Self {
             embeddings: Arc::new(HashMap::new()),
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
-            embedding_cache: crate::embedding_cache::EmbeddingCache::empty(
-                model_name.clone(),
-                dimensions,
-            ),
+            embedding_cache: crate::embedding_cache::EmbeddingCache::empty(identity, dimensions),
             model: Some(Arc::new(Mutex::new(text_model))),
+            input_budget: Some(input_budget),
             dimensions,
             metadata: Some(metadata),
             persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
@@ -189,6 +198,12 @@ impl SimpleSemanticSearch {
         // Skip empty docs
         if doc.trim().is_empty() {
             return Ok(());
+        }
+
+        if let Some(budget) = &self.input_budget {
+            budget
+                .validate([doc])
+                .map_err(SemanticSearchError::EmbeddingError)?;
         }
 
         if let Some(embedding) = self.embedding_cache.get(doc) {
@@ -474,6 +489,12 @@ impl SimpleSemanticSearch {
             )
         })?;
 
+        if let Some(budget) = &self.input_budget {
+            budget
+                .validate([query])
+                .map_err(SemanticSearchError::EmbeddingError)?;
+        }
+
         // Generate query embedding
         let query_embeddings = model
             .lock()
@@ -524,6 +545,12 @@ impl SimpleSemanticSearch {
                 "No local model available — use search_with_embedding() in remote mode".to_string(),
             )
         })?;
+
+        if let Some(budget) = &self.input_budget {
+            budget
+                .validate([query])
+                .map_err(SemanticSearchError::EmbeddingError)?;
+        }
 
         // Generate query embedding
         let query_embeddings = model
@@ -644,6 +671,42 @@ impl SimpleSemanticSearch {
         self.metadata.as_ref()
     }
 
+    /// Bind an empty index to the actual backend before producing any vectors.
+    /// Existing vectors can only retain their recorded identity.
+    pub(crate) fn set_embedding_identity(
+        &mut self,
+        identity: String,
+    ) -> Result<(), SemanticSearchError> {
+        if !self.embeddings.is_empty() {
+            return self.validate_embedding_identity(&identity);
+        }
+        if let Some(metadata) = &mut self.metadata {
+            metadata.embedding_identity = Some(identity.clone());
+        }
+        self.embedding_cache =
+            crate::embedding_cache::EmbeddingCache::empty(identity, self.dimensions);
+        Ok(())
+    }
+
+    pub(crate) fn validate_embedding_identity(
+        &self,
+        identity: &str,
+    ) -> Result<(), SemanticSearchError> {
+        if self.embeddings.is_empty()
+            || self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.embedding_identity.as_deref())
+                == Some(identity)
+        {
+            return Ok(());
+        }
+        Err(SemanticSearchError::StorageError {
+            message: "Semantic embedding backend, model revision or input policy differs from the indexed vectors (or the index has no recorded identity)".into(),
+            suggestion: "Re-index with codanna index <path> --force before semantic querying; equal vector dimensions do not establish model compatibility".into(),
+        })
+    }
+
     fn mark_dirty(&mut self, id: SymbolId) {
         // This lock protects only dirty bookkeeping; storage I/O uses a separate lock.
         let mut state = self
@@ -669,6 +732,7 @@ impl SimpleSemanticSearch {
                 self.dimensions,
             ),
             model: self.model.clone(),
+            input_budget: self.input_budget.clone(),
             dimensions: self.dimensions,
             metadata: self.metadata.clone(),
             persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
@@ -720,6 +784,7 @@ impl SimpleSemanticSearch {
             language_symbols: Arc::new(HashMap::new()),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(model_name, dimensions),
             model: None,
+            input_budget: None,
             dimensions,
             metadata: Some(metadata),
             persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
@@ -740,6 +805,7 @@ impl SimpleSemanticSearch {
             language_symbols: Arc::new(HashMap::new()),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(model_name, dimensions),
             model: None,
+            input_budget: None,
             dimensions,
             metadata: Some(metadata),
             persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
@@ -792,7 +858,11 @@ impl SimpleSemanticSearch {
         let language_symbols = build_language_symbols(&snapshot.languages);
         let embedding_cache = crate::embedding_cache::EmbeddingCache::load(
             &path.join("embedding-cache.json"),
-            &snapshot.metadata.model_name,
+            snapshot
+                .metadata
+                .embedding_identity
+                .as_deref()
+                .unwrap_or(&snapshot.metadata.model_name),
             snapshot.metadata.dimension,
         );
         Ok(Self {
@@ -804,6 +874,7 @@ impl SimpleSemanticSearch {
             dimensions: snapshot.metadata.dimension,
             metadata: Some(snapshot.metadata),
             model: None,
+            input_budget: None,
             persistence: Arc::new(Mutex::new(snapshot.persistence)),
             persist_io: Arc::new(Mutex::new(())),
         })
@@ -830,6 +901,18 @@ impl SimpleSemanticSearch {
                     .with_show_download_progress(false),
             )
             .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+            let input_budget =
+                crate::embedding_input::InputBudget::local(&text_model.tokenizer, None)
+                    .map_err(SemanticSearchError::ModelInitError)?;
+            let identity = crate::embedding_input::backend_identity(
+                "local",
+                &metadata.model_name,
+                None,
+                None,
+                &input_budget,
+            );
+            search.validate_embedding_identity(&identity)?;
+            search.input_budget = Some(input_budget);
             search.model = Some(Arc::new(Mutex::new(text_model)));
         }
         Ok(search)
@@ -997,6 +1080,53 @@ fn cosine_similarity_with_magnitudes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_identity_survives_reopen_and_rejects_equal_dimension_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut semantic = SimpleSemanticSearch::new_empty(2, "unchanged-alias");
+        semantic
+            .set_embedding_identity("revision-1:complete-input-v2".into())
+            .unwrap();
+        semantic.store_embeddings(vec![(
+            SymbolId::new(1).unwrap(),
+            vec![1.0, 0.0],
+            "rust".into(),
+        )]);
+        semantic.save(temp.path()).unwrap();
+        let reopened = SimpleSemanticSearch::load_without_model(temp.path()).unwrap();
+        reopened
+            .validate_embedding_identity("revision-1:complete-input-v2")
+            .unwrap();
+        for changed in ["revision-2:complete-input-v2", "revision-1:old-input"] {
+            let error = reopened
+                .validate_embedding_identity(changed)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("Re-index"), "{error}");
+        }
+        assert_eq!(reopened.dimensions(), 2);
+    }
+
+    #[test]
+    fn legacy_semantic_vectors_require_identity_before_inference() {
+        let mut semantic = SimpleSemanticSearch::new_empty(2, "fixture");
+        semantic.store_embeddings(vec![(
+            SymbolId::new(1).unwrap(),
+            vec![1.0, 0.0],
+            "rust".into(),
+        )]);
+        assert!(
+            semantic
+                .validate_embedding_identity("current-policy")
+                .is_err()
+        );
+        assert!(
+            semantic
+                .set_embedding_identity("current-policy".into())
+                .is_err()
+        );
+    }
 
     /// Two savers on one semantic directory (the serve co-run shape:
     /// two --watch processes on one workspace) must not destroy each

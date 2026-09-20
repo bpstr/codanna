@@ -1,7 +1,9 @@
 //! Conservative explicit references. Unsupported Markdown is not guessed.
 use super::*;
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 fn span(input: &Input, path: &str, start: u32, end: u32) -> Span {
     Span {
@@ -65,6 +67,157 @@ pub fn is_document(path: &str) -> bool {
     matches!(path.rsplit('.').next(), Some("md" | "markdown" | "txt"))
 }
 
+/// Configuration is source evidence, independent of code symbol extraction.
+pub fn is_configuration(path: &str) -> bool {
+    matches!(
+        path.rsplit('.').next(),
+        Some("toml" | "json" | "json5" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "xml")
+    )
+}
+
+#[derive(Debug)]
+pub(crate) struct MarkdownLink {
+    pub target: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub definition_lines: Option<(u32, u32)>,
+}
+
+fn comment_text(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    trimmed
+        .strip_prefix("//!")
+        .or_else(|| trimmed.strip_prefix("///"))
+        .or_else(|| trimmed.strip_prefix("//"))
+        .or_else(|| trimmed.strip_prefix('#'))
+        .or_else(|| trimmed.strip_prefix("--"))
+        .or_else(|| trimmed.strip_prefix("* "))
+}
+
+/// Parse whole documents so reference definitions can precede or follow their uses.
+/// Code comments are parsed in contiguous blocks, preserving original line numbers
+/// without allowing a definition in an unrelated declaration to supply a target.
+pub(crate) fn source_links(path: &str, text: &str) -> Vec<MarkdownLink> {
+    if is_document(path) {
+        markdown_links(text)
+    } else {
+        let lines: Vec<_> = text.lines().collect();
+        let mut links = Vec::new();
+        let mut cursor = 0;
+        while cursor < lines.len() {
+            if comment_text(lines[cursor]).is_none() {
+                cursor += 1;
+                continue;
+            }
+            let start = cursor;
+            let mut comments = String::new();
+            while let Some(comment) = lines.get(cursor).and_then(|raw| comment_text(raw)) {
+                comments.push_str(comment.trim_start());
+                comments.push('\n');
+                cursor += 1;
+            }
+            for mut link in markdown_links(&comments) {
+                link.start_line += start as u32;
+                link.end_line += start as u32;
+                if let Some((begin, end)) = &mut link.definition_lines {
+                    *begin += start as u32;
+                    *end += start as u32;
+                }
+                links.push(link);
+            }
+            cursor += 1;
+        }
+        links
+    }
+}
+
+fn markdown_links(text: &str) -> Vec<MarkdownLink> {
+    let mut line_starts = vec![0];
+    line_starts.extend(text.match_indices('\n').map(|(offset, _)| offset + 1));
+    let lines = |range: Range<usize>| {
+        (
+            line_starts.partition_point(|&offset| offset <= range.start) as u32,
+            line_starts.partition_point(|&offset| offset <= range.end.saturating_sub(1)) as u32,
+        )
+    };
+    let mut parser = Parser::new(text).into_offset_iter();
+    let mut links = Vec::new();
+    let mut image_depth = 0usize;
+    while let Some((event, range)) = parser.next() {
+        match &event {
+            Event::Start(Tag::Image { .. }) => image_depth += 1,
+            Event::End(TagEnd::Image) => image_depth = image_depth.saturating_sub(1),
+            _ => (),
+        }
+        if image_depth > 0 {
+            continue;
+        }
+        let Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            id,
+            ..
+        }) = event
+        else {
+            continue;
+        };
+        // Images and text inside code/HTML blocks never become Link events.
+        if !matches!(
+            link_type,
+            LinkType::Inline | LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut
+        ) || external_target(&dest_url)
+        {
+            continue;
+        }
+        let definition_lines = if matches!(
+            link_type,
+            LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut
+        ) {
+            parser
+                .reference_definitions()
+                .get(&id)
+                .map(|definition| lines(definition.span.clone()))
+        } else {
+            None
+        };
+        let (start_line, end_line) = lines(range);
+        links.push(MarkdownLink {
+            target: dest_url.into_string(),
+            start_line,
+            end_line,
+            definition_lines,
+        });
+    }
+    links
+}
+
+fn external_target(target: &str) -> bool {
+    target.starts_with("//")
+        || target.split_once(':').is_some_and(|(scheme, _)| {
+            !scheme.is_empty()
+                && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+        })
+}
+
+/// Strict UTF-8 percent decoding, applied once after separating the URL fragment.
+fn decode_url_component(value: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut input = value.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let high = (input.next()? as char).to_digit(16)?;
+            let low = (input.next()? as char).to_digit(16)?;
+            bytes.push((high * 16 + low) as u8);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
 fn test_path(path: &str) -> bool {
     path.split('/')
         .any(|p| matches!(p, "test" | "tests" | "__tests__"))
@@ -77,15 +230,25 @@ fn test_path(path: &str) -> bool {
             .is_some_and(|p| p.starts_with("test_"))
 }
 
-/// Resolve local URL paths lexically; the file must additionally occur in Input.
-fn local_target(path: &str, target: &str) -> Option<(String, Option<String>)> {
-    if target.contains("://") || target.starts_with("mailto:") {
+/// Resolve decoded local URL paths lexically; the file must additionally occur in Input.
+pub(crate) fn local_target(path: &str, target: &str) -> Option<(String, Option<String>)> {
+    if external_target(target) {
         return None;
     }
     let (file, fragment) = target
         .split_once('#')
-        .map_or((target, None), |(p, f)| (p, Some(f.to_owned())));
-    if file.starts_with('/') || file.contains(['\\', ':', '?', '\0']) {
+        .map_or((target, None), |(p, f)| (p, Some(f)));
+    // A query is not a filesystem path. Encoded question/hash characters remain
+    // legal filename characters because delimiters are separated before decoding.
+    if file.contains('?') {
+        return None;
+    }
+    let file = decode_url_component(file)?;
+    let fragment = match fragment {
+        Some(fragment) => Some(decode_url_component(fragment)?),
+        None => None,
+    };
+    if file.starts_with('/') || file.contains(['\\', ':']) || file.chars().any(char::is_control) {
         return None;
     }
     let mut parts: Vec<&str> = path.split('/').collect();
@@ -102,7 +265,9 @@ fn local_target(path: &str, target: &str) -> Option<(String, Option<String>)> {
             p => parts.push(p),
         }
     }
-    Some((parts.join("/"), fragment))
+    let resolved = parts.join("/");
+    validate_path(&resolved).ok()?;
+    Some((resolved, fragment))
 }
 
 fn candidate(
@@ -124,6 +289,97 @@ fn candidate(
         candidates,
         evidence,
     });
+}
+
+fn file_level_comment(raw: &str) -> bool {
+    if raw.trim_start().starts_with("//!") {
+        return true;
+    }
+    let Some(comment) = comment_text(raw) else {
+        return false;
+    };
+    let comment = comment.trim_start();
+    if comment.starts_with("@file ") || comment == "@file" || comment.starts_with("@fileoverview") {
+        return true;
+    }
+    comment
+        .strip_prefix("WHY:")
+        .or_else(|| comment.strip_prefix("NOTE:"))
+        .is_some_and(|text| {
+            let text = text.trim_start();
+            text.starts_with("FILE:") || text.starts_with("MODULE:")
+        })
+}
+
+/// A declaration can own only the immediately preceding, equally indented
+/// comment block. Blank lines, statements and explicit file metadata stop it.
+fn leading_comment_owners(
+    input: &Input,
+    codes: &BTreeMap<u64, String>,
+) -> BTreeMap<(String, u32), String> {
+    let mut candidates: BTreeMap<(String, u32), Vec<String>> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, Vec<&CodeSymbol>> = BTreeMap::new();
+    for symbol in &input.symbols {
+        if !is_document(&symbol.path) {
+            by_file.entry(&symbol.path).or_default().push(symbol);
+        }
+    }
+    for (path, symbols) in by_file {
+        let lines: Vec<_> = input.files[path].lines().collect();
+        for symbol in symbols {
+            // Synthetic module/initializer symbols are not following declarations.
+            if symbol.name.starts_with('<') {
+                continue;
+            }
+            let start = symbol.start_line as usize - 1;
+            let Some(declaration) = lines.get(start).copied() else {
+                continue;
+            };
+            if declaration.trim().is_empty() || comment_text(declaration).is_some() {
+                continue;
+            }
+            let indentation = &declaration[..declaration.len() - declaration.trim_start().len()];
+            let mut begin = start;
+            while begin > 0 {
+                let raw = lines[begin - 1];
+                let prefix = &raw[..raw.len() - raw.trim_start().len()];
+                if prefix != indentation || comment_text(raw).is_none() {
+                    break;
+                }
+                begin -= 1;
+            }
+            if lines[begin..start]
+                .iter()
+                .any(|raw| file_level_comment(raw))
+            {
+                continue;
+            }
+            for line in begin..start {
+                candidates
+                    .entry((path.into(), line as u32 + 1))
+                    .or_default()
+                    .push(codes[&symbol.key].clone());
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(line, owners)| match owners.as_slice() {
+            [owner] => Some((line, owner.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn enclosing_owner(entries: Option<&[(u32, u32, String)]>, line: u32) -> Option<&String> {
+    entries
+        .and_then(|entries| {
+            entries
+                .iter()
+                .filter(|(start, end, _)| *start <= line && line <= *end)
+                .min_by_key(|(start, end, _)| end - start)
+        })
+        .map(|(_, _, id)| id)
 }
 
 /// Build a complete replacement snapshot. Never mutates a published generation.
@@ -162,7 +418,12 @@ pub fn build(input: &Input) -> Result<Graph> {
         } else {
             Kind::File
         };
-        let id = add_node(&mut graph, input, kind, path, "", path, 1, lines, "");
+        let body = if is_configuration(path) {
+            text.as_str()
+        } else {
+            ""
+        };
+        let id = add_node(&mut graph, input, kind, path, "", path, 1, lines, body);
         files.insert(path.clone(), id);
     }
     for symbol in symbols {
@@ -217,11 +478,13 @@ pub fn build(input: &Input) -> Result<Graph> {
                 .or_default()
                 .push(id.clone());
         }
-        owners.entry(symbol.path.clone()).or_default().push((
-            symbol.start_line,
-            symbol.end_line,
-            id.clone(),
-        ));
+        if !symbol.name.starts_with('<') {
+            owners.entry(symbol.path.clone()).or_default().push((
+                symbol.start_line,
+                symbol.end_line,
+                id.clone(),
+            ));
+        }
         connect(
             &mut graph,
             &files[&symbol.path],
@@ -308,7 +571,7 @@ pub fn build(input: &Input) -> Result<Graph> {
             );
         }
     }
-    let links = Regex::new(r"\[[^\]\n]*\]\(([^\s)]+)\)")?;
+    let leading_owners = leading_comment_owners(input, &codes);
     let ticks = Regex::new(r"`([^`\n]+)`")?;
     let adr = Regex::new(r"(?i)\b(?:ADR|RFC)[-_ ]?(\d+)\b")?;
     let mut decisions: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -323,33 +586,31 @@ pub fn build(input: &Input) -> Result<Graph> {
     }
     for (path, text) in &input.files {
         let doc = is_document(path);
+        let mut links_by_line: BTreeMap<u32, Vec<MarkdownLink>> = BTreeMap::new();
+        for link in source_links(path, text) {
+            links_by_line.entry(link.start_line).or_default().push(link);
+        }
         let mut fence = None;
         for (i, raw) in text.lines().enumerate() {
             if doc && fenced(raw, &mut fence) {
                 continue;
             }
             let line = i as u32 + 1;
-            let comment = raw
-                .trim()
-                .strip_prefix("//")
-                .or_else(|| raw.trim().strip_prefix('#'))
-                .or_else(|| raw.trim().strip_prefix("--"))
-                .or_else(|| raw.trim().strip_prefix("* "));
+            let comment = comment_text(raw);
             if !doc && comment.is_none() {
                 continue;
             }
             let source = if doc { raw } else { comment.unwrap_or("") };
             let evidence = span(input, path, line, line);
-            let owner = owners
-                .get(path)
-                .and_then(|entries| {
-                    entries
-                        .iter()
-                        .filter(|(a, b, _)| *a <= line && line <= *b)
-                        .min_by_key(|(a, b, _)| b - a)
-                })
-                .map(|(_, _, id)| id.clone())
-                .unwrap_or_else(|| files[path].clone());
+            let owner = if !doc && file_level_comment(raw) {
+                &files[path]
+            } else {
+                leading_owners
+                    .get(&(path.clone(), line))
+                    .or_else(|| enclosing_owner(owners.get(path).map(Vec::as_slice), line))
+                    .unwrap_or(&files[path])
+            }
+            .clone();
             let owner = if !doc
                 && (source.trim().starts_with("WHY:") || source.trim().starts_with("NOTE:"))
             {
@@ -376,11 +637,9 @@ pub fn build(input: &Input) -> Result<Graph> {
             } else {
                 owner
             };
-            for cap in links.captures_iter(source) {
-                let target = &cap[1];
-                if target.contains("://") || target.starts_with("mailto:") {
-                    continue;
-                }
+            for link in links_by_line.remove(&line).unwrap_or_default() {
+                let target = &link.target;
+                let evidence = span(input, path, link.start_line, link.end_line);
                 let resolved = local_target(path, target).and_then(|(p, f)| {
                     if let Some(fragment) = f {
                         if fragment.starts_with('L')
@@ -416,6 +675,16 @@ pub fn build(input: &Input) -> Result<Graph> {
                         evidence.clone(),
                         "markdown_link",
                     );
+                    if let Some((start, end)) = link.definition_lines {
+                        connect(
+                            &mut graph,
+                            &owner,
+                            &to,
+                            "references",
+                            span(input, path, start, end),
+                            "markdown_reference_definition",
+                        );
+                    }
                 } else {
                     candidate(
                         &mut graph,
@@ -480,7 +749,8 @@ pub fn build(input: &Input) -> Result<Graph> {
         }
     }
     graph.limitations.push("Code relationships inherit Codanna's static resolution; dump-to-source freshness is not independently proven.".into());
-    graph.limitations.push("Markdown support: ATX headings, inline local links and exact inline-code symbol mentions; fenced blocks are excluded. Unknown inline literals are not broken references.".into());
+    graph.limitations.push("Markdown links use CommonMark inline/full/collapsed/shortcut reference syntax with source spans; images, remote links and links in code/HTML blocks are excluded. Local URL paths and fragments are percent-decoded once. Headings support ATX anchors; unknown inline literals are not broken references.".into());
+    graph.limitations.push("Rationale comments attach to the smallest enclosing symbol or a uniquely identified adjacent declaration at the same indentation. Gaps, statements and explicit file-level metadata prevent leading attachment; this is source association, not compiler comment semantics.".into());
     graph.limitations.push(
         "Test nodes identify test source, not executed coverage or proof of correctness.".into(),
     );

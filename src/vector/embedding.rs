@@ -172,6 +172,7 @@ pub struct FastEmbedGenerator {
     model: Mutex<TextEmbedding>,
     dimension: VectorDimension,
     model_name: String,
+    input_budget: crate::embedding_input::InputBudget,
 }
 
 impl FastEmbedGenerator {
@@ -211,6 +212,9 @@ impl FastEmbedGenerator {
             format!("Failed to initialize embedding model '{model_name}': {e}. Ensure you have internet connection for first-time model download")
         ))?;
 
+        let input_budget = crate::embedding_input::InputBudget::local(&text_model.tokenizer, None)
+            .map_err(VectorError::EmbeddingFailed)?;
+
         // Auto-detect dimension by generating a test embedding
         let test_embedding = text_model.embed(vec!["test"], None).map_err(|e| {
             VectorError::EmbeddingFailed(format!("Failed to detect model dimensions: {e}"))
@@ -225,6 +229,7 @@ impl FastEmbedGenerator {
             model: Mutex::new(text_model),
             dimension,
             model_name,
+            input_budget,
         })
     }
 
@@ -254,6 +259,10 @@ impl EmbeddingGenerator for FastEmbedGenerator {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+
+        self.input_budget
+            .validate(texts.iter().copied())
+            .map_err(VectorError::EmbeddingFailed)?;
 
         // fastembed expects Vec<String> for the embed method
         // TODO: Future optimization - investigate if fastembed can accept &[&str] directly
@@ -293,7 +302,13 @@ impl EmbeddingGenerator for FastEmbedGenerator {
     }
 
     fn cache_identity(&self) -> String {
-        self.model_name.clone()
+        crate::embedding_input::backend_identity(
+            "local",
+            &self.model_name,
+            None,
+            None,
+            &self.input_budget,
+        )
     }
 }
 

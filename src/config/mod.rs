@@ -226,6 +226,23 @@ pub struct SemanticSearchConfig {
     /// Required when remote_url is set. Overrideable via CODANNA_EMBED_DIM env var.
     #[serde(default)]
     pub remote_dim: Option<usize>,
+
+    /// Explicit provider/model revision or deployment fingerprint. Change this
+    /// whenever a model alias points at different weights, even at the same dimension.
+    #[serde(default)]
+    pub model_revision: Option<String>,
+
+    /// Complete embedding input budget, including heading breadcrumbs and special
+    /// tokens. Local defaults to the loaded tokenizer limit; remote defaults to
+    /// 8192. Inputs that exceed the budget fail without truncation.
+    #[serde(default)]
+    pub max_input_tokens: Option<usize>,
+
+    /// Remote model's Hugging Face tokenizer JSON, read from a local file only.
+    /// Without it, remote validation uses a conservative UTF-8 byte-budget proxy,
+    /// not an exact token count. Local models use their actual loaded tokenizer.
+    #[serde(default)]
+    pub tokenizer_path: Option<PathBuf>,
     // API key: set CODANNA_EMBED_API_KEY environment variable.
     // Intentionally not a config field -- secrets must not live in shared config files.
 }
@@ -377,6 +394,9 @@ impl Default for SemanticSearchConfig {
             remote_url: None,
             remote_model: None,
             remote_dim: None,
+            model_revision: None,
+            max_input_tokens: None,
+            tokenizer_path: None,
         }
     }
 }

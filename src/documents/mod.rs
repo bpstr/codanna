@@ -9,6 +9,8 @@
 pub mod chunker;
 pub mod config;
 mod embedding;
+mod generation;
+mod ranking;
 pub mod schema;
 pub mod status;
 pub mod store;
@@ -20,7 +22,9 @@ pub use config::{
     ValidatedChunkingConfig,
 };
 pub use schema::DocumentSchema;
-pub use store::{CollectionStats, DocumentStore, IndexProgress, SearchQuery, SearchResult};
+pub use store::{
+    CollectionStats, DocumentStore, EmbeddingDiagnostics, IndexProgress, SearchQuery, SearchResult,
+};
 pub use types::{ChunkId, CollectionId, DocumentChunk, FileState};
 
 use crate::config::Settings;
@@ -33,11 +37,14 @@ use tokio::sync::RwLock;
 pub fn open_from_settings(settings: &Settings) -> store::StoreResult<DocumentStore> {
     let path = settings.index_path.join("documents");
     if !settings.semantic_search.enabled {
-        return DocumentStore::new(path, VectorDimension::dimension_384());
+        return DocumentStore::new(path, VectorDimension::dimension_384())
+            .map(|store| store.with_source_exclusion(&settings.index_path));
     }
     let generator = embedding::ConfiguredGenerator::new(&settings.semantic_search)
         .map_err(|error| store::DocumentStoreError::Embedding(error.to_string()))?;
-    DocumentStore::new(path, generator.dimension())?.with_embeddings(Box::new(generator))
+    DocumentStore::new(path, generator.dimension())?
+        .with_source_exclusion(&settings.index_path)
+        .with_embeddings(Box::new(generator))
 }
 
 /// Load document store from settings if enabled and indexed.

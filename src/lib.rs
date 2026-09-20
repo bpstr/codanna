@@ -10,6 +10,7 @@ pub mod display;
 pub mod documents;
 pub mod dump;
 mod embedding_cache;
+pub(crate) mod embedding_input;
 pub mod embedding_runtime;
 pub mod error;
 pub mod git;

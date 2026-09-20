@@ -1,7 +1,7 @@
 //! Shared configured backend for document indexing and every query surface.
 use crate::SymbolId;
 use crate::config::SemanticSearchConfig;
-use crate::indexing::facade::{build_embedding_backend, resolve_remote_model_name};
+use crate::indexing::facade::build_embedding_backend;
 use crate::semantic::EmbeddingBackend;
 use crate::vector::{EmbeddingGenerator, VectorDimension, VectorError};
 
@@ -16,27 +16,12 @@ impl ConfiguredGenerator {
         let backend = build_embedding_backend(config)
             .map_err(|error| VectorError::EmbeddingFailed(error.to_string()))?;
         let dimension = VectorDimension::new(backend.dimensions())?;
-        let identity = backend_identity(config);
+        let identity = backend.identity(config.model_revision.as_deref());
         Ok(Self {
             backend,
             dimension,
             identity,
         })
-    }
-}
-
-fn backend_identity(config: &SemanticSearchConfig) -> String {
-    let remote_url = std::env::var("CODANNA_EMBED_URL")
-        .ok()
-        .or_else(|| config.remote_url.clone());
-    match remote_url {
-        Some(url) => {
-            // Endpoint identity matters when two self-hosted servers expose the
-            // same model alias. Persist its digest, never a URL or API key.
-            let endpoint = crate::indexing::file_info::calculate_hash(url.trim_end_matches('/'));
-            format!("remote:{}:{endpoint}", resolve_remote_model_name(config))
-        }
-        None => format!("local:{}", config.model),
     }
 }
 
@@ -113,19 +98,46 @@ impl EmbeddingGenerator for ConfiguredGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn identity_tracks_endpoint_and_model_without_persisting_url_credentials() {
-        let mut settings = crate::Settings::default().semantic_search;
-        settings.remote_url = Some("http://username:secret@127.0.0.1:9999".into());
-        settings.remote_model = Some("fixture@1".into());
-        let first = backend_identity(&settings);
+        let budget = crate::embedding_input::InputBudget::remote(None, None).unwrap();
+        let identity = |url: &str, model: &str, revision: &str| {
+            let endpoint = crate::indexing::file_info::calculate_hash(url);
+            crate::embedding_input::backend_identity(
+                "remote",
+                model,
+                Some(&endpoint),
+                Some(revision),
+                &budget,
+            )
+        };
+        let first = identity(
+            "http://username:secret@127.0.0.1:9999",
+            "fixture",
+            "revision-1",
+        );
         assert!(!first.contains("secret"));
         assert!(!first.contains("127.0.0.1"));
-        settings.remote_url = Some("http://127.0.0.1:9998".into());
-        assert_ne!(first, backend_identity(&settings));
-        settings.remote_model = Some("fixture@2".into());
-        assert_ne!(first, backend_identity(&settings));
+        assert_ne!(
+            first,
+            identity("http://127.0.0.1:9998", "fixture", "revision-1")
+        );
+        assert_ne!(
+            first,
+            identity(
+                "http://username:secret@127.0.0.1:9999",
+                "other",
+                "revision-1"
+            )
+        );
+        assert_ne!(
+            first,
+            identity(
+                "http://username:secret@127.0.0.1:9999",
+                "fixture",
+                "revision-2"
+            )
+        );
+        assert!(first.contains(crate::embedding_input::INPUT_POLICY_VERSION));
     }
 }

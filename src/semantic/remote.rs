@@ -49,6 +49,7 @@ where
 use serde::{Deserialize, Serialize};
 
 use super::SemanticSearchError;
+use crate::embedding_input::InputBudget;
 
 #[derive(Serialize)]
 struct EmbedRequest<'a> {
@@ -78,11 +79,12 @@ pub struct RemoteEmbedder {
     model: String,
     dim: usize,
     api_key: Option<String>,
+    input_budget: InputBudget,
+    endpoint_identity: String,
 }
 
 const BATCH_SIZE: usize = 64;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
-const MAX_TEXT_CHARS: usize = 2000;
 
 impl RemoteEmbedder {
     /// Build a RemoteEmbedder, probing the server to confirm the dimension
@@ -93,6 +95,18 @@ impl RemoteEmbedder {
         expected_dim: Option<usize>,
         api_key: Option<String>,
     ) -> Result<Self, SemanticSearchError> {
+        let input_budget =
+            InputBudget::remote(None, None).map_err(SemanticSearchError::ModelInitError)?;
+        Self::with_input_budget(base_url, model, expected_dim, api_key, input_budget).await
+    }
+
+    pub(crate) async fn with_input_budget(
+        base_url: &str,
+        model: &str,
+        expected_dim: Option<usize>,
+        api_key: Option<String>,
+        input_budget: InputBudget,
+    ) -> Result<Self, SemanticSearchError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
@@ -102,11 +116,22 @@ impl RemoteEmbedder {
 
         let url = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
 
+        // A user may intentionally choose a one-token/byte input budget. Probe
+        // dimensions with a shorter input when the conventional probe won't fit.
+        let probe_text = if input_budget.validate(["probe"]).is_ok() {
+            "probe"
+        } else {
+            "."
+        };
+        input_budget
+            .validate([probe_text])
+            .map_err(SemanticSearchError::ModelInitError)?;
+
         let probe = Self::request(
             &client,
             &url,
             model,
-            &["probe".to_string()],
+            &[probe_text.to_string()],
             api_key.as_deref(),
         )
         .await?;
@@ -135,6 +160,10 @@ impl RemoteEmbedder {
             model: model.to_string(),
             dim: actual_dim,
             api_key,
+            input_budget,
+            endpoint_identity: crate::indexing::file_info::calculate_hash(
+                base_url.trim_end_matches('/'),
+            ),
         })
     }
 
@@ -143,23 +172,25 @@ impl RemoteEmbedder {
         self.dim
     }
 
-    /// Embed a batch of texts, truncating each to `MAX_TEXT_CHARS` characters.
-    /// Sends requests in chunks of `BATCH_SIZE`.
+    pub(crate) fn identity(&self, revision: Option<&str>) -> String {
+        crate::embedding_input::backend_identity(
+            "remote",
+            &self.model,
+            Some(&self.endpoint_identity),
+            revision,
+            &self.input_budget,
+        )
+    }
+
+    /// Embed complete texts. Preflight every input before the first batched
+    /// request; oversized input fails clearly and is never silently truncated.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SemanticSearchError> {
+        self.input_budget
+            .validate(texts.iter().map(String::as_str))
+            .map_err(SemanticSearchError::EmbeddingError)?;
         let mut results: Vec<(usize, Vec<f32>)> = Vec::with_capacity(texts.len());
 
-        let truncated: Vec<String> = texts
-            .iter()
-            .map(|t| {
-                if t.chars().count() > MAX_TEXT_CHARS {
-                    t.chars().take(MAX_TEXT_CHARS).collect()
-                } else {
-                    t.clone()
-                }
-            })
-            .collect();
-
-        for (chunk_start, chunk) in truncated.chunks(BATCH_SIZE).enumerate() {
+        for (chunk_start, chunk) in texts.chunks(BATCH_SIZE).enumerate() {
             let embeddings = Self::request(
                 &self.client,
                 &self.url,
