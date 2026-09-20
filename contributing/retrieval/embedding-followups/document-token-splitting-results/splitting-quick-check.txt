@@ -1,0 +1,19 @@
+🚀 Quick CI check (matches GitHub Actions quick-check.yml)
+This should complete in ~2-3 minutes
+
+0️⃣ Ensuring Rust toolchain is up-to-date...
+   Using: rustc 1.98.1 (48a229cea 2026-09-01)
+
+1️⃣ Check formatting (not modifying files)...
+✓ Formatting check passed
+
+2️⃣ Clippy strict mode (all targets and features)...
+[1m[92m   Compiling[0m codanna v1.0.0-rc1 (/workspace/scratch/aafac310ccab/codanna-splitting)
+[1m[92m    Finished[0m `dev` profile [unoptimized] target(s) in 20.56s
+✓ Clippy check passed
+
+✅ Quick checks passed!
+
+Tips:
+   - Run './contributing/scripts/auto-fix.sh' to automatically fix formatting and clippy issues
+   - Run './contributing/scripts/full-test.sh' for full test suite before release

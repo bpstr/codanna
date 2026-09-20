@@ -29,14 +29,15 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 86.004,
-      "log": "splitting-default.log",
+      "log": "document-token-splitting-results/default-tests.txt",
       "log_sha256": "27ea2f1177796c39b1e3ad935d4b7dd6fff658f18ebee5c66be8e0c478431374",
       "completed_test_targets": 37,
       "passed": 2354,
       "failed": 0,
       "ignored": 62,
       "measured": 0,
-      "filtered_out": 1
+      "filtered_out": 1,
+      "local_capture_basename": "splitting-default.log"
     },
     "all-features": {
       "name": "all-features",
@@ -54,14 +55,15 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 152.666,
-      "log": "splitting-all-features.log",
+      "log": "document-token-splitting-results/all-features-tests.txt",
       "log_sha256": "e94d4e2dce0079d33d527a6c070a4da7aa593114fbd33b31fc9d10a0369a4f97",
       "completed_test_targets": 37,
       "passed": 2356,
       "failed": 0,
       "ignored": 62,
       "measured": 0,
-      "filtered_out": 1
+      "filtered_out": 1,
+      "local_capture_basename": "splitting-all-features.log"
     },
     "docs": {
       "name": "docs",
@@ -77,8 +79,9 @@
       },
       "exit_code": 0,
       "elapsed_seconds": 18.149,
-      "log": "splitting-docs.log",
-      "log_sha256": "d538f96d22087a10173ced688310d396bfca62195457e98d672464f6262ea7bf"
+      "log": "document-token-splitting-results/splitting-docs.txt",
+      "log_sha256": "d538f96d22087a10173ced688310d396bfca62195457e98d672464f6262ea7bf",
+      "local_capture_basename": "splitting-docs.log"
     },
     "cli-mcp": {
       "name": "cli-mcp",
@@ -90,8 +93,9 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 0.205,
-      "log": "splitting-cli-mcp.log",
-      "log_sha256": "25c8732c9732f026b0a2742ce58efb747b6c449bace523ebd3054e4fdda4ca9a"
+      "log": "document-token-splitting-results/splitting-cli-mcp.txt",
+      "log_sha256": "25c8732c9732f026b0a2742ce58efb747b6c449bace523ebd3054e4fdda4ca9a",
+      "local_capture_basename": "splitting-cli-mcp.log"
     },
     "lexical-manifest": {
       "name": "lexical-manifest",
@@ -104,8 +108,9 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 0.068,
-      "log": "splitting-lexical-manifest.log",
-      "log_sha256": "8a142cbcf9983e11152d43845cb540ed6636b82648885da896e56f463b7b274b"
+      "log": "document-token-splitting-results/splitting-lexical-manifest.txt",
+      "log_sha256": "8a142cbcf9983e11152d43845cb540ed6636b82648885da896e56f463b7b274b",
+      "local_capture_basename": "splitting-lexical-manifest.log"
     },
     "lexical-contracts": {
       "name": "lexical-contracts",
@@ -123,8 +128,9 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 0.267,
-      "log": "splitting-lexical-contracts.log",
-      "log_sha256": "fa378b197a9ef54bdd213e89fc978f5f8dbe96fea9b7e1f58227576cb9d4393d"
+      "log": "document-token-splitting-results/splitting-lexical-contracts.txt",
+      "log_sha256": "fa378b197a9ef54bdd213e89fc978f5f8dbe96fea9b7e1f58227576cb9d4393d",
+      "local_capture_basename": "splitting-lexical-contracts.log"
     },
     "lexical": {
       "name": "lexical",
@@ -144,8 +150,9 @@
       "extra_environment": {},
       "exit_code": 0,
       "elapsed_seconds": 1.493,
-      "log": "splitting-lexical.log",
-      "log_sha256": "81259a4bd84dabe7acf3fed2c4dfe7bb408bb4b31bc690b1de14562746a7d5dd"
+      "log": "document-token-splitting-results/splitting-lexical.txt",
+      "log_sha256": "81259a4bd84dabe7acf3fed2c4dfe7bb408bb4b31bc690b1de14562746a7d5dd",
+      "local_capture_basename": "splitting-lexical.log"
     },
     "quick_check": {
       "name": "splitting-quick-check",
@@ -156,8 +163,9 @@
       ],
       "exit_code": 0,
       "elapsed_seconds": 22.507,
-      "log": "splitting-quick-check.log",
-      "log_sha256": "68aa6752bd8a4a9c16012dc5543ff8f847d1214af1572131e89a3e365161b84c"
+      "log": "document-token-splitting-results/splitting-quick-check.txt",
+      "log_sha256": "68aa6752bd8a4a9c16012dc5543ff8f847d1214af1572131e89a3e365161b84c",
+      "local_capture_basename": "splitting-quick-check.log"
     },
     "unmodified_full_script": {
       "name": "splitting-full-script",
@@ -168,13 +176,14 @@
       ],
       "exit_code": 101,
       "elapsed_seconds": 74.845,
-      "log": "splitting-full-script.log",
+      "log": "document-token-splitting-results/splitting-full-script.txt",
       "observed_failures": [
         "indexing::pipeline::stages::read::tests::hardening_read_rejects_non_regular_entries_without_blocking",
         "watcher::debouncer::tests::test_debouncer_resets_on_new_change"
       ],
       "notes": "Formatting, strict Clippy and no-default-feature check passed. Unix socket creation was denied with EPERM; that unchanged fixture alone was excluded from the complete reruns. The unchanged debounce timing assertion failed once and then passed in both complete reruns, without exclusion or test changes.",
-      "log_sha256": "a82fa9a8efd1823248f347cde540632d5a290ade92d2a4c5a679c3a8d716339f"
+      "log_sha256": "a82fa9a8efd1823248f347cde540632d5a290ade92d2a4c5a679c3a8d716339f",
+      "local_capture_basename": "splitting-full-script.log"
     }
   },
   "lexical_acceptance": {
