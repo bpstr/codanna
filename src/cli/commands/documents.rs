@@ -10,7 +10,7 @@ use crate::io::EnvelopeEntityType;
 use crate::io::envelope::{Envelope, ResultCode};
 use crate::io::status_line::StatusLine;
 use crate::io::{ProgressBar, ProgressBarOptions, ProgressBarStyle};
-use crate::vector::{FastEmbedGenerator, VectorDimension};
+use crate::vector::VectorDimension;
 
 /// Print JSON or error message if serialization fails.
 fn print_json<T: serde::Serialize>(value: &T) {
@@ -30,18 +30,8 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
 
     // Helper to create store with optional embeddings
     let create_store_with_embeddings = || -> Result<DocumentStore, String> {
-        let store = DocumentStore::new(&doc_path, dimension)
-            .map_err(|e| format!("Failed to open document store: {e}"))?;
-
-        if config.semantic_search.enabled {
-            let generator = FastEmbedGenerator::new()
-                .map_err(|e| format!("Failed to create embedding generator: {e}"))?;
-            store
-                .with_embeddings(Box::new(generator))
-                .map_err(|e| format!("Failed to enable embeddings: {e}"))
-        } else {
-            Ok(store)
-        }
+        crate::documents::open_from_settings(config)
+            .map_err(|error| format!("Failed to open document store: {error}"))
     };
 
     match action {
@@ -299,7 +289,7 @@ fn run_index<F>(
 
     // Force flag: clear file states to treat all files as new
     if force {
-        eprintln!("Force re-indexing: clearing file state cache");
+        eprintln!("Force re-indexing selected collections; preserving source ownership");
         store.clear_file_states();
     }
 

@@ -18,9 +18,9 @@ fn range_from_node(node: &Node) -> Range {
     let end = node.end_position();
     Range::new(
         start.row as u32,
-        start.column as u16,
+        start.column as u32,
         end.row as u32,
-        end.column as u16,
+        end.column as u32,
     )
 }
 

@@ -82,7 +82,16 @@ impl<'a> QueryContext<'a> {
         if let Some(id_str) = query.strip_prefix("symbol_id:") {
             match id_str.parse::<u32>() {
                 Ok(id) => match self.indexer.get_symbol(crate::SymbolId(id)) {
-                    Some(sym) => ResolveResult::Found(sym),
+                    Some(sym)
+                        if language.is_none_or(|expected| {
+                            sym.language_id
+                                .as_ref()
+                                .is_some_and(|actual| actual.as_str() == expected)
+                        }) =>
+                    {
+                        ResolveResult::Found(sym)
+                    }
+                    Some(_) => ResolveResult::NotFound,
                     None => ResolveResult::NotFound,
                 },
                 Err(_) => ResolveResult::InvalidId(id_str.to_string()),
@@ -633,9 +642,29 @@ pub fn retrieve_search(
         }
     });
 
-    let search_results = indexer
-        .search(query, limit, kind_filter, module, language)
-        .unwrap_or_default();
+    let search_results = match indexer.search(query, limit, kind_filter, module, language) {
+        Ok(results) => results,
+        Err(error) => {
+            let code = if matches!(&error, crate::IndexError::Storage(
+                crate::StorageError::InvalidFieldValue { field, .. }
+            ) if field == "limit")
+            {
+                ResultCode::InvalidQuery
+            } else {
+                ResultCode::IndexError
+            };
+            if format == OutputFormat::Json {
+                let envelope: Envelope<()> =
+                    query_error_envelope(code, format!("Search failed: {error}"))
+                        .with_entity_type(EnvelopeEntityType::SearchResult)
+                        .with_query(query);
+                let _ = emit_envelope_json(&envelope, fields.as_ref());
+            } else {
+                eprintln!("Search failed: {error}");
+            }
+            return ExitCode::GeneralError;
+        }
+    };
 
     // Transform search results to SymbolContext with relationships
     let results_with_context: Vec<SymbolContext> = search_results
@@ -735,6 +764,15 @@ pub fn retrieve_describe(
     let callers = indexer.get_calling_functions_with_metadata(symbol.id);
     if !callers.is_empty() {
         context.relationships.called_by = Some(callers);
+    }
+
+    let references = indexer.get_references_with_metadata(symbol.id);
+    if !references.is_empty() {
+        context.relationships.references = Some(references);
+    }
+    let referenced_by = indexer.get_referenced_by_with_metadata(symbol.id);
+    if !referenced_by.is_empty() {
+        context.relationships.referenced_by = Some(referenced_by);
     }
 
     // Get defines for this specific symbol

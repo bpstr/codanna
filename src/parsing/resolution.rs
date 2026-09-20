@@ -746,6 +746,25 @@ pub trait PipelineSymbolCache: Send + Sync {
     fn resolve_module_alias(&self, _path: &str) -> Option<SymbolId> {
         None
     }
+
+    fn resolve_export(
+        &self,
+        _file: FileId,
+        _source: &str,
+        _name: &str,
+        _extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        crate::parsing::ExportResolution::Unknown
+    }
+
+    fn resolve_module_export(
+        &self,
+        _module: &str,
+        _name: &str,
+        _extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        crate::parsing::ExportResolution::Unknown
+    }
 }
 
 /// Result of multi-tier symbol resolution.

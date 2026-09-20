@@ -281,7 +281,27 @@ impl GoParser {
             }
             "package_clause" => {
                 self.register_node_recursively(node);
-                // Package name is handled by behavior module
+                if let Some(name) = node.named_child(0) {
+                    // A directory may contain both p and external-test p_test.
+                    // Persist the declaration so structural type identities do
+                    // not conflate those packages merely because paths match.
+                    symbols.push(self.create_symbol(
+                        counter.next_id(),
+                        code[name.byte_range()].to_string(),
+                        SymbolKind::Module,
+                        file_id,
+                        Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u32,
+                            node.end_position().row as u32,
+                            node.end_position().column as u32,
+                        ),
+                        Some(code[node.byte_range()].to_string()),
+                        None,
+                        module_path,
+                        Visibility::Module,
+                    ));
+                }
             }
             "import_declaration" => {
                 self.register_node_recursively(node);
@@ -452,9 +472,9 @@ impl GoParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -526,9 +546,9 @@ impl GoParser {
                     file_id,
                     Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     ),
                     Some(signature),
                     doc_comment,
@@ -583,9 +603,9 @@ impl GoParser {
                     file_id,
                     Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     ),
                     Some(signature),
                     doc_comment,
@@ -639,9 +659,9 @@ impl GoParser {
                     file_id,
                     Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     ),
                     Some(signature.to_string()),
                     doc_comment,
@@ -748,9 +768,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     field_node.start_position().row as u32,
-                    field_node.start_position().column as u16,
+                    field_node.start_position().column as u32,
                     field_node.end_position().row as u32,
-                    field_node.end_position().column as u16,
+                    field_node.end_position().column as u32,
                 ),
                 Some(signature),
                 None,
@@ -818,9 +838,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     method_node.start_position().row as u32,
-                    method_node.start_position().column as u16,
+                    method_node.start_position().column as u32,
                     method_node.end_position().row as u32,
-                    method_node.end_position().column as u16,
+                    method_node.end_position().column as u32,
                 ),
                 Some(signature.to_string()),
                 None,
@@ -857,9 +877,9 @@ impl GoParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -959,9 +979,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 ),
                 Some(signature),
                 None,
@@ -1032,9 +1052,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 ),
                 Some(signature),
                 None,
@@ -1090,9 +1110,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 ),
                 Some(signature),
                 None,
@@ -1157,9 +1177,9 @@ impl GoParser {
                         file_id,
                         Range::new(
                             child.start_position().row as u32,
-                            child.start_position().column as u16,
+                            child.start_position().column as u32,
                             child.end_position().row as u32,
-                            child.end_position().column as u16,
+                            child.end_position().column as u32,
                         ),
                         Some(signature),
                         None,
@@ -1224,9 +1244,9 @@ impl GoParser {
                         file_id,
                         Range::new(
                             child.start_position().row as u32,
-                            child.start_position().column as u16,
+                            child.start_position().column as u32,
                             child.end_position().row as u32,
-                            child.end_position().column as u16,
+                            child.end_position().column as u32,
                         ),
                         Some(signature),
                         None,
@@ -1303,9 +1323,9 @@ impl GoParser {
                 file_id,
                 Range::new(
                     range_node.start_position().row as u32,
-                    range_node.start_position().column as u16,
+                    range_node.start_position().column as u32,
                     range_node.end_position().row as u32,
-                    range_node.end_position().column as u16,
+                    range_node.end_position().column as u32,
                 ),
                 Some(signature),
                 None,
@@ -1339,20 +1359,9 @@ impl GoParser {
 
     /// Extract signature for struct types
     fn extract_struct_signature(&self, node: Node, code: &str) -> String {
-        let start = node.start_byte();
-        let mut end = node.end_byte();
-
-        // Find the struct body and exclude it, keeping only the header
-        if let Some(type_node) = node.child_by_field_name("type") {
-            if let Some(body) = type_node
-                .children(&mut type_node.walk())
-                .find(|n| n.kind() == "field_declaration_list")
-            {
-                end = body.start_byte();
-            }
-        }
-
-        code[start..end].trim().to_string()
+        // Embedded fields are part of a type's structural contract. Retain them
+        // so rebuilding method sets from the persisted index needs no file IO.
+        code[node.byte_range()].trim().to_string()
     }
 
     /// Extract signature for Go methods (with receiver)
@@ -1384,21 +1393,7 @@ impl GoParser {
 
     /// Extract interface signature for Go interfaces
     fn extract_interface_signature(&self, node: Node, code: &str) -> String {
-        let start = node.start_byte();
-        let mut end = node.end_byte();
-
-        // Find the interface body and exclude it, keeping only the declaration
-        if let Some(type_node) = node.child_by_field_name("type") {
-            if let Some(body_start) = type_node
-                .children(&mut type_node.walk())
-                .find(|n| n.kind() == "method_elem" || n.kind() == "type_elem")
-                .map(|n| n.start_byte())
-            {
-                end = body_start.saturating_sub(2); // Account for the opening brace
-            }
-        }
-
-        code[start..end].trim().to_string()
+        code[node.byte_range()].trim().to_string()
     }
 
     // Go uses implicit interface implementation (structural typing)
@@ -1541,26 +1536,31 @@ impl GoParser {
                 // Function literals might not have a name
                 current_function
             }
+        } else if current_function.is_none() && node.kind() == "var_spec" {
+            node.child_by_field_name("name")
+                .map(|n| &code[n.byte_range()])
         } else {
             current_function
         };
 
         // Check if this is a call expression
-        if node.kind() == "call_expression" {
-            // Skip if it's a method call (handled by find_method_calls)
-            if let Some(function_node) = node.child_by_field_name("function") {
-                if function_node.kind() != "selector_expression" {
-                    // It's a regular function call
-                    if let Some(fn_name) = Self::extract_function_name(&function_node, code) {
-                        if let Some(context) = function_context {
-                            let range = Range {
-                                start_line: node.start_position().row as u32,
-                                start_column: node.start_position().column as u16,
-                                end_line: node.end_position().row as u32,
-                                end_column: node.end_position().column as u16,
-                            };
-                            calls.push((context, fn_name, range));
-                        }
+        if let Some(function_node) = Self::call_callee(*node, code) {
+            if !Self::is_local_type_conversion(*node, function_node, code)
+                && !matches!(
+                    function_node.kind(),
+                    "selector_expression" | "qualified_type"
+                )
+            {
+                // It's a regular function call
+                if let Some(fn_name) = Self::extract_function_name(&function_node, code) {
+                    if let Some(context) = function_context {
+                        let range = Range {
+                            start_line: node.start_position().row as u32,
+                            start_column: node.start_position().column as u32,
+                            end_line: node.end_position().row as u32,
+                            end_column: node.end_position().column as u32,
+                        };
+                        calls.push((context, fn_name, range));
                     }
                 }
             }
@@ -1738,9 +1738,9 @@ impl GoParser {
         if let Some(type_name) = self.extract_go_type_name(type_node, code) {
             let range = Range::new(
                 type_node.start_position().row as u32,
-                type_node.start_position().column as u16,
+                type_node.start_position().column as u32,
                 type_node.end_position().row as u32,
-                type_node.end_position().column as u16,
+                type_node.end_position().column as u32,
             );
             uses.push((context_name, type_name, range));
         }
@@ -1818,9 +1818,9 @@ impl GoParser {
                             let method_name = &code[name_node.byte_range()];
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             );
                             defines.push((interface_name, method_name, range));
                         }
@@ -1843,9 +1843,9 @@ impl GoParser {
 
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     defines.push((receiver_type, method_name, range));
                 }
@@ -1880,37 +1880,43 @@ impl GoParser {
             } else {
                 current_function
             }
+        } else if current_function.is_none() && node.kind() == "var_spec" {
+            node.child_by_field_name("name")
+                .map(|n| &code[n.byte_range()])
         } else {
             current_function
         };
 
         // Check for method calls (Go uses selector_expression)
-        if node.kind() == "call_expression" {
-            if let Some(function_node) = node.child_by_field_name("function") {
-                if function_node.kind() == "selector_expression" {
-                    // It's a method call!
-                    if let Some((receiver, method_name, is_static)) =
-                        self.extract_go_method_signature(&function_node, code, package_names)
-                    {
-                        if let Some(context) = function_context {
-                            let range = Range {
-                                start_line: node.start_position().row as u32,
-                                start_column: node.start_position().column as u16,
-                                end_line: node.end_position().row as u32,
-                                end_column: node.end_position().column as u16,
-                            };
+        if let Some(function_node) = Self::call_callee(*node, code) {
+            if !Self::is_local_type_conversion(*node, function_node, code)
+                && matches!(
+                    function_node.kind(),
+                    "selector_expression" | "qualified_type"
+                )
+            {
+                // It's a method call!
+                if let Some((receiver, method_name, is_static)) =
+                    self.extract_go_method_signature(&function_node, code, package_names)
+                {
+                    if let Some(context) = function_context {
+                        let range = Range {
+                            start_line: node.start_position().row as u32,
+                            start_column: node.start_position().column as u32,
+                            end_line: node.end_position().row as u32,
+                            end_column: node.end_position().column as u32,
+                        };
 
-                            let method_call = MethodCall {
-                                caller: context.to_string(),
-                                method_name: method_name.to_string(),
-                                receiver: receiver.map(|r| r.to_string()),
-                                is_static,
-                                range,
-                                caller_range: None, // TODO: track caller definition range
-                            };
+                        let method_call = MethodCall {
+                            caller: context.to_string(),
+                            method_name: method_name.to_string(),
+                            receiver: receiver.map(|r| r.to_string()),
+                            is_static,
+                            range,
+                            caller_range: None, // TODO: track caller definition range
+                        };
 
-                            calls.push(method_call);
-                        }
+                        calls.push(method_call);
                     }
                 }
             }
@@ -1936,8 +1942,12 @@ impl GoParser {
         package_names: &HashSet<String>,
     ) -> Option<(Option<&'a str>, &'a str, bool)> {
         // selector_expression has 'operand' and 'field' fields
-        let operand = selector_expr.child_by_field_name("operand");
-        let field = selector_expr.child_by_field_name("field");
+        let operand = selector_expr
+            .child_by_field_name("operand")
+            .or_else(|| selector_expr.child_by_field_name("package"));
+        let field = selector_expr
+            .child_by_field_name("field")
+            .or_else(|| selector_expr.child_by_field_name("name"));
 
         match (operand, field) {
             (Some(obj), Some(prop)) => {
@@ -1945,7 +1955,8 @@ impl GoParser {
                 let method_name = &code[prop.byte_range()];
 
                 // Receiver matching a known import name ⇒ package-qualified call.
-                let is_static = package_names.contains(receiver);
+                let is_static = package_names.contains(receiver)
+                    && !Self::receiver_is_shadowed(*selector_expr, receiver, code);
 
                 Some((Some(receiver), method_name, is_static))
             }
@@ -1995,13 +2006,203 @@ impl GoParser {
 
     fn extract_function_name<'a>(node: &tree_sitter::Node, code: &'a str) -> Option<&'a str> {
         match node.kind() {
-            "identifier" => Some(&code[node.byte_range()]),
-            "selector_expression" => {
+            "identifier" | "type_identifier" => Some(&code[node.byte_range()]),
+            "selector_expression" | "qualified_type" => {
                 // For qualified function calls like pkg.Function()
                 Some(&code[node.byte_range()])
             }
             _ => None,
         }
+    }
+
+    /// Tree-sitter parses generic applications as either index expressions
+    /// or conversion expressions. Keep the callee and let symbol kind reject
+    /// conversions to indexed types during resolution.
+    fn call_callee<'tree>(node: Node<'tree>, code: &str) -> Option<Node<'tree>> {
+        let mut callee = match node.kind() {
+            "call_expression" => node.child_by_field_name("function")?,
+            "type_conversion_expression" => {
+                let ty = node.child_by_field_name("type")?;
+                if ty.kind() != "generic_type" {
+                    return None;
+                }
+                let base = ty.child_by_field_name("type")?;
+                let root = base.child_by_field_name("package").unwrap_or(base);
+                if Self::receiver_is_shadowed(node, &code[root.byte_range()], code) {
+                    // One-argument calls through indexed values share this
+                    // grammar shape with generic calls. A local value binding
+                    // rules out an uninstantiated generic function/package.
+                    return None;
+                }
+                ty
+            }
+            _ => return None,
+        };
+        loop {
+            callee = match callee.kind() {
+                "index_expression" => {
+                    let operand = callee.child_by_field_name("operand")?;
+                    let index = callee.child_by_field_name("index")?;
+                    if !Self::is_generic_application(node, operand, index, code) {
+                        return None;
+                    }
+                    operand
+                }
+                "generic_type" => callee.child_by_field_name("type")?,
+                _ => return Some(callee),
+            };
+        }
+    }
+
+    fn is_generic_application(site: Node, operand: Node, index: Node, code: &str) -> bool {
+        // An indexed callable value is not a call to its container variable.
+        // The index-expression grammar is ambiguous with type application;
+        // require declaration/type evidence before unwrapping it.
+        if matches!(
+            index.kind(),
+            "int_literal"
+                | "float_literal"
+                | "interpreted_string_literal"
+                | "raw_string_literal"
+                | "binary_expression"
+                | "call_expression"
+        ) {
+            return false;
+        }
+        let mut root = site;
+        while let Some(parent) = root.parent() {
+            root = parent;
+        }
+        if operand.kind() == "identifier" {
+            let name = &code[operand.byte_range()];
+            if Self::receiver_is_shadowed(site, name, code) {
+                return false;
+            }
+            return root.named_children(&mut root.walk()).any(|n| {
+                n.kind() == "function_declaration"
+                    && n.child_by_field_name("type_parameters").is_some()
+                    && n.child_by_field_name("name")
+                        .is_some_and(|id| &code[id.byte_range()] == name)
+            });
+        }
+        if operand.kind() == "selector_expression" {
+            let Some(package) = operand
+                .child_by_field_name("operand")
+                .filter(|n| n.kind() == "identifier")
+            else {
+                return false;
+            };
+            let package = &code[package.byte_range()];
+            let mut packages = HashSet::new();
+            Self::collect_go_package_names(root, code, &mut packages);
+            if !packages.contains(package) || Self::receiver_is_shadowed(site, package, code) {
+                return false;
+            }
+            let argument = &code[index.byte_range()];
+            return index.kind() == "identifier"
+                && matches!(
+                    argument,
+                    "bool"
+                        | "byte"
+                        | "rune"
+                        | "int"
+                        | "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "uint"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "uintptr"
+                        | "float32"
+                        | "float64"
+                        | "complex64"
+                        | "complex128"
+                        | "string"
+                        | "error"
+                        | "any"
+                )
+                && !Self::receiver_is_shadowed(site, argument, code);
+        }
+        false
+    }
+
+    fn is_local_type_conversion(node: Node, callee: Node, code: &str) -> bool {
+        if node.kind() != "type_conversion_expression" || callee.kind() != "type_identifier" {
+            return false;
+        }
+        let name = &code[callee.byte_range()];
+        let mut root = node;
+        while let Some(parent) = root.parent() {
+            root = parent;
+        }
+        fn declared(node: Node, name: &str, code: &str) -> bool {
+            if matches!(node.kind(), "type_spec" | "type_alias")
+                && node
+                    .child_by_field_name("name")
+                    .is_some_and(|n| &code[n.byte_range()] == name)
+            {
+                return true;
+            }
+            node.named_children(&mut node.walk())
+                .any(|n| declared(n, name, code))
+        }
+        declared(root, name, code)
+    }
+
+    fn receiver_is_shadowed(site: Node, receiver: &str, code: &str) -> bool {
+        fn declares(node: Node, receiver: &str, code: &str, before: usize, top: bool) -> bool {
+            if !top
+                && matches!(
+                    node.kind(),
+                    "block" | "function_declaration" | "method_declaration" | "func_literal"
+                )
+            {
+                return false;
+            }
+            if node.end_byte() <= before {
+                if matches!(node.kind(), "var_spec" | "parameter_declaration") {
+                    let mut cursor = node.walk();
+                    if node
+                        .children_by_field_name("name", &mut cursor)
+                        .any(|n| &code[n.byte_range()] == receiver)
+                    {
+                        return true;
+                    }
+                }
+                if node.kind() == "short_var_declaration" {
+                    if let Some(left) = node.child_by_field_name("left") {
+                        if left
+                            .named_children(&mut left.walk())
+                            .any(|n| n.kind() == "identifier" && &code[n.byte_range()] == receiver)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            node.named_children(&mut node.walk())
+                .any(|n| declares(n, receiver, code, before, false))
+        }
+        let mut scope = site.parent();
+        while let Some(node) = scope {
+            if matches!(
+                node.kind(),
+                "block"
+                    | "if_statement"
+                    | "for_statement"
+                    | "function_declaration"
+                    | "method_declaration"
+                    | "func_literal"
+            ) && declares(node, receiver, code, site.start_byte(), true)
+            {
+                return true;
+            }
+            scope = node.parent();
+        }
+        false
     }
 
     /// Extract generic type parameters from a signature
@@ -2082,16 +2283,21 @@ impl GoParser {
                 }
             }
             "var_spec" => {
-                if let Some(type_node) = node.child_by_field_name("type") {
-                    if let Some(type_name) = Self::reduce_type_name(type_node, code) {
-                        let mut cursor = node.walk();
-                        for child in node.children(&mut cursor) {
-                            if child.kind() == "identifier" {
-                                bindings.push((
-                                    &code[child.byte_range()],
-                                    type_name,
-                                    Self::range_of(node),
-                                ));
+                let mut cursor = node.walk();
+                let names: Vec<_> = node.children_by_field_name("name", &mut cursor).collect();
+                if let Some(type_name) = node
+                    .child_by_field_name("type")
+                    .and_then(|ty| Self::reduce_type_name(ty, code))
+                {
+                    for name in names {
+                        bindings.push((&code[name.byte_range()], type_name, Self::range_of(node)));
+                    }
+                } else if let Some(value) = node.child_by_field_name("value") {
+                    let values = Self::expression_list_children(value);
+                    if names.len() == values.len() {
+                        for (name, value) in names.into_iter().zip(values) {
+                            if let Some(ty) = Self::composite_literal_type(value, code) {
+                                bindings.push((&code[name.byte_range()], ty, Self::range_of(node)));
                             }
                         }
                     }
@@ -2143,6 +2349,7 @@ impl GoParser {
             "qualified_type" => node
                 .child_by_field_name("name")
                 .map(|name| &code[name.byte_range()]),
+            "generic_type" => Self::reduce_type_name(node.child_by_field_name("type")?, code),
             _ => None,
         }
     }
@@ -2150,9 +2357,9 @@ impl GoParser {
     fn range_of(node: Node) -> Range {
         Range::new(
             node.start_position().row as u32,
-            node.start_position().column as u16,
+            node.start_position().column as u32,
             node.end_position().row as u32,
-            node.end_position().column as u16,
+            node.end_position().column as u32,
         )
     }
 }

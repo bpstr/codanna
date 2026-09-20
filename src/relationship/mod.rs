@@ -27,7 +27,7 @@ pub struct Relationship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RelationshipMetadata {
     pub line: Option<u32>,
-    pub column: Option<u16>,
+    pub column: Option<u32>,
     pub context: Option<Box<str>>,
     pub receiver: Option<Box<str>>,
     pub static_call: bool,
@@ -116,7 +116,7 @@ impl RelationshipMetadata {
         Self::default()
     }
 
-    pub fn at_position(mut self, line: u32, column: u16) -> Self {
+    pub fn at_position(mut self, line: u32, column: u32) -> Self {
         self.line = Some(line);
         self.column = Some(column);
         self

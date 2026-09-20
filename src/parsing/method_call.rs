@@ -270,7 +270,7 @@ impl MethodCallResolver {
         caller: &str,
         method_name: &str,
         line: u32,
-        column: u16,
+        column: u32,
     ) -> bool {
         self.method_calls.iter().any(|mc| {
             mc.caller == caller

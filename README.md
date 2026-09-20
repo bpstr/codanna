@@ -54,6 +54,20 @@ codanna mcp semantic_search_with_context query:"recursively extract function cal
 
 `codanna mcp semantic_search_with_context` is the headline command: it returns N semantic matches, and for each match the symbol identity, signature, docstring, callees, callers, and recursive impact analysis — five MCP tools fused into one query.
 
+Exact symbol listings return up to 100 matches by default. Use `limit:1..1000` and `offset:0..` to page through common names. Language filtering and `Type.member` qualification apply before pagination, so a member stays reachable even when more than 100 other types use its name. `lang` also applies to direct `symbol_id` lookup.
+
+```bash
+codanna mcp find_symbol name:save limit:100 offset:0 --json
+codanna mcp find_symbol name:save limit:100 offset:100 --json
+codanna mcp find_symbol name:Invoice.save lang:python
+```
+
+CLI JSON keeps the existing result array and adds `meta.total`, `meta.offset`, `meta.limit`, `meta.next_offset` (when another page exists), and `meta.truncated`. MCP returns the same page information under `structuredContent.pagination`, with `returned` indicating the page size. Results use source-location order; restart pagination after the index changes. An empty page beyond the end still reports the complete match count.
+
+Contextual semantic search retains its matches when a popular symbol exceeds the impact budget. Per-function `impact.status` is `complete`, `budget_exceeded`, or `unavailable`; only a completed traversal has a `count`. MCP exposes these records under `structuredContent.impact`, and CLI JSON includes `impact` on each function result. Standalone `analyze_impact` continues to report a budget error explicitly. Lexical search treats rejected query syntax as an analyzed literal phrase, so pasted qualified names such as `std::collections::HashMap` can match signatures. Invalid search limits and backend query failures are errors, not “no results.”
+
+In JavaScript and TypeScript, passing a resolved function as an argument, such as `router.get('/health', handle)`, records a `References` relationship with the argument's source location. Find registrations and their dependents with `codanna mcp analyze_impact symbol_name:handle`; inspect source evidence with `codanna retrieve describe handle --json` under `relationships.referenced_by`. Describing the registering function exposes `relationships.references`. `get_calls` and `find_callers` continue to report explicit invocations, while dependency and impact queries also traverse references.
+
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.
 
 ## What one call returns
@@ -148,6 +162,21 @@ codanna documents add-collection docs ./docs
 codanna documents index
 codanna mcp search_documents query:"authentication flow"
 ```
+
+Document indexing and every document query use the configured `semantic_search`
+backend, model and dimensions. With `semantic_search.enabled = false`, documents
+use lexical search over their text and headings without loading an embedding
+model. Queries read the indexed snapshot; run `codanna documents index` to refresh
+it, or use the persistent server's document watcher. Collection overrides also
+apply to watcher updates, including new files and recreated directories.
+
+`documents index --force` replaces the selected collections while preserving other
+collections' source tracking. A source can belong to one collection; overlapping
+collections fail explicitly. Changed content and chunking settings invalidate the
+stored chunks even when modification timestamps are unchanged. Persisted vectors
+record their backend/model identity; changing that identity requires a fresh
+document index. See [the document embedding review](contributing/retrieval/adversarial/document-embedding-review.md)
+for regression scenarios, migration limits and remaining improvements.
 
 Inspect indexing from another terminal without loading an embedding model:
 

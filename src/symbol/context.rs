@@ -40,6 +40,18 @@ pub struct SymbolRelationships {
     /// What calls this symbol (with relationship metadata including call site location)
     #[serde(serialize_with = "serialize_call_edges")]
     pub called_by: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
+    /// Symbols referenced as values, including callback registration arguments.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_call_edges"
+    )]
+    pub references: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
+    /// Symbols that refer to this symbol as a value, with reference-site metadata.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_call_edges"
+    )]
+    pub referenced_by: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
 }
 
 /// `relationshipMetadata.line` is 1-indexed at the JSON boundary like every
@@ -76,7 +88,8 @@ bitflags! {
         const CALLERS       = 0b00001000;
         const EXTENDS       = 0b00010000;
         const USES          = 0b00100000;
-        const ALL           = 0b00111111;
+        const REFERENCES    = 0b01000000;
+        const ALL           = 0b01111111;
         /// The symbol-card set: every kind the card surfaces render.
         /// All surfaces presenting `SymbolRelationships` request this one
         /// set — per-surface subsets leave fields null on one rendering
@@ -85,7 +98,8 @@ bitflags! {
             | Self::DEFINITIONS.bits()
             | Self::CALLERS.bits()
             | Self::EXTENDS.bits()
-            | Self::USES.bits();
+            | Self::USES.bits()
+            | Self::REFERENCES.bits();
     }
 }
 
@@ -134,6 +148,7 @@ impl SymbolContext {
         self.append_header(&mut output, indent);
         self.append_metadata(&mut output, indent);
         self.append_relationships(&mut output, indent);
+        self.append_references(&mut output, indent);
         output
     }
 
@@ -383,6 +398,49 @@ impl SymbolContext {
                     }
                     output.push('\n');
                 }
+            }
+        }
+    }
+
+    fn append_references(&self, output: &mut String, indent: &str) {
+        for (label, edges, incoming) in [
+            ("References", &self.relationships.references, false),
+            ("Referenced by", &self.relationships.referenced_by, true),
+        ] {
+            let Some(edges) = edges.as_ref().filter(|edges| !edges.is_empty()) else {
+                continue;
+            };
+            output.push_str(&format!("{indent}{label} {} symbol(s):\n", edges.len()));
+            for (symbol, metadata) in edges {
+                let reference_line = metadata.as_ref().and_then(|metadata| metadata.line);
+                let location = if incoming {
+                    reference_line
+                        .map(|line| format!("{}:{}", symbol.file_path, line.saturating_add(1)))
+                        .unwrap_or_else(|| Self::symbol_location(symbol))
+                } else {
+                    Self::symbol_location(symbol)
+                };
+                output.push_str(&format!(
+                    "{indent}  - {} ({:?}) at {location} [symbol_id:{}]",
+                    symbol.name,
+                    symbol.kind,
+                    symbol.id.value()
+                ));
+                if !incoming && let Some(line) = reference_line {
+                    output.push_str(&format!(
+                        " (referenced at {}:{})",
+                        self.symbol.file_path,
+                        line.saturating_add(1)
+                    ));
+                }
+                if let Some(context) = metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.context.as_deref())
+                    && !context.is_empty()
+                {
+                    output.push_str(&format!(" [{context}]"));
+                }
+                output.push('\n');
             }
         }
     }

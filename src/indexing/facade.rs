@@ -42,6 +42,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Result type for facade operations
 pub type FacadeResult<T> = Result<T, IndexError>;
 
+#[cfg(test)]
+#[path = "facade_retrieval_tests.rs"]
+mod retrieval_context_regressions;
+
 /// A hydrated adjacent symbol and its optional edge metadata.
 pub type GraphNeighbor = (Symbol, Option<crate::relationship::RelationshipMetadata>);
 /// Visible neighbors followed by the total matching edge count.
@@ -528,6 +532,24 @@ impl IndexFacade {
             .unwrap_or_default()
     }
 
+    /// Get referenced symbols, including callback arguments, with source evidence.
+    pub fn get_references_with_metadata(
+        &self,
+        symbol_id: SymbolId,
+    ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
+        self.graph_neighbors(symbol_id, RelationKind::References, false, None)
+            .unwrap_or_default()
+    }
+
+    /// Get symbols that reference this symbol, retaining reference-site metadata.
+    pub fn get_referenced_by_with_metadata(
+        &self,
+        symbol_id: SymbolId,
+    ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
+        self.graph_neighbors(symbol_id, RelationKind::References, true, None)
+            .unwrap_or_default()
+    }
+
     /// Get implementations of a trait/interface.
     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol> {
         self.graph_neighbors(trait_id, RelationKind::Implements, true, None)
@@ -592,6 +614,7 @@ impl IndexFacade {
         // Get outgoing relationships
         for kind in &[
             RelationKind::Calls,
+            RelationKind::References,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -605,6 +628,7 @@ impl IndexFacade {
         // Get incoming relationships
         for kind in &[
             RelationKind::Calls,
+            RelationKind::References,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -677,6 +701,17 @@ impl IndexFacade {
             }
         }
 
+        if include.contains(ContextIncludes::REFERENCES) {
+            let references = self.get_references_with_metadata(symbol_id);
+            if !references.is_empty() {
+                relationships.references = Some(references);
+            }
+            let referenced_by = self.get_referenced_by_with_metadata(symbol_id);
+            if !referenced_by.is_empty() {
+                relationships.referenced_by = Some(referenced_by);
+            }
+        }
+
         if include.contains(ContextIncludes::EXTENDS) {
             let extends = self.get_extends(symbol_id);
             if !extends.is_empty() {
@@ -712,6 +747,7 @@ impl IndexFacade {
 
         for kind in &[
             RelationKind::Calls,
+            RelationKind::References,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Defines,
@@ -736,6 +772,7 @@ impl IndexFacade {
 
         for kind in &[
             RelationKind::Calls,
+            RelationKind::References,
             RelationKind::Uses,
             RelationKind::Implements,
         ] {
@@ -1011,6 +1048,7 @@ impl IndexFacade {
     /// Add a directory to tracked indexed paths.
     pub fn add_indexed_path(&mut self, dir_path: &Path) {
         if let Ok(canonical) = dir_path.canonicalize() {
+            self.pipeline.register_dependency_root(&canonical);
             // Skip if already covered by an existing parent directory
             let already_covered = self
                 .indexed_paths
@@ -1025,6 +1063,7 @@ impl IndexFacade {
                 .retain(|p| !p.starts_with(&canonical) || *p == canonical);
             self.indexed_paths.insert(canonical);
         } else {
+            self.pipeline.register_dependency_root(dir_path);
             self.indexed_paths.insert(dir_path.to_path_buf());
         }
     }
@@ -1036,6 +1075,9 @@ impl IndexFacade {
 
     /// Update indexed paths from a vector.
     pub fn set_indexed_paths(&mut self, paths: Vec<PathBuf>) {
+        for path in &paths {
+            self.pipeline.register_dependency_root(path);
+        }
         self.indexed_paths = paths.into_iter().collect();
     }
 
@@ -1444,20 +1486,25 @@ impl IndexFacade {
         use crate::indexing::pipeline::PendingResolution;
         use crate::indexing::progress::IndexStats;
 
-        let mut pending = PendingResolution::default();
+        let mut pending = if max_files.is_some() {
+            PendingResolution::bounded_inventory()
+        } else {
+            PendingResolution::default()
+        };
         let mut all_stats = Vec::with_capacity(dirs.len());
+        let mut remaining = max_files;
+        let mut admitted = HashSet::new();
 
         for dir in dirs {
             let dir = &Self::canonical_or_raw(dir);
             let walker = FileWalker::new(Arc::clone(&self.settings));
-            let files = walker.walk(dir).collect::<crate::IndexResult<Vec<_>>>()?;
-
-            // Apply max_files limit if specified
-            let files = if let Some(max) = max_files {
-                files.into_iter().take(max).collect()
-            } else {
-                files
-            };
+            let mut files = walker.walk(dir).collect::<crate::IndexResult<Vec<_>>>()?;
+            files.sort();
+            if let Some(remaining) = remaining.as_mut() {
+                files.retain(|path| admitted.insert(path.clone()));
+                files.truncate(*remaining);
+                *remaining -= files.len();
+            }
 
             let total_files = files.len();
 
@@ -1489,6 +1536,30 @@ impl IndexFacade {
                 if let Err(e) = self.ensure_embedding_pool() {
                     tracing::warn!("Failed to initialize embedding pool: {e}");
                 }
+            }
+
+            if max_files.is_some() {
+                // A bounded inventory is not deletion evidence. Consume exactly
+                // the admitted files and resolve once after all roots; never
+                // rewalk the root or expand into additional importer files.
+                let mut stats = IndexStats::new();
+                for file in files {
+                    let result = self.pipeline.index_selected_file(
+                        &file,
+                        dir,
+                        Arc::clone(&self.document_index),
+                        self.semantic_search.clone(),
+                        self.embedding_pool.get().cloned(),
+                        force,
+                        &mut pending,
+                    )?;
+                    stats.files_indexed += usize::from(result.indexed);
+                    stats.symbols_found += result.symbols_found;
+                    stats.elapsed += result.elapsed;
+                }
+                self.add_indexed_path(dir);
+                all_stats.push(stats);
+                continue;
             }
 
             // Phase 1 only; resolution is deferred until every root walked

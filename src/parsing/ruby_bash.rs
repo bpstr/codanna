@@ -81,9 +81,9 @@ impl LightweightParser {
     fn range(node: Node<'_>) -> Range {
         Range::new(
             node.start_position().row as u32,
-            node.start_position().column as u16,
+            node.start_position().column as u32,
             node.end_position().row as u32,
-            node.end_position().column as u16,
+            node.end_position().column as u32,
         )
     }
 

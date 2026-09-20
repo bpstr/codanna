@@ -37,6 +37,9 @@ pub struct ResolveStage {
     /// `UnresolvedRelationship`s by CONTEXT stage; absent ⇒ fall back to
     /// empty `GenericInheritanceResolver` (`parent_of` yields `None`).
     inheritance_resolvers: HashMap<LanguageId, Arc<dyn InheritanceResolver>>,
+    /// Class identity -> ordered parent identities. None records an unresolved
+    /// base, which must not silently disappear from Python's MRO.
+    class_parents: HashMap<SymbolId, Option<Vec<SymbolId>>>,
 }
 
 /// Statistics from resolution.
@@ -68,6 +71,7 @@ impl ResolveStage {
             symbol_cache,
             behaviors,
             inheritance_resolvers: HashMap::new(),
+            class_parents: HashMap::new(),
         }
     }
 
@@ -80,6 +84,78 @@ impl ResolveStage {
     ) -> Self {
         self.inheritance_resolvers = resolvers;
         self
+    }
+
+    /// Capture cross-file class identity before consuming the contexts. This
+    /// keeps same-named classes in different modules isolated and preserves
+    /// the declared base-list order instead of ranking graph distances.
+    pub fn with_resolution_contexts(mut self, contexts: &[ResolutionContext]) -> Self {
+        for context in contexts {
+            for &id in &context.local_symbols {
+                if self
+                    .symbol_cache
+                    .get_ref(id)
+                    .is_some_and(|s| s.kind == crate::SymbolKind::Class)
+                {
+                    self.class_parents
+                        .insert(id, self.parent_identities(id, context));
+                }
+            }
+        }
+        self
+    }
+
+    /// Seed immutable parent identities for unchanged files before current
+    /// contexts overlay the files being re-resolved.
+    pub fn with_class_parents(mut self, parents: HashMap<SymbolId, Option<Vec<SymbolId>>>) -> Self {
+        self.class_parents = parents;
+        self
+    }
+
+    fn parent_identities(
+        &self,
+        class_id: SymbolId,
+        context: &ResolutionContext,
+    ) -> Option<Vec<SymbolId>> {
+        let class = self.symbol_cache.get_ref(class_id)?;
+        if class.file_id != context.file_id {
+            return None;
+        }
+        let language = class.language_id?;
+        let caller = CallerContext::new(
+            class.file_id,
+            class.module_path.clone(),
+            language,
+            self.get_behavior(&language)?.module_separator(),
+        );
+        let mut parents = Vec::new();
+        if language.as_str() == "python" {
+            // Dynamic or incomplete base expressions cannot be omitted from C3.
+            if let Some(signature) = class.signature.as_deref() {
+                crate::parsing::python::resolution::declared_bases(signature)?;
+            }
+        }
+        for rel in &context.unresolved_rels {
+            if rel.kind != RelationKind::Extends || rel.from_id != Some(class_id) {
+                continue;
+            }
+            let parent = self.resolve_parent_class(&rel.to_name, context, &caller);
+            if parent.is_none() && language.as_str() == "python" && rel.to_name.as_ref() == "object"
+            {
+                continue;
+            }
+            parents.push(parent?);
+        }
+        Some(parents)
+    }
+
+    fn python_mro(&self, class_id: SymbolId, context: &ResolutionContext) -> Option<Vec<SymbolId>> {
+        crate::parsing::python::resolution::c3_linearization(class_id, |id| {
+            self.class_parents
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| self.parent_identities(*id, context))
+        })
     }
 
     /// Get behavior for a language, if available.
@@ -150,6 +226,115 @@ impl ResolveStage {
         let from_kind = caller_symbol.as_deref().map(|sym| sym.kind);
         drop(caller_symbol);
 
+        if unresolved.kind == RelationKind::Extends && caller.language_id.as_str() == "python" {
+            let to_id = self.resolve_parent_class(&unresolved.to_name, context, &caller)?;
+            return Some(ResolvedRelationship {
+                from_id,
+                to_id,
+                kind: unresolved.kind,
+                metadata: unresolved.metadata.clone(),
+            });
+        }
+
+        if unresolved.kind == RelationKind::Calls {
+            let receiver = unresolved
+                .metadata
+                .as_ref()
+                .and_then(|m| m.receiver.as_deref())
+                .and_then(|name| name.split('.').next());
+            if std::iter::once(unresolved.to_name.as_ref())
+                .chain(receiver)
+                .any(|name| {
+                    context
+                        .scope
+                        .import_binding(name)
+                        .is_some_and(|binding| binding.import.is_type_only)
+                })
+            {
+                return None;
+            }
+        }
+
+        // Namespace receivers name module export slots, not class instances.
+        // Preserve the full import identity through aliases and barrel chains
+        // before the ordinary member-resolution ladder considers class methods.
+        if unresolved.kind == RelationKind::Calls
+            && matches!(caller.language_id.as_str(), "typescript" | "javascript")
+        {
+            if let Some(receiver) = unresolved
+                .metadata
+                .as_ref()
+                .and_then(|m| m.receiver.as_deref())
+            {
+                let (root, nested) = receiver
+                    .split_once('.')
+                    .map_or((receiver, None), |(root, nested)| (root, Some(nested)));
+                if let Some(binding) = context.scope.import_binding(root) {
+                    let member = nested.map_or_else(
+                        || unresolved.to_name.to_string(),
+                        |nested| format!("{nested}.{}", unresolved.to_name),
+                    );
+                    let slot = if binding.import.is_glob {
+                        member
+                    } else {
+                        format!(
+                            "{}.{}",
+                            binding.import.imported_name.as_deref().unwrap_or(root),
+                            member
+                        )
+                    };
+                    let extensions: &[&str] = if caller.language_id.as_str() == "typescript" {
+                        &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
+                    } else {
+                        &["js", "jsx", "mjs", "cjs"]
+                    };
+                    use crate::parsing::ExportResolution;
+                    let mut target = self.symbol_cache.resolve_export(
+                        context.file_id,
+                        &binding.import.path,
+                        &slot,
+                        extensions,
+                    );
+                    if target == ExportResolution::Unknown {
+                        if let Some(enhanced) = context
+                            .imports
+                            .iter()
+                            .find(|import| import.alias.as_deref() == Some(root))
+                        {
+                            target = self.symbol_cache.resolve_module_export(
+                                &enhanced.path,
+                                &slot,
+                                extensions,
+                            );
+                        }
+                    }
+                    match target {
+                        ExportResolution::Found(to_id) => {
+                            if self.is_compatible(
+                                from_kind,
+                                to_id,
+                                unresolved.kind,
+                                caller.file_id,
+                                &caller.language_id,
+                            ) {
+                                return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
+                            }
+                            return None;
+                        }
+                        ExportResolution::TypeOnly(_) => return None,
+                        _ if binding.import.is_glob
+                            || (binding.resolved_symbol.is_none()
+                                && binding.origin
+                                    == crate::parsing::resolution::ImportOrigin::Internal) =>
+                        {
+                            return None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         // `super()` receivers name a target the index already holds:
         // enclosing class -> Extends -> parent member. Handled before the
         // scope lookup, which would surface the same-name override (the
@@ -192,6 +377,9 @@ impl ResolveStage {
             {
                 return Some(resolved);
             }
+            if caller.language_id.as_str() == "python" {
+                return None;
+            }
         }
 
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
@@ -208,14 +396,16 @@ impl ResolveStage {
             }
         }
 
-        // A recorded unresolved relative import is negative evidence:
-        // the source explicitly names a local module, so falling through to
+        // A recorded unresolved internal import is negative evidence:
+        // the source explicitly names a repository module, so falling through to
         // global same-name candidates can fabricate a cross-repository edge.
         if context
             .scope
             .import_binding(&unresolved.to_name)
             .is_some_and(|binding| {
-                binding.resolved_symbol.is_none() && binding.import.path.starts_with('.')
+                binding.resolved_symbol.is_none()
+                    && (binding.import.path.starts_with('.')
+                        || binding.origin == crate::parsing::resolution::ImportOrigin::Internal)
             })
         {
             return None;
@@ -538,9 +728,10 @@ impl ResolveStage {
     }
 
     /// Type of the last in-scope binding of `receiver` before the call site.
-    /// A binding counts when it sits inside the caller's span, precedes the
-    /// call, and is not enclosed by a narrower function-like symbol (a
-    /// nested def's locals do not leak outward).
+    /// A binding counts when it sits inside the caller's span and precedes the
+    /// call, or records the typed receiver prefix of that call. It must not be
+    /// enclosed by a narrower function-like symbol (a nested def's locals do
+    /// not leak outward).
     fn binding_type_at_call_site(
         &self,
         unresolved: &UnresolvedRelationship,
@@ -551,9 +742,16 @@ impl ResolveStage {
         let call_site = unresolved.to_range.as_ref()?;
         let mut best: Option<&crate::indexing::pipeline::VariableBinding> = None;
         for binding in &context.variable_bindings {
+            // Declared field types are attached to the actual receiver span.
+            // Its start equals the call's start; the shorter contained range
+            // distinguishes that evidence from a whole declaration/call span.
+            let is_receiver_prefix = binding.range.start_line == call_site.start_line
+                && binding.range.start_column == call_site.start_column
+                && binding.range != *call_site
+                && range_contains(call_site, &binding.range);
             if binding.name != receiver
                 || !range_contains(&caller.range, &binding.range)
-                || !starts_before(&binding.range, call_site)
+                || !(starts_before(&binding.range, call_site) || is_receiver_prefix)
                 || self.binding_in_narrower_scope(&binding.range, caller, context)
             {
                 continue;
@@ -737,6 +935,13 @@ impl ResolveStage {
                 }
             }
         }
+        if language_id.as_str() == "python" {
+            let order = self.python_mro(anchor?, context)?;
+            return order.into_iter().enumerate().find_map(|(rank, class_id)| {
+                (self.direct_method_of(class_id, candidate.name.as_ref()) == Some(candidate.id))
+                    .then_some(rank)
+            });
+        }
         // Ancestor hops are identity-grade: the receiver type must resolve
         // to a Class through THIS file's scope, and each hop follows that
         // class's own Extends edges with scope-resolved parents. Bare-name
@@ -857,12 +1062,9 @@ impl ResolveStage {
                 .is_some_and(|m| !m.static_call && m.receiver.as_deref() == Some("super()"))
     }
 
-    /// Resolve `super().method()` through the parent chain: the caller's
-    /// enclosing class, its Extends targets in base-list order, and the
-    /// first parent declaring a same-name method as a DIRECT member
-    /// (`is_direct_member` — not mere containment in the parent's span).
-    /// Single hop — a parent that resolves but does not declare the
-    /// member fails closed rather than walking a cross-file chain.
+    /// Resolve `super().method()` after the enclosing class in its C3 MRO,
+    /// taking the first direct declaration. Ordered identity evidence can
+    /// cross files; missing bases, cycles, and inconsistent MROs fail closed.
     fn resolve_super_call(
         &self,
         from_id: SymbolId,
@@ -877,27 +1079,11 @@ impl ResolveStage {
 
         let class_id = self.innermost_enclosing_class(file_id, caller_range)?;
 
-        for rel in &context.unresolved_rels {
-            if rel.kind != RelationKind::Extends || rel.from_id != Some(class_id) {
-                continue;
-            }
-            // Same lookup the Extends edge itself resolves through: the
-            // scope has the file's import bindings (e.g. `from .main
-            // import BaseModel`). A scope miss skips the base — parents
-            // reachable only via Tier 3 under-resolve, never mis-resolve.
-            let Some(parent_id) = context.resolve(&rel.to_name) else {
-                continue;
-            };
-            let Some(parent) = self.symbol_cache.get_ref(parent_id) else {
-                continue;
-            };
-            if parent.kind != crate::SymbolKind::Class
-                || parent.language_id.as_ref() != Some(&caller.language_id)
-            {
-                continue;
-            }
-            drop(parent);
-
+        if caller.language_id.as_str() != "python" {
+            return None;
+        }
+        let order = self.python_mro(class_id, context)?;
+        for parent_id in order.into_iter().skip(1) {
             if let Some(to_id) = self.direct_method_of(parent_id, &unresolved.to_name) {
                 return Some(ResolvedRelationship {
                     from_id,
@@ -977,12 +1163,8 @@ impl ResolveStage {
                 .is_none_or(|m| !m.static_call && m.receiver.is_none())
     }
 
-    /// Inheritance witness for a bare call inside a class body: the
-    /// caller's innermost enclosing class, its own Extends rows
-    /// (`from_id`-anchored, per invariant 14's identity-walk rule), and
-    /// the first parent declaring the name as a direct member. Single
-    /// hop, like `resolve_super_call` — deeper chains stay documented
-    /// misses.
+    /// Resolve inherited members through Python's complete C3 order. Other
+    /// languages retain their existing immediate-parent declaration witness.
     fn resolve_inherited_member(
         &self,
         from_id: SymbolId,
@@ -996,6 +1178,20 @@ impl ResolveStage {
         drop(caller_sym);
 
         let class_id = self.innermost_enclosing_class(file_id, caller_range)?;
+
+        if caller.language_id.as_str() == "python" {
+            let to_id = self
+                .python_mro(class_id, context)?
+                .into_iter()
+                .skip(1)
+                .find_map(|parent| self.direct_method_of(parent, &unresolved.to_name))?;
+            return Some(ResolvedRelationship {
+                from_id,
+                to_id,
+                kind: unresolved.kind,
+                metadata: unresolved.metadata.clone(),
+            });
+        }
 
         for rel in &context.unresolved_rels {
             if rel.kind != RelationKind::Extends || rel.from_id != Some(class_id) {
@@ -1038,6 +1234,28 @@ impl ResolveStage {
 
         if let Some(id) = context.resolve(parent_name) {
             return is_parent_class(id).then_some(id);
+        }
+
+        let import_name = parent_name.split('.').next().unwrap_or(parent_name);
+        if context
+            .scope
+            .import_binding(import_name)
+            .is_some_and(|binding| {
+                binding.resolved_symbol.is_none()
+                    && (binding.import.path.starts_with('.')
+                        || binding.origin == crate::parsing::resolution::ImportOrigin::Internal)
+            })
+        {
+            return None;
+        }
+        if caller.language_id.as_str() == "python" && !parent_name.contains('.') {
+            // Bare Python names have no implicit visibility into sibling
+            // modules. Persisted Extends and C3 use this same scope contract.
+            return context
+                .scope
+                .import_binding(parent_name)
+                .and_then(|binding| binding.resolved_symbol)
+                .filter(|id| is_parent_class(*id));
         }
 
         match self
@@ -2281,10 +2499,9 @@ mod tests {
     }
 
     #[test]
-    fn self_form_miss_falls_through_to_existing_path() {
-        // Enclosing type has no such member: the self-form arm must not
-        // fail the call closed — implicit-this languages emit the alias
-        // for free-function calls too, and the plain path still applies.
+    fn python_self_form_miss_does_not_capture_a_free_function() {
+        // Python's explicit self.helper() cannot refer to a module-level
+        // helper when the enclosing type has no such member.
         let lang = LanguageId::new("python");
         let cache = Arc::new(SymbolLookupCache::new());
         let mut caller = make_member(1, "display", 1, lang, 57, 60);
@@ -2304,8 +2521,8 @@ mod tests {
 
         let (batch, stats) = stage.resolve(&context);
 
-        assert_eq!(stats.resolved, 1, "arm miss keeps the existing path");
-        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
+        assert_eq!(stats.resolved, 0, "explicit self requires member evidence");
+        assert!(batch.is_empty());
     }
 
     #[test]
@@ -2389,7 +2606,7 @@ mod tests {
     fn super_call_resolves_to_parent_method() {
         let python = LanguageId::new("python");
         let (cache, rels) = super_call_fixture();
-        let stage = make_stage(Arc::clone(&cache));
+        let (stage, _) = python_stage_with_class_scope(Arc::clone(&cache));
         let mut context = make_context(1, python, vec![], rels);
         context.scope = Box::new(MapScope(
             [("A".to_string(), SymbolId::new(1).unwrap())]
@@ -2436,7 +2653,7 @@ mod tests {
         let mut super_call = make_instance_call(6, "m", 1, "super()");
         super_call.to_range = Some(Range::new(45, 8, 45, 20));
 
-        let stage = make_stage(Arc::clone(&cache));
+        let (stage, _) = python_stage_with_class_scope(Arc::clone(&cache));
         let mut context = make_context(1, python, vec![], vec![extends, super_call]);
         context.scope = Box::new(MapScope(
             [("A".to_string(), SymbolId::new(1).unwrap())]
@@ -2486,7 +2703,7 @@ mod tests {
         let mut super_call = make_instance_call(6, "m", 1, "super()");
         super_call.to_range = Some(Range::new(45, 8, 45, 20));
 
-        let stage = make_stage(Arc::clone(&cache));
+        let (stage, _) = python_stage_with_class_scope(Arc::clone(&cache));
         let mut context = make_context(1, python, vec![], vec![extends, super_call]);
         context.scope = Box::new(MapScope(
             [("A".to_string(), SymbolId::new(1).unwrap())]
@@ -2758,6 +2975,9 @@ mod tests {
         cache.insert(caller);
         let mut method = make_symbol(2, "get", 1, python);
         method.kind = SymbolKind::Method;
+        method.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("Example".into()),
+        });
         cache.insert(method);
 
         let behaviors: HashMap<LanguageId, StdArc<dyn LanguageBehavior>> = HashMap::from([(
@@ -2942,11 +3162,10 @@ mod tests {
     }
 
     #[test]
-    fn inherited_member_resolves_cross_file_without_import() {
-        // m = Model(); m.model_dump() in a file that never imports the
-        // member: the typed-receiver global lookup walks the identity chain
-        // and finds the parent-file member; the same-name method on an
-        // off-chain class stays excluded.
+    fn inherited_member_resolves_cross_file_from_parent_identity() {
+        // Model's scoped Base identity and the persisted parent facts for
+        // Base's file establish the chain. The member needs no direct import;
+        // a same-name method on an off-chain class remains excluded.
         let python = LanguageId::new("python");
         let cache = Arc::new(SymbolLookupCache::new());
         cache.insert(make_symbol(1, "test_repr", 1, python));
@@ -2966,6 +3185,10 @@ mod tests {
         cache.insert(make_class(11, "Base", 2, python));
 
         let (stage, scope) = python_stage_with_class_scope(Arc::clone(&cache));
+        let stage = stage.with_class_parents(HashMap::from([(
+            SymbolId::new(11).unwrap(),
+            Some(Vec::new()),
+        )]));
         let context = ResolutionContext {
             file_id: FileId::new(1).unwrap(),
             language_id: python,

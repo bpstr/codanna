@@ -114,6 +114,15 @@ impl DiscoverStage {
                     }
                 };
 
+                if let Some(error) = entry.error() {
+                    if let Ok(mut slot) = walk_error.lock() {
+                        if slot.is_none() {
+                            *slot = Some(error.to_string());
+                        }
+                    }
+                    return ignore::WalkState::Quit;
+                }
+
                 // Only regular files are valid source candidates. This keeps
                 // sockets/FIFOs/devices out of the READ stage entirely.
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -270,6 +279,9 @@ impl DiscoverStage {
             result.renamed_files.len()
         );
 
+        result.new_files.sort();
+        result.modified_files.sort();
+        result.deleted_files.sort();
         Ok(result)
     }
 
@@ -302,6 +314,12 @@ impl DiscoverStage {
                 reason: format!("Filesystem discovery incomplete: {e}"),
             })?;
 
+            if let Some(error) = entry.error() {
+                return Err(PipelineError::Parse {
+                    path: entry.path().to_path_buf(),
+                    reason: format!("Filesystem discovery incomplete: {error}"),
+                });
+            }
             if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
@@ -326,7 +344,8 @@ impl DiscoverStage {
     }
 
     /// Check if a file has been modified.
-    /// Uses mtime as fast heuristic - only reads file if mtime changed.
+    /// Precise, equal past mtimes permit a stat-only shortcut. Changed,
+    /// coarse, future, and unknown timestamps require a content hash.
     fn is_modified(&self, path: &Path, index: &DocumentIndex) -> PipelineResult<bool> {
         let path_str = path.to_string_lossy();
 
@@ -338,16 +357,22 @@ impl DiscoverStage {
             return Ok(true);
         };
 
-        // Fast path: check mtime first (stat only, no file read). Mtimes are
-        // second-granular, so a rewrite inside the indexed second keeps the
-        // stored value; only an mtime older than the current second proves
-        // the file unchanged.
+        // Nanosecond precision preserves ordinary edits within one second.
+        // Second-valued legacy registrations cannot compare equal and therefore
+        // go through the content hash path after the format transition.
         let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
-        let now_secs = std::time::SystemTime::now()
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
             .unwrap_or(0);
-        if stored_mtime > 0 && current_mtime == stored_mtime && current_mtime < now_secs {
+        // Whole-second timestamps can come from a coarse filesystem. Future
+        // timestamps are also uncertain. Both require bytes, even when equal.
+        if stored_mtime > 0
+            && current_mtime == stored_mtime
+            && current_mtime % 1_000_000_000 != 0
+            && current_mtime < now_nanos
+        {
             return Ok(false);
         }
 
@@ -632,25 +657,35 @@ mod tests {
         let src = root.join("src");
         fs::create_dir_all(&src).unwrap();
         let file = src.join("a.rs");
-
-        // Two seconds ahead: "not older than the current second" holds for
-        // the whole test even if the wall clock crosses a boundary.
-        let hot = now_secs() + 2;
+        let second = std::time::UNIX_EPOCH + std::time::Duration::from_secs(now_secs() - 100);
         fs::write(&file, "fn a() {}\n").unwrap();
-        pin_mtime(&file, hot);
-        register_file(&index, &file, "fn a() {}\n", hot);
-
-        fs::write(&file, "fn a() {}\nfn b() {}\n").unwrap();
-        pin_mtime(&file, hot);
-
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(second + std::time::Duration::from_millis(100))
+            .unwrap();
+        register_file(
+            &index,
+            &file,
+            "fn a() {}\n",
+            crate::indexing::file_info::get_file_mtime(&file).unwrap(),
+        );
+        fs::write(&file, "fn b() {}\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(second + std::time::Duration::from_millis(900))
+            .unwrap();
         let result = DiscoverStage::new(&src, 1)
-            .with_index(Arc::clone(&index))
+            .with_index(index)
             .run_incremental()
             .unwrap();
-        assert!(
-            result.modified_files.contains(&file),
-            "a rewrite in the indexed second must reach the hash compare; got {:?}",
-            result.modified_files
+        assert_eq!(
+            result.modified_files,
+            vec![file],
+            "a real subsecond edit must be detected after its second has elapsed"
         );
     }
 
@@ -666,14 +701,37 @@ mod tests {
 
         let old = now_secs() - 100;
         fs::write(&file, "fn a() {}\n").unwrap();
-        pin_mtime(&file, old);
-        register_file(&index, &file, "fn a() {}\n", old);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(old)
+                    + std::time::Duration::from_nanos(123),
+            )
+            .unwrap();
+        register_file(
+            &index,
+            &file,
+            "fn a() {}\n",
+            crate::indexing::file_info::get_file_mtime(&file).unwrap(),
+        );
 
         // Content differs on disk but the mtime still reads as the indexed
-        // value from a past second: the stat-only path must skip it, so a
+        // exact nanosecond value: the stat-only path must skip it, so a
         // hash compare would be the only way to notice this rewrite.
         fs::write(&file, "fn a() {}\nfn b() {}\n").unwrap();
-        pin_mtime(&file, old);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(old)
+                    + std::time::Duration::from_nanos(123),
+            )
+            .unwrap();
 
         let result = DiscoverStage::new(&src, 1)
             .with_index(Arc::clone(&index))
@@ -684,5 +742,73 @@ mod tests {
             "an old equal mtime must be skipped without a content read; got {:?}",
             result.modified_files
         );
+    }
+    #[test]
+    fn legacy_second_valued_mtime_is_verified_with_a_hash() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = Arc::new(DocumentIndex::new(root.join("index"), &settings).unwrap());
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("a.rs");
+        let old = now_secs() - 100;
+        fs::write(&file, "fn a() {}\n").unwrap();
+        pin_mtime(&file, old);
+        register_file(&index, &file, "fn a() {}\n", old);
+        fs::write(&file, "fn b() {}\n").unwrap();
+        pin_mtime(&file, old);
+        let result = DiscoverStage::new(&src, 1)
+            .with_index(index)
+            .run_incremental()
+            .unwrap();
+        assert_eq!(
+            result.modified_files,
+            vec![file],
+            "legacy seconds must not compare equal to new nanosecond metadata"
+        );
+    }
+
+    #[test]
+    fn equal_coarse_or_future_mtime_still_checks_changed_bytes() {
+        for timestamp in [
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(now_secs() - 100),
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(now_secs() + 100)
+                + std::time::Duration::from_nanos(123),
+        ] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let settings = crate::config::Settings::default();
+            let index = Arc::new(DocumentIndex::new(root.join("index"), &settings).unwrap());
+            let src = root.join("src");
+            fs::create_dir_all(&src).unwrap();
+            let file = src.join("a.rs");
+            fs::write(&file, "fn a() {}\n").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(timestamp)
+                .unwrap();
+            register_file(
+                &index,
+                &file,
+                "fn a() {}\n",
+                crate::indexing::file_info::get_file_mtime(&file).unwrap(),
+            );
+            fs::write(&file, "fn b() {}\n").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(timestamp)
+                .unwrap();
+            let result = DiscoverStage::new(&src, 1)
+                .with_index(index)
+                .run_incremental()
+                .unwrap();
+            assert_eq!(result.modified_files, vec![file]);
+        }
     }
 }

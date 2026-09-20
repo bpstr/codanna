@@ -58,6 +58,20 @@ pub struct FindSymbolRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Maximum matching symbols to return (default: 100, maximum: 1000).
+    #[serde(
+        default = "default_symbol_limit",
+        deserialize_with = "deserialize_limit"
+    )]
+    #[schemars(range(min = 1, max = 1000))]
+    pub limit: u32,
+    /// Number of matching symbols to skip after language and owner filtering.
+    #[serde(default)]
+    pub offset: u32,
+}
+
+fn default_symbol_limit() -> u32 {
+    100
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]

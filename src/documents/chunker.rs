@@ -65,8 +65,8 @@ struct Heading {
     level: u8,
     /// Text of the heading.
     text: String,
-    /// Byte position where heading ends.
-    end_byte: usize,
+    /// Byte position where the heading's source line starts.
+    start_byte: usize,
 }
 
 impl Chunker for HybridChunker {
@@ -79,10 +79,10 @@ impl Chunker for HybridChunker {
         let headings = extract_headings(content);
 
         // Step 2: Split by paragraphs
-        let paragraphs = split_paragraphs(content);
+        let paragraphs = split_paragraphs(content, &headings);
 
         // Step 3: Merge small paragraphs
-        let merged = merge_small_paragraphs(paragraphs, config.min_chunk_chars);
+        let merged = merge_small_paragraphs(content, paragraphs, config.min_chunk_chars, &headings);
 
         // Step 4: Split large chunks with sliding window
         let split = split_large_chunks(merged, config.max_chunk_chars, config.overlap_chars);
@@ -94,106 +94,129 @@ impl Chunker for HybridChunker {
 
 /// A paragraph with its byte range.
 #[derive(Debug, Clone)]
-struct Paragraph {
+struct Paragraph<'a> {
     byte_range: (usize, usize),
-    content: String,
+    content: &'a str,
 }
 
-/// Extract markdown headings from content.
+/// Extract ATX headings in source order, excluding fenced and indented code.
 fn extract_headings(content: &str) -> Vec<Heading> {
     let mut headings = Vec::new();
+    let mut offset = 0;
+    let mut fence: Option<(u8, usize)> = None;
 
-    for (line_start, line) in content
-        .match_indices('\n')
-        .map(|(i, _)| i + 1)
-        .chain(std::iter::once(0))
-        .map(|start| {
-            let end = content[start..]
-                .find('\n')
-                .map_or(content.len(), |i| start + i);
-            (start, &content[start..end])
-        })
-    {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix('#') {
-            // Count heading level
-            let mut level = 1u8;
-            let mut chars = rest.chars();
-            while let Some('#') = chars.next() {
-                level += 1;
-                if level > 6 {
-                    break;
-                }
-            }
-
-            // Must have space after hashes
-            let heading_text = rest.trim_start_matches('#').trim();
-            if level <= 6 && !heading_text.is_empty() {
-                headings.push(Heading {
-                    level,
-                    text: heading_text.to_string(),
-                    end_byte: line_start + line.len(),
-                });
-            }
+    for raw_line in content.split_inclusive('\n') {
+        let line_start = offset;
+        offset += raw_line.len();
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+        if indentation > 3 || line.starts_with('\t') {
+            continue;
         }
-    }
+        let line = &line[indentation..];
+        let marker = fence_marker(line);
+        if let Some((open_marker, open_length)) = fence {
+            if marker.is_some_and(|(marker, length, suffix)| {
+                marker == open_marker && length >= open_length && suffix.trim().is_empty()
+            }) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some((marker, length, suffix)) = marker {
+            // A backtick in a backtick fence's info string is not an opener.
+            if marker != b'`' || !suffix.contains('`') {
+                fence = Some((marker, length));
+            }
+            continue;
+        }
 
+        let level = line.bytes().take_while(|byte| *byte == b'#').count();
+        if !(1..=6).contains(&level) {
+            continue;
+        }
+        let rest = &line[level..];
+        if !rest.is_empty() && !rest.starts_with([' ', '\t']) {
+            continue;
+        }
+        let mut title = rest.trim();
+        let without_closing_hashes = title.trim_end_matches('#');
+        if without_closing_hashes.is_empty()
+            || without_closing_hashes.ends_with(char::is_whitespace)
+        {
+            title = without_closing_hashes.trim_end();
+        }
+        headings.push(Heading {
+            level: level as u8,
+            text: title.to_string(),
+            start_byte: line_start,
+        });
+    }
     headings
 }
 
-/// Split content into paragraphs (by double newline).
-fn split_paragraphs(content: &str) -> Vec<Paragraph> {
+fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
+    let marker = *line.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = line.bytes().take_while(|byte| *byte == marker).count();
+    (length >= 3).then_some((marker, length, &line[length..]))
+}
+
+/// Keep a trimmed paragraph's range tied to the same source bytes as its text.
+fn paragraph_at(content: &str, start: usize, end: usize) -> Option<Paragraph<'_>> {
+    let raw = &content[start..end];
+    let leading = raw.len() - raw.trim_start().len();
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let start = start + leading;
+    Some(Paragraph {
+        byte_range: (start, start + text.len()),
+        content: text,
+    })
+}
+
+/// Split on blank lines (LF or CRLF) and on heading boundaries.
+fn split_paragraphs<'a>(content: &'a str, headings: &[Heading]) -> Vec<Paragraph<'a>> {
     let mut paragraphs = Vec::new();
-    let mut in_paragraph = false;
     let mut para_start = 0;
-
-    let bytes = content.as_bytes();
-    let len = bytes.len();
-
-    let mut i = 0;
-    while i < len {
-        let is_newline = bytes[i] == b'\n';
-
-        if !in_paragraph {
-            // Skip leading whitespace
-            if !is_newline && !bytes[i].is_ascii_whitespace() {
-                in_paragraph = true;
-                para_start = i;
+    let mut offset = 0;
+    let mut next_heading = headings.iter().peekable();
+    for line in content.split_inclusive('\n') {
+        let starts_heading = next_heading
+            .peek()
+            .is_some_and(|heading| heading.start_byte == offset);
+        if starts_heading {
+            next_heading.next();
+            if let Some(paragraph) = paragraph_at(content, para_start, offset) {
+                paragraphs.push(paragraph);
             }
-        } else {
-            // Check for double newline
-            if is_newline && i + 1 < len && bytes[i + 1] == b'\n' {
-                // End paragraph
-                let para_content = content[para_start..i].trim().to_string();
-                if !para_content.is_empty() {
-                    paragraphs.push(Paragraph {
-                        byte_range: (para_start, i),
-                        content: para_content,
-                    });
-                }
-                in_paragraph = false;
-                i += 1; // Skip second newline
+            para_start = offset;
+        }
+        if line.trim().is_empty() {
+            if let Some(paragraph) = paragraph_at(content, para_start, offset) {
+                paragraphs.push(paragraph);
             }
+            para_start = offset + line.len();
         }
-        i += 1;
+        offset += line.len();
     }
-
-    // Don't forget last paragraph
-    if in_paragraph {
-        let para_content = content[para_start..].trim().to_string();
-        if !para_content.is_empty() {
-            paragraphs.push(Paragraph {
-                byte_range: (para_start, len),
-                content: para_content,
-            });
-        }
+    if let Some(paragraph) = paragraph_at(content, para_start, content.len()) {
+        paragraphs.push(paragraph);
     }
-
     paragraphs
 }
 
-/// Merge small paragraphs together.
-fn merge_small_paragraphs(paragraphs: Vec<Paragraph>, min_chars: usize) -> Vec<Paragraph> {
+/// Merge small paragraphs within one heading scope, preserving all intervening bytes.
+fn merge_small_paragraphs<'a>(
+    content: &'a str,
+    paragraphs: Vec<Paragraph<'a>>,
+    min_chars: usize,
+    headings: &[Heading],
+) -> Vec<Paragraph<'a>> {
     if paragraphs.is_empty() {
         return Vec::new();
     }
@@ -203,11 +226,12 @@ fn merge_small_paragraphs(paragraphs: Vec<Paragraph>, min_chars: usize) -> Vec<P
     let mut current = iter.next().unwrap();
 
     for para in iter {
-        if current.content.chars().count() < min_chars {
-            // Merge with next
+        let same_section = headings
+            .partition_point(|heading| heading.start_byte <= current.byte_range.0)
+            == headings.partition_point(|heading| heading.start_byte <= para.byte_range.0);
+        if current.content.chars().count() < min_chars && same_section {
             current.byte_range.1 = para.byte_range.1;
-            current.content.push_str("\n\n");
-            current.content.push_str(&para.content);
+            current.content = &content[current.byte_range.0..current.byte_range.1];
         } else {
             result.push(current);
             current = para;
@@ -221,10 +245,10 @@ fn merge_small_paragraphs(paragraphs: Vec<Paragraph>, min_chars: usize) -> Vec<P
 
 /// Split large paragraphs with sliding window and overlap.
 fn split_large_chunks(
-    paragraphs: Vec<Paragraph>,
+    paragraphs: Vec<Paragraph<'_>>,
     max_chars: usize,
     overlap_chars: usize,
-) -> Vec<Paragraph> {
+) -> Vec<Paragraph<'_>> {
     let mut result = Vec::new();
 
     for para in paragraphs {
@@ -234,25 +258,26 @@ fn split_large_chunks(
             result.push(para);
         } else {
             // Split with sliding window
-            let chars: Vec<char> = para.content.chars().collect();
+            let boundaries: Vec<usize> = para
+                .content
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(para.content.len()))
+                .collect();
             let step = max_chars.saturating_sub(overlap_chars).max(1);
 
             let mut char_start = 0;
-            while char_start < chars.len() {
-                let char_end = char_start.saturating_add(max_chars).min(chars.len());
-                let chunk_content: String = chars[char_start..char_end].iter().collect();
-
-                // Calculate byte positions
-                let byte_start = para.byte_range.0
-                    + para.content[..chars[..char_start].iter().collect::<String>().len()].len();
-                let byte_end = byte_start + chunk_content.len();
+            while char_start < char_count {
+                let char_end = char_start.saturating_add(max_chars).min(char_count);
+                let byte_start = boundaries[char_start];
+                let byte_end = boundaries[char_end];
 
                 result.push(Paragraph {
-                    byte_range: (byte_start, byte_end.min(para.byte_range.1)),
-                    content: chunk_content,
+                    byte_range: (para.byte_range.0 + byte_start, para.byte_range.0 + byte_end),
+                    content: &para.content[byte_start..byte_end],
                 });
 
-                if char_end >= chars.len() {
+                if char_end >= char_count {
                     break;
                 }
                 char_start += step;
@@ -264,30 +289,32 @@ fn split_large_chunks(
 }
 
 /// Attach heading context to each chunk.
-fn attach_heading_context(paragraphs: Vec<Paragraph>, headings: &[Heading]) -> Vec<RawChunk> {
+fn attach_heading_context(paragraphs: Vec<Paragraph<'_>>, headings: &[Heading]) -> Vec<RawChunk> {
+    let mut next_heading = headings.iter().peekable();
+    let mut hierarchy: Vec<&Heading> = Vec::new();
     paragraphs
         .into_iter()
         .map(|para| {
-            // Find all headings that precede this paragraph
-            let context: Vec<String> = headings
+            while next_heading
+                .peek()
+                .is_some_and(|heading| heading.start_byte <= para.byte_range.0)
+            {
+                let heading = next_heading.next().expect("peeked heading exists");
+                while hierarchy
+                    .last()
+                    .is_some_and(|parent| parent.level >= heading.level)
+                {
+                    hierarchy.pop();
+                }
+                hierarchy.push(heading);
+            }
+            let context = hierarchy
                 .iter()
-                .filter(|h| h.end_byte <= para.byte_range.0)
-                .fold(Vec::new(), |mut acc, h| {
-                    // Keep heading hierarchy (lower level replaces, higher level adds)
-                    while acc.len() >= h.level as usize {
-                        acc.pop();
-                    }
-                    while acc.len() < h.level as usize - 1 {
-                        acc.push(String::new()); // Placeholder for skipped levels
-                    }
-                    acc.push(h.text.clone());
-                    acc
-                })
-                .into_iter()
-                .filter(|s| !s.is_empty())
+                .filter(|heading| !heading.text.is_empty())
+                .map(|heading| heading.text.clone())
                 .collect();
 
-            RawChunk::new(para.byte_range, para.content, context)
+            RawChunk::new(para.byte_range, para.content.to_string(), context)
         })
         .collect()
 }
@@ -462,5 +489,114 @@ Content in chapter 2."#;
             chunks.len() > 1,
             "Large content should be split into multiple chunks"
         );
+    }
+
+    #[test]
+    fn heading_scopes_stay_in_source_order_across_crlf_and_small_sections() {
+        let source = "# Alpha\r\n\r\none\r\n## Beta\r\npayload\r\n# Gamma\r\n\r\ntail";
+        let config = ValidatedChunkingConfig::try_from(ChunkingConfig {
+            min_chunk_chars: 50,
+            max_chunk_chars: 500,
+            overlap_chars: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let chunks = HybridChunker::new().chunk(source, &config);
+        assert_eq!(
+            chunks.len(),
+            3,
+            "a small section must not absorb the next heading"
+        );
+        assert_eq!(chunks[0].heading_context, ["Alpha"]);
+        assert_eq!(chunks[1].heading_context, ["Alpha", "Beta"]);
+        assert_eq!(chunks[2].heading_context, ["Gamma"]);
+        for chunk in chunks {
+            assert_eq!(
+                source.get(chunk.byte_range.0..chunk.byte_range.1),
+                Some(chunk.content.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn fenced_indented_and_quoted_hashes_do_not_change_document_context() {
+        let config = ValidatedChunkingConfig::try_from(ChunkingConfig {
+            min_chunk_chars: 1,
+            max_chunk_chars: 500,
+            overlap_chars: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        for fence in [
+            "```sh\n# comment\n```",
+            "~~~~ rust\n# comment\n~~~\n# still code\n~~~~",
+            "````sh\n```\n# still code\n````",
+        ] {
+            let source =
+                format!("# Real\n\n{fence}\n\n    # indented\n\n#hashtag\n\n> # quoted\n\npayload");
+            let chunks = HybridChunker::new().chunk(&source, &config);
+            let payload = chunks
+                .iter()
+                .find(|chunk| chunk.content == "payload")
+                .unwrap();
+            assert_eq!(payload.heading_context, ["Real"], "fence: {fence}");
+        }
+    }
+
+    #[test]
+    fn headings_keep_skipped_levels_and_strip_only_separated_closing_hashes() {
+        let source =
+            "# Root ###\n\n### C#\n\npayload\n\n## Peer #\n\nother\n\n####### invalid\n\nlast";
+        let config = ValidatedChunkingConfig::try_from(ChunkingConfig {
+            min_chunk_chars: 1,
+            max_chunk_chars: 500,
+            overlap_chars: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let chunks = HybridChunker::new().chunk(source, &config);
+        let context = |text| {
+            &chunks
+                .iter()
+                .find(|chunk| chunk.content == text)
+                .unwrap()
+                .heading_context
+        };
+        assert_eq!(context("payload"), &["Root", "C#"]);
+        assert_eq!(context("other"), &["Root", "Peer"]);
+        assert_eq!(context("last"), &["Root", "Peer"]);
+    }
+
+    #[test]
+    fn whitespace_merging_and_unicode_windows_reproduce_exact_source_ranges() {
+        let source = format!(
+            "\u{2003}first   \r\n \r\n  second{}\t  ",
+            "🙂漢é".repeat(30)
+        );
+        let config = ValidatedChunkingConfig::try_from(ChunkingConfig {
+            min_chunk_chars: 30,
+            max_chunk_chars: 40,
+            overlap_chars: 10,
+            ..Default::default()
+        })
+        .unwrap();
+        let chunks = HybridChunker::new().chunk(&source, &config);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert_eq!(
+                source.get(chunk.byte_range.0..chunk.byte_range.1),
+                Some(chunk.content.as_str())
+            );
+            assert!(chunk.char_count() <= 40);
+        }
+        for pair in chunks.windows(2) {
+            let previous: Vec<_> = pair[0].content.chars().rev().take(10).collect();
+            let mut next: Vec<_> = pair[1].content.chars().take(10).collect();
+            next.reverse();
+            assert_eq!(
+                previous, next,
+                "overlap must count Unicode characters without corrupting bytes"
+            );
+        }
     }
 }

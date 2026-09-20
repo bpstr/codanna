@@ -192,7 +192,7 @@ impl DocumentIndex {
         let start_col = doc
             .get_first(self.schema.column)
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u16;
+            .unwrap_or(0) as u32;
 
         let end_line = doc
             .get_first(self.schema.end_line)
@@ -202,7 +202,7 @@ impl DocumentIndex {
         let end_col = doc
             .get_first(self.schema.end_column)
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u16;
+            .unwrap_or(0) as u32;
 
         let signature = doc
             .get_first(self.schema.signature)
@@ -297,7 +297,7 @@ impl DocumentIndex {
         let column = doc
             .get_first(self.schema.relation_column)
             .and_then(|v| v.as_u64())
-            .map(|n| n as u16);
+            .map(|n| n as u32);
         let context = doc
             .get_first(self.schema.relation_context)
             .and_then(|v| v.as_str());
@@ -334,6 +334,46 @@ mod tests {
     use crate::SymbolKind;
 
     use tempfile::TempDir;
+
+    #[test]
+    fn long_source_columns_survive_storage_and_reload() {
+        use crate::{Range, RelationKind, Relationship, Symbol};
+
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let range = Range::new(0, 65_562, 0, 70_000);
+        let symbol = Symbol::new(
+            SymbolId(1),
+            "generated",
+            SymbolKind::Function,
+            FileId(1),
+            range,
+        );
+        {
+            let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+            index.start_batch().unwrap();
+            index.index_symbol(&symbol, "generated.rs").unwrap();
+            let metadata = RelationshipMetadata::new().at_position(0, 65_562);
+            index
+                .store_relationship(
+                    SymbolId(1),
+                    SymbolId(1),
+                    &Relationship::new(RelationKind::Calls).with_metadata(metadata),
+                )
+                .unwrap();
+            index.commit_batch().unwrap();
+        }
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        assert_eq!(
+            index.find_symbol_by_id(SymbolId(1)).unwrap().unwrap().range,
+            range
+        );
+        let edges = index
+            .get_relationships_from(SymbolId(1), RelationKind::Calls)
+            .unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].2.metadata.as_ref().unwrap().column, Some(65_562));
+    }
 
     #[test]
     fn module_path_round_trips_none_empty_and_real() {

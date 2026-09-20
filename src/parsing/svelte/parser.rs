@@ -28,7 +28,7 @@ struct ScriptBlock<'a> {
     /// Raw script body (the `raw_text` between the script tags).
     text: &'a str,
     row_off: u32,
-    col_off: u16,
+    col_off: u32,
     /// True when the block declares `lang="ts"` (or `lang="typescript"`).
     is_typescript: bool,
 }
@@ -84,7 +84,7 @@ impl SvelteParser {
                 if inner.kind() == "raw_text" {
                     self.register_handled_node(inner.kind(), inner.kind_id());
                     let row_off = inner.start_position().row as u32;
-                    let col_off = inner.start_position().column as u16;
+                    let col_off = inner.start_position().column as u32;
                     // SAFETY: byte_range is within code's bounds (same source)
                     let text = &code[inner.byte_range()];
                     scripts.push(ScriptBlock {
@@ -136,7 +136,7 @@ impl SvelteParser {
     }
 
     /// Adjust a script-relative `Range` to be relative to the whole file.
-    fn offset_range(r: Range, row_off: u32, col_off: u16) -> Range {
+    fn offset_range(r: Range, row_off: u32, col_off: u32) -> Range {
         Range::new(
             r.start_line + row_off,
             if r.start_line == 0 {
@@ -181,9 +181,9 @@ impl SvelteParser {
                             let id = counter.next_id();
                             let range = Range::new(
                                 inner.start_position().row as u32,
-                                inner.start_position().column as u16,
+                                inner.start_position().column as u32,
                                 inner.end_position().row as u32,
-                                inner.end_position().column as u16,
+                                inner.end_position().column as u32,
                             );
                             let mut sym =
                                 Symbol::new(id, name, SymbolKind::Function, file_id, range);

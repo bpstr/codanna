@@ -112,6 +112,7 @@ impl UnifiedWatcher {
         // per-directory batch can skip paths they already cover.
         self.register_handler_roots().await?;
         self.watch_directories(&new_dirs, false)?;
+        self.refresh_code_policy_watches().await?;
 
         self.prepared = true;
         Ok(())
@@ -294,6 +295,23 @@ impl UnifiedWatcher {
                 event.kind,
                 crate::parsing::paths::render_absolute_path(&path).display()
             );
+            // Ignore files alter the inventory, including already-indexed
+            // files and currently empty subtrees. They are policy events even
+            // though source handlers deliberately reject unknown dot-files.
+            if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(".gitignore" | ".codannaignore")
+            ) && self
+                .batch_sync_roots
+                .iter()
+                .any(|root| path.starts_with(root))
+            {
+                // Use the settled-wave lane so policy changes reconcile roots
+                // once after the whole save/rename burst has quieted.
+                self.debouncer.record_removal(path);
+                continue;
+            }
+
             // A directory never matches a file handler (extension gate);
             // it is the watcher's own concern: extend the watch set and
             // catch up files that landed before the watch existed. Disk
@@ -383,6 +401,32 @@ impl UnifiedWatcher {
         Ok(())
     }
 
+    /// Watch traversable source directories even when their ignore policy
+    /// currently excludes every code file. This runs at preparation/reload,
+    /// never on a query; a later nested policy edit can include files again.
+    async fn refresh_code_policy_watches(&mut self) -> Result<(), WatchError> {
+        let roots = self.batch_sync_roots.clone();
+        let directories = crate::runtime::read(&self.facade, move |facade| {
+            let mut directories = Vec::new();
+            for root in roots {
+                directories.extend(facade.discoverable_dirs(&root)?);
+            }
+            Ok::<_, crate::IndexError>(directories)
+        })
+        .await
+        .map_err(|error| WatchError::EventError {
+            details: error.to_string(),
+        })?
+        .map_err(|error| WatchError::EventError {
+            details: error.to_string(),
+        })?;
+        let new: Vec<_> = directories
+            .into_iter()
+            .filter(|directory| self.registry.add_watch_dir(directory.clone()))
+            .collect();
+        self.watch_directories(&new, false)
+    }
+
     /// A directory appeared under a registered root: watch every
     /// traversable directory of the new subtree (ignore chains anchored
     /// at the root prune ignored trees), then route the files already
@@ -391,6 +435,29 @@ impl UnifiedWatcher {
         if !self.handler_roots.iter().any(|r| path.starts_with(r)) {
             return Ok(());
         }
+
+        // A directory move can contain documents before individual file
+        // watches exist. Collection handlers reconcile through their own
+        // discovery policy; the code lane below keeps its existing behavior.
+        let mut document_directories = Vec::new();
+        for handler in &self.handlers {
+            let action = handler.on_directory_change(path).await?;
+            let reconcile_documents = matches!(action, WatchAction::ReconcileDocuments { .. });
+            self.execute_action(action, handler.name()).await?;
+            if reconcile_documents {
+                document_directories.extend(
+                    handler
+                        .watch_roots()
+                        .await
+                        .into_iter()
+                        .filter(|root| root.starts_with(path)),
+                );
+            }
+        }
+        // Native watches disappear when their inode is deleted. Reinstall
+        // restored document subtrees even if registry path strings are old.
+        self.watch_directories(&document_directories, false)?;
+        self.register_handler_roots().await?;
 
         let path_owned = path.to_path_buf();
         let (dirs, files) = crate::runtime::read(&self.facade, move |facade| {
@@ -591,6 +658,22 @@ impl UnifiedWatcher {
     async fn process_wave_residual(&self, path: &Path, batch_covered: bool, is_removal: bool) {
         for handler in &self.handlers {
             if !handler.matches(path) {
+                if is_removal && !handler.covered_by_batch_sync() {
+                    match handler.on_directory_change(path).await {
+                        Ok(action) => {
+                            if let Err(error) = self.execute_action(action, handler.name()).await {
+                                tracing::error!(
+                                    "[{}] directory reconciliation failed: {error}",
+                                    handler.name()
+                                );
+                            }
+                        }
+                        Err(error) => tracing::error!(
+                            "[{}] directory reconciliation failed: {error}",
+                            handler.name()
+                        ),
+                    }
+                }
                 continue;
             }
             if batch_covered && handler.covered_by_batch_sync() {
@@ -697,6 +780,38 @@ impl UnifiedWatcher {
                 .map_err(|e| WatchError::EventError {
                     details: e.to_string(),
                 })
+            }
+            WatchAction::ReconcileDocuments {
+                path,
+                collections,
+                defaults,
+            } => {
+                if let Some(store) = self.document_store.clone() {
+                    crate::runtime::blocking(move || {
+                        let mut store = store.blocking_write();
+                        let mut changed = false;
+                        for (name, collection) in collections {
+                            let effective = collection.effective_chunking(&defaults);
+                            let stats = store
+                                .index_collection(&name, &collection, &effective)
+                                .map_err(|error| WatchError::EventError {
+                                    details: error.to_string(),
+                                })?;
+                            changed |= stats.files_processed > 0 || stats.chunks_removed > 0;
+                        }
+                        Ok(changed.then_some(if path.exists() {
+                            FileChangeEvent::FileReindexed { path }
+                        } else {
+                            FileChangeEvent::FileDeleted { path }
+                        }))
+                    })
+                    .await
+                    .map_err(|error| WatchError::EventError {
+                        details: error.to_string(),
+                    })?
+                } else {
+                    Ok(None)
+                }
             }
             WatchAction::ReindexDocument { path } => {
                 if let Some(store) = self.document_store.clone() {
@@ -832,6 +947,10 @@ impl UnifiedWatcher {
         // Watch any new directories not already covered by a recursive root.
         if let Err(e) = self.watch_directories(&dirs_to_watch, false) {
             tracing::warn!("[watcher] failed to watch new directories: {e}");
+        }
+
+        if let Err(error) = self.refresh_code_policy_watches().await {
+            tracing::error!("[watcher] ignore-policy watch registration incomplete: {error}");
         }
 
         // Close the index-then-register race: a file can land after config
@@ -1167,6 +1286,69 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn nested_ignore_policy_reconciles_exclusion_and_reinclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let nested = root.join("packages/payments");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("ledger.rs"), "pub fn ledger() {}\n").unwrap();
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.synchronize_roots(vec![root.clone()]).await.unwrap();
+        watcher.prepare().await.unwrap();
+        watcher.debouncer = Debouncer::new(0);
+        assert!(watcher.registry.watch_dirs().contains(&nested));
+        for name in [".gitignore", ".codannaignore"] {
+            let policy = nested.join(name);
+            for excluded in [true, false] {
+                std::fs::write(&policy, if excluded { "ledger.rs\n" } else { "" }).unwrap();
+                watcher
+                    .handle_event(Event {
+                        kind: EventKind::Modify(ModifyKind::Any),
+                        paths: vec![policy.clone()],
+                        attrs: Default::default(),
+                    })
+                    .await;
+                let (removed, modified) = watcher
+                    .debouncer
+                    .take_settled_burst()
+                    .expect("policy events must enter the whole-root reconciliation lane");
+                watcher.process_change_wave(removed, modified).await;
+                watcher.handle_index_reloaded().await;
+                let count = crate::runtime::read(&watcher.facade, |facade| {
+                    facade.find_symbols_by_name("ledger", None).len()
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    count,
+                    usize::from(!excluded),
+                    "policy={name}, excluded={excluded}"
+                );
+                assert!(
+                    watcher.registry.watch_dirs().contains(&nested),
+                    "empty code directories must retain their policy watch"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn preparation_watches_policy_in_an_initially_excluded_code_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let nested = root.join("packages/payments");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join(".codannaignore"), "*.rs\n").unwrap();
+        std::fs::write(nested.join("ledger.rs"), "pub fn ledger() {}\n").unwrap();
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.prepare().await.unwrap();
+        assert!(
+            watcher.registry.watch_dirs().contains(&nested),
+            "a nested policy is observable even when no source in that directory is indexed"
+        );
+    }
+
     #[test]
     fn writer_lock_contention_is_classified_from_the_error_chain() {
         let contended = crate::IndexError::General(
@@ -1179,6 +1361,188 @@ mod tests {
 
         let unrelated = crate::IndexError::General("Pipeline error: parse failed".to_string());
         assert!(!is_writer_lock_contention(&unrelated));
+    }
+}
+
+#[cfg(test)]
+mod document_collection_tests {
+    use super::*;
+    use crate::documents::{CollectionConfig, DocumentsConfig};
+    use crate::vector::VectorDimension;
+    use crate::watcher::handlers::DocumentFileHandler;
+
+    fn fixture(root: &Path, documents: &Path) -> (UnifiedWatcher, Arc<RwLock<DocumentStore>>) {
+        let mut settings = crate::Settings {
+            index_path: root.join("code-index"),
+            workspace_root: Some(root.to_path_buf()),
+            ..Default::default()
+        };
+        settings.semantic_search.enabled = false;
+        let facade = Arc::new(RwLock::new(IndexFacade::new(Arc::new(settings)).unwrap()));
+        let store = Arc::new(RwLock::new(
+            DocumentStore::new(
+                root.join("documents-index"),
+                VectorDimension::new(2).unwrap(),
+            )
+            .unwrap(),
+        ));
+        let mut config = DocumentsConfig {
+            defaults: ChunkingConfig {
+                min_chunk_chars: 1,
+                max_chunk_chars: 256,
+                overlap_chars: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.collections.insert(
+            "docs".into(),
+            CollectionConfig {
+                paths: vec![documents.to_path_buf()],
+                max_chunk_chars: Some(50),
+                ..Default::default()
+            },
+        );
+        let handler =
+            DocumentFileHandler::new(store.clone(), root.to_path_buf()).with_config(&config);
+        let watcher = UnifiedWatcher::builder()
+            .indexer(facade)
+            .document_store(store.clone())
+            .workspace_root(root.to_path_buf())
+            .broadcaster(Arc::new(NotificationBroadcaster::new(8)))
+            .handler(handler)
+            .build()
+            .unwrap();
+        (watcher, store)
+    }
+
+    #[tokio::test]
+    async fn document_watcher_indexes_new_and_recreated_files_with_collection_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let docs = root.join("docs");
+        let empty = docs.join("initially-empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let (mut watcher, store) = fixture(&root, &docs);
+        watcher.prepare().await.unwrap();
+        assert!(watcher.registry.watch_dirs().contains(&empty));
+        let file = empty.join("guide.md");
+        std::fs::write(&file, "a".repeat(200)).unwrap();
+        assert!(watcher.handlers[0].matches(&file));
+        let action = watcher.handlers[0].on_modify(&file).await.unwrap();
+        watcher.execute_action(action, "document").await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            4
+        );
+        std::fs::remove_file(&file).unwrap();
+        let action = watcher.handlers[0].on_delete(&file).await.unwrap();
+        watcher.execute_action(action, "document").await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            0
+        );
+        std::fs::write(&file, "recreated").unwrap();
+        assert!(watcher.handlers[0].matches(&file));
+        let action = watcher.handlers[0].on_modify(&file).await.unwrap();
+        watcher.execute_action(action, "document").await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn document_watcher_catches_moved_subtrees_and_nested_ignore_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let docs = root.join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        let (mut watcher, store) = fixture(&root, &docs);
+        watcher.prepare().await.unwrap();
+        let nested = docs.join("moved-in");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("guide.md"), "alpha").unwrap();
+        watcher.handle_created_directory(&nested).await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            1
+        );
+        let policy = nested.join(".codannaignore");
+        std::fs::write(&policy, "*.md\n").unwrap();
+        assert!(watcher.handlers[0].matches(&policy));
+        let action = watcher.handlers[0].on_modify(&policy).await.unwrap();
+        watcher.execute_action(action, "document").await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            0
+        );
+        std::fs::remove_file(&policy).unwrap();
+        let action = watcher.handlers[0].on_delete(&policy).await.unwrap();
+        watcher.execute_action(action, "document").await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            1
+        );
+        std::fs::remove_dir_all(&nested).unwrap();
+        watcher.process_wave_residual(&nested, false, true).await;
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            0
+        );
+        assert!(
+            watcher.registry.watch_dirs().contains(&root),
+            "the configured root's parent must be watched before the root vanishes"
+        );
+        std::fs::remove_dir(&docs).unwrap();
+        watcher.process_wave_residual(&docs, false, true).await;
+        std::fs::create_dir(&docs).unwrap();
+        std::fs::write(docs.join("restored.md"), "restored root").unwrap();
+        watcher.handle_created_directory(&docs).await.unwrap();
+        assert_eq!(
+            store
+                .read()
+                .await
+                .collection_stats("docs")
+                .unwrap()
+                .chunk_count,
+            1
+        );
     }
 }
 

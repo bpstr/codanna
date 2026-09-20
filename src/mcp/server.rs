@@ -358,7 +358,7 @@ impl CodeIntelligenceServer {
                     McpError::invalid_params(format!("Reindex preflight failed: {error}"), None)
                 })?;
             let mut count = 0;
-            let mut pending = crate::indexing::pipeline::PendingResolution::default();
+            let mut pending = crate::indexing::pipeline::PendingResolution::bounded_inventory();
             for source in sources {
                 match indexer
                     .index_prepared_file(source, &mut pending)

@@ -627,9 +627,9 @@ impl PythonParser {
         let end_pos = node.end_position();
         Range {
             start_line: start_pos.row as u32,
-            start_column: start_pos.column as u16,
+            start_column: start_pos.column as u32,
             end_line: end_pos.row as u32,
-            end_column: end_pos.column as u16,
+            end_column: end_pos.column as u32,
         }
     }
 
@@ -728,6 +728,9 @@ impl PythonParser {
                 self.register_handled_node(node.kind(), node.kind_id());
                 self.process_function_node_for_calls(node, code, calls, current_function);
             }
+            // Annotation evaluation depends on Python version and future
+            // imports. Preserve these as Uses evidence, never eager Calls.
+            "type" => {}
             "call" => {
                 self.register_handled_node(node.kind(), node.kind_id());
                 self.process_call_node(node, code, calls, current_function);
@@ -742,6 +745,16 @@ impl PythonParser {
             }
             "decorator" => {
                 self.register_handled_node(node.kind(), node.kind_id());
+                if let Some(target) = node
+                    .named_child(0)
+                    .filter(|n| matches!(n.kind(), "identifier" | "attribute"))
+                {
+                    calls.push((
+                        current_function.unwrap_or("<module>"),
+                        &code[target.byte_range()],
+                        self.node_to_range(target),
+                    ));
+                }
                 self.process_children_for_calls(node, code, calls, current_function);
             }
             _ => {
@@ -762,8 +775,17 @@ impl PythonParser {
             let old_function = *current_function;
             *current_function = Some(name);
 
-            self.process_children_for_calls(node, code, calls, current_function);
-
+            // Defaults execute while defining the
+            // function in its enclosing environment, not when its body runs.
+            let body = node.child_by_field_name("body");
+            for child in node.children(&mut node.walk()) {
+                *current_function = if Some(child) == body {
+                    Some(name)
+                } else {
+                    old_function
+                };
+                self.find_calls_in_node(child, code, calls, current_function);
+            }
             *current_function = old_function;
         }
     }
@@ -794,6 +816,7 @@ impl PythonParser {
         current_function: &mut Option<&'a str>,
     ) {
         match node.kind() {
+            "type" => {}
             "function_definition" => {
                 self.process_function_node_for_method_calls(
                     node,
@@ -823,8 +846,15 @@ impl PythonParser {
             let old_function = *current_function;
             *current_function = Some(name);
 
-            self.process_children_for_method_calls(node, code, method_calls, current_function);
-
+            let body = node.child_by_field_name("body");
+            for child in node.children(&mut node.walk()) {
+                *current_function = if Some(child) == body {
+                    Some(name)
+                } else {
+                    old_function
+                };
+                self.find_method_calls_in_node(child, code, method_calls, current_function);
+            }
             *current_function = old_function;
         }
     }
@@ -1154,11 +1184,17 @@ impl PythonParser {
         implementations: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
         if let Some(class_name) = self.extract_class_name(node, code) {
-            let range = self.node_to_range(node);
             let base_classes = self.extract_base_classes(node, code);
 
             for base_class in base_classes {
-                implementations.push((class_name, base_class, range));
+                // Distinct base positions preserve declaration order when
+                // relationships are loaded from unordered persisted rows.
+                let offset = base_class.as_ptr() as usize - code.as_ptr() as usize;
+                if let Some(base) =
+                    node.descendant_for_byte_range(offset, offset + base_class.len())
+                {
+                    implementations.push((class_name, base_class, self.node_to_range(base)));
+                }
             }
         }
     }
@@ -1244,7 +1280,9 @@ impl PythonParser {
         if let Some(type_node) = node.child_by_field_name("type") {
             // Extract variable name from the left side
             if let Some(target_node) = node.child_by_field_name("left") {
-                if let Some(var_name) = self.extract_variable_name(target_node, code) {
+                if matches!(target_node.kind(), "identifier" | "attribute") {
+                    // Field paths occupy a different namespace from locals.
+                    let var_name = &code[target_node.byte_range()];
                     let type_annotation = &code[type_node.byte_range()];
                     let range = self.node_to_range(node);
                     variable_types.push((var_name, type_annotation, range));
@@ -1296,25 +1334,6 @@ impl PythonParser {
         variable_types.push((var_name, type_name, self.node_to_range(node)));
     }
 
-    /// Extract variable name from assignment target
-    fn extract_variable_name<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
-        match node.kind() {
-            "identifier" => {
-                // Simple variable: x
-                Some(&code[node.byte_range()])
-            }
-            "attribute" => {
-                // Class attribute: self.name
-                if let Some(attr_node) = node.child_by_field_name("attribute") {
-                    Some(&code[attr_node.byte_range()])
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Process child nodes for variable type extraction
     fn process_children_for_variable_types<'a>(
         &self,
@@ -1348,9 +1367,9 @@ impl PythonParser {
                                     let method_name = &code[method_name_node.byte_range()];
                                     let range = Range::new(
                                         child.start_position().row as u32,
-                                        child.start_position().column as u16,
+                                        child.start_position().column as u32,
                                         child.end_position().row as u32,
-                                        child.end_position().column as u16,
+                                        child.end_position().column as u32,
                                     );
                                     defines.push((class_name, method_name, range));
                                 }
@@ -1453,9 +1472,9 @@ impl LanguageParser for PythonParser {
             {
                 spans.push(Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 ));
             }
             let mut cursor = node.walk();
@@ -1525,9 +1544,57 @@ impl LanguageParser for PythonParser {
         extends
     }
 
-    fn find_uses<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        // Stub implementation - will be implemented in Phase 3
-        Vec::new()
+    fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        fn annotation_names<'a>(
+            node: Node,
+            code: &'a str,
+            owner: &'a str,
+            uses: &mut Vec<(&'a str, &'a str, Range)>,
+        ) {
+            if matches!(node.kind(), "identifier" | "attribute") {
+                uses.push((
+                    owner,
+                    &code[node.byte_range()],
+                    Range::new(
+                        node.start_position().row as u32,
+                        node.start_position().column as u32,
+                        node.end_position().row as u32,
+                        node.end_position().column as u32,
+                    ),
+                ));
+                return;
+            }
+            for child in node.named_children(&mut node.walk()) {
+                annotation_names(child, code, owner, uses);
+            }
+        }
+        fn walk<'a>(
+            node: Node,
+            code: &'a str,
+            owner: &'a str,
+            uses: &mut Vec<(&'a str, &'a str, Range)>,
+        ) {
+            let owner = if matches!(node.kind(), "function_definition" | "class_definition") {
+                node.child_by_field_name("name")
+                    .map(|n| &code[n.byte_range()])
+                    .unwrap_or(owner)
+            } else {
+                owner
+            };
+            if node.kind() == "type" {
+                annotation_names(node, code, owner, uses);
+                return;
+            }
+            for child in node.named_children(&mut node.walk()) {
+                walk(child, code, owner, uses);
+            }
+        }
+        let Some(tree) = self.parser.parse(code, None) else {
+            return Vec::new();
+        };
+        let mut uses = Vec::new();
+        walk(tree.root_node(), code, "<module>", &mut uses);
+        uses
     }
 
     fn find_defines<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
@@ -2528,12 +2595,12 @@ class MyClass:
         assert!(
             var_types3
                 .iter()
-                .any(|(name, typ, _)| *name == "value" && *typ == "int")
+                .any(|(name, typ, _)| *name == "self.value" && *typ == "int")
         );
         assert!(
             var_types3
                 .iter()
-                .any(|(name, typ, _)| *name == "name" && *typ == "str")
+                .any(|(name, typ, _)| *name == "self.name" && *typ == "str")
         );
 
         // Variables without type annotations should not appear

@@ -3,7 +3,7 @@
 //! This module provides the main storage interface for document chunks,
 //! combining tantivy for metadata/filtering with mmap vectors for semantic search.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 /// Progress updates during document indexing.
@@ -27,10 +27,10 @@ const EMBEDDING_BATCH_SIZE: usize = 64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tantivy::collector::DocSetCollector;
+use tantivy::collector::{DocSetCollector, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::directory::error::OpenDirectoryError;
-use tantivy::query::{BooleanQuery, Occur, Query, TermQuery, TermSetQuery};
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, Query, TermQuery, TermSetQuery};
 use tantivy::schema::Value;
 use tantivy::{
     Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument as Document, Term,
@@ -121,31 +121,45 @@ impl Default for SearchQuery {
     }
 }
 
+/// Find case-insensitive keywords and map matches back to original UTF-8 spans.
+/// Lowercasing can expand or shrink a character, so lowercase byte positions
+/// must never be used directly to slice the source (for example, İ -> i + ◌̇).
+fn keyword_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
+    let mut lowercase = String::with_capacity(text.len());
+    let mut positions = Vec::new();
+    for (source_start, character) in text.char_indices() {
+        positions.push((
+            lowercase.len(),
+            source_start,
+            source_start + character.len_utf8(),
+        ));
+        lowercase.extend(character.to_lowercase());
+    }
+
+    let mut matches = Vec::new();
+    for word in query.split_whitespace() {
+        if word.len() < 2 {
+            continue;
+        }
+        let word: String = word.chars().flat_map(char::to_lowercase).collect();
+        for (start, matched) in lowercase.match_indices(&word) {
+            let end = start + matched.len();
+            let first = positions.partition_point(|(position, _, _)| *position <= start) - 1;
+            let last = positions.partition_point(|(position, _, _)| *position < end) - 1;
+            matches.push((positions[first].1, positions[last].2));
+        }
+    }
+    matches
+}
+
 /// Extract a KWIC (Keyword In Context) preview centered on the first keyword match.
 /// Expands boundaries to word edges to avoid cutting words mid-character.
 fn extract_kwic_preview(content: &str, query: &str, window_chars: usize) -> String {
-    // Find first keyword match (case-insensitive)
-    let content_lower = content.to_lowercase();
-    let query_lower = query.to_lowercase();
-
-    // Try to find any word from the query
-    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-    let mut best_match_pos: Option<usize> = None;
-
-    for word in &query_words {
-        if word.len() < 2 {
-            continue; // Skip very short words
-        }
-        if let Some(pos) = content_lower.find(word) {
-            // Prefer earlier matches
-            if best_match_pos.is_none() || pos < best_match_pos.unwrap() {
-                best_match_pos = Some(pos);
-            }
-        }
-    }
-
-    // If no match found, just return from start
-    let match_pos = best_match_pos.unwrap_or(0);
+    let match_pos = keyword_match_ranges(content, query)
+        .into_iter()
+        .map(|(start, _)| start)
+        .min()
+        .unwrap_or(0);
 
     // Calculate window boundaries (character-based)
     let half_window = window_chars / 2;
@@ -153,13 +167,10 @@ fn extract_kwic_preview(content: &str, query: &str, window_chars: usize) -> Stri
     let total_chars = chars.len();
 
     // Find char position from byte position
-    let char_pos = content[..match_pos.min(content.len())]
-        .chars()
-        .count()
-        .min(total_chars);
+    let char_pos = content[..match_pos].chars().count();
 
     let mut start_char = char_pos.saturating_sub(half_window);
-    let mut end_char = (char_pos + half_window).min(total_chars);
+    let mut end_char = char_pos.saturating_add(half_window).min(total_chars);
 
     // Expand start to word boundary (find previous whitespace)
     if start_char > 0 {
@@ -200,26 +211,7 @@ const HIGHLIGHT_END: &str = "<<\x1b[0m";
 /// Highlight keywords with dual markers (ANSI + text).
 /// Merges adjacent keywords: ">>word1<< >>word2<<" becomes ">>word1 word2<<"
 fn highlight_keywords(text: &str, query: &str) -> String {
-    let query_words: Vec<&str> = query.split_whitespace().collect();
-    let text_lower = text.to_lowercase();
-
-    // Collect all match ranges (start, end)
-    let mut matches: Vec<(usize, usize)> = Vec::new();
-
-    for word in &query_words {
-        if word.len() < 2 {
-            continue;
-        }
-        let word_lower = word.to_lowercase();
-        let mut search_start = 0;
-
-        while let Some(rel_pos) = text_lower[search_start..].find(&word_lower) {
-            let start = search_start + rel_pos;
-            let end = start + word.len();
-            matches.push((start, end));
-            search_start = end;
-        }
-    }
+    let mut matches = keyword_match_ranges(text, query);
 
     if matches.is_empty() {
         return text.to_string();
@@ -279,7 +271,52 @@ fn generate_preview(content: &str, query: &str, config: &super::config::SearchCo
     }
 }
 
-/// A search result with chunk metadata and similarity score.
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn unicode_expansion_before_match_keeps_kwic_and_highlight_source_positions() {
+        assert_eq!(
+            extract_kwic_preview("zero İé needle tail", "é", 2),
+            "...İé..."
+        );
+        assert_eq!(
+            highlight_keywords("İé needle", "é"),
+            format!("İ{HIGHLIGHT_START}é{HIGHLIGHT_END} needle")
+        );
+    }
+
+    #[test]
+    fn expanded_or_shrunk_keywords_highlight_whole_original_characters() {
+        assert_eq!(
+            highlight_keywords("İé", "i\u{307}"),
+            format!("{HIGHLIGHT_START}İ{HIGHLIGHT_END}é")
+        );
+        assert_eq!(
+            highlight_keywords("Kİẞ", "ki\u{307}ß"),
+            format!("{HIGHLIGHT_START}Kİẞ{HIGHLIGHT_END}")
+        );
+    }
+
+    #[test]
+    fn unicode_adjacent_highlights_merge_without_crossing_newlines() {
+        assert_eq!(
+            highlight_keywords("İstanbul Straße\nécole", "İSTANBUL Straße ÉCOLE"),
+            format!(
+                "{HIGHLIGHT_START}İstanbul Straße{HIGHLIGHT_END}\n{HIGHLIGHT_START}école{HIGHLIGHT_END}"
+            )
+        );
+        assert_eq!(
+            highlight_keywords("needle", "need needle"),
+            format!("{HIGHLIGHT_START}needle{HIGHLIGHT_END}")
+        );
+        assert_eq!(highlight_keywords("é", ""), "é");
+        assert_eq!(highlight_keywords("", "needle"), "");
+    }
+}
+
+/// A search result with chunk metadata and backend-specific relevance score.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchResult {
     /// Chunk identifier.
@@ -294,7 +331,7 @@ pub struct SearchResult {
     pub content_preview: String,
     /// Byte range in source file.
     pub byte_range: (usize, usize),
-    /// Similarity score (0.0 - 1.0).
+    /// Cosine similarity for semantic search, or BM25 relevance for lexical search.
     pub similarity: f32,
 }
 
@@ -317,6 +354,8 @@ pub struct DocumentStore {
 
     /// Vector storage for chunk embeddings.
     vector_storage: Option<MmapVectorStorage>,
+    vector_staging: Option<tempfile::TempDir>,
+    original_vectors: Option<MmapVectorStorage>,
 
     /// Cluster assignments for IVFFlat search.
     cluster_assignments: HashMap<VectorId, ClusterId>,
@@ -326,6 +365,12 @@ pub struct DocumentStore {
 
     /// File states for change detection.
     file_states: HashMap<PathBuf, FileState>,
+
+    /// Successful chunking policy and embedding generation for each source.
+    chunking_fingerprints: HashMap<PathBuf, String>,
+    embedded_files: HashMap<PathBuf, String>,
+    embedding_identity: Option<String>,
+    forced_collections: HashSet<String>,
 
     /// Collection name to ID mapping.
     collection_ids: HashMap<String, CollectionId>,
@@ -403,10 +448,10 @@ impl DocumentStore {
 
         // Load persisted state if available
         let state_path = base_path.join("state.json");
-        let (file_states, collection_ids, next_chunk_id) = if state_path.exists() {
+        let state = if state_path.exists() {
             Self::load_state(&state_path)?
         } else {
-            (HashMap::new(), HashMap::new(), 1)
+            PersistedState::default()
         };
 
         Ok(Self {
@@ -416,11 +461,33 @@ impl DocumentStore {
             schema: document_schema,
             writer: Mutex::new(None),
             vector_storage: None,
+            vector_staging: None,
+            original_vectors: None,
             cluster_assignments: HashMap::new(),
             centroids: Vec::new(),
-            file_states,
-            collection_ids,
-            next_chunk_id,
+            file_states: state
+                .file_states
+                .into_iter()
+                .map(|(path, state)| (PathBuf::from(path), state))
+                .collect(),
+            chunking_fingerprints: state
+                .chunking_fingerprints
+                .into_iter()
+                .map(|(path, fingerprint)| (PathBuf::from(path), fingerprint))
+                .collect(),
+            embedded_files: state
+                .embedded_files
+                .into_iter()
+                .map(|(path, identity)| (PathBuf::from(path), identity))
+                .collect(),
+            embedding_identity: state.embedding_identity,
+            forced_collections: HashSet::new(),
+            collection_ids: state
+                .collection_ids
+                .into_iter()
+                .filter_map(|(name, id)| CollectionId::from_u32(id).map(|id| (name, id)))
+                .collect(),
+            next_chunk_id: state.next_chunk_id.max(1),
             chunker: Box::new(HybridChunker::new()),
             embedding_generator: None,
             embedding_cache: None,
@@ -444,6 +511,21 @@ impl DocumentStore {
 
     /// Enable embedding generation for semantic search.
     pub fn with_embeddings(mut self, generator: Box<dyn EmbeddingGenerator>) -> StoreResult<Self> {
+        if generator.dimension() != self.dimension {
+            return Err(DocumentStoreError::Embedding(format!(
+                "Embedding generator dimension {} does not match document store dimension {}",
+                generator.dimension().get(),
+                self.dimension.get()
+            )));
+        }
+        let identity = format!("{};document-input=2", generator.cache_identity());
+        if let Some(previous) = &self.embedding_identity {
+            if previous != &identity {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "Document embedding model or preprocessing changed ({previous} -> {identity}). Select the original model or rebuild documents in a new index directory; existing vectors were preserved."
+                )));
+            }
+        }
         // Initialize vector storage
         let vector_path = self.base_path.join("vectors");
         std::fs::create_dir_all(&vector_path)?;
@@ -454,10 +536,26 @@ impl DocumentStore {
             self.dimension,
         )?;
 
+        if self.embedding_identity.is_none() && vector_storage.vector_count() > 0 {
+            return Err(DocumentStoreError::Embedding(
+                "Legacy document vectors have no model identity. Rebuild documents in a new index directory before semantic search; the existing index is still available for lexical search.".into()
+            ));
+        }
+        let expected_vectors: usize = self
+            .file_states
+            .iter()
+            .filter(|(path, _)| self.embedded_files.contains_key(*path))
+            .map(|(_, state)| state.chunk_ids.len())
+            .sum();
+        if vector_storage.vector_count() < expected_vectors {
+            self.embedded_files.clear();
+        }
+        self.embedding_identity = Some(identity.clone());
+
         let generator: Arc<dyn EmbeddingGenerator> = Arc::from(generator);
         self.embedding_cache = Some(crate::embedding_cache::EmbeddingCache::load(
             &self.base_path.join("embedding-cache.json"),
-            &generator.cache_identity(),
+            &identity,
             self.dimension.get(),
         ));
         self.vector_storage = Some(vector_storage);
@@ -508,6 +606,29 @@ impl DocumentStore {
     {
         let chunking_config = ValidatedChunkingConfig::try_from(chunking_config.clone())
             .map_err(DocumentStoreError::InvalidChunkingConfig)?;
+        let fingerprint = chunking_fingerprint(&chunking_config)?;
+        self.transaction(|store| {
+            store.index_collection_inner(
+                name,
+                config,
+                &chunking_config,
+                &fingerprint,
+                &mut on_progress,
+            )
+        })
+    }
+
+    fn index_collection_inner<F>(
+        &mut self,
+        name: &str,
+        config: &CollectionConfig,
+        chunking_config: &ValidatedChunkingConfig,
+        fingerprint: &str,
+        mut on_progress: F,
+    ) -> StoreResult<IndexStats>
+    where
+        F: FnMut(IndexProgress<'_>),
+    {
         let mut stats = IndexStats::default();
 
         // Ensure collection has an ID
@@ -519,8 +640,20 @@ impl DocumentStore {
         });
         let files = self.collect_files(config)?;
 
+        for path in &files {
+            if let Some(state) = self.file_states.get(path) {
+                if state.collection != name {
+                    return Err(DocumentStoreError::Index(format!(
+                        "Document {} already belongs to collection '{}'; overlapping collection ownership is not supported",
+                        path.display(),
+                        state.collection
+                    )));
+                }
+            }
+        }
+
         // Detect changes
-        let (changed, unchanged, removed) = self.detect_changes(&files, name);
+        let (changed, unchanged, removed) = self.detect_changes(&files, name, fingerprint)?;
 
         tracing::info!(
             target: "rag",
@@ -538,7 +671,6 @@ impl DocumentStore {
             if let Some(state) = self.file_states.get(path) {
                 let chunk_count = state.chunk_ids.len();
                 stats.chunks_removed += chunk_count;
-                self.delete_chunks_by_file(path, name)?;
                 tracing::info!(
                     target: "rag",
                     "deleted {} chunks from {}",
@@ -546,6 +678,9 @@ impl DocumentStore {
                     path.display()
                 );
             }
+            // A previous interrupted metadata commit may not have a state entry.
+            // Replacement is keyed by source, not by the presence of that cache.
+            self.delete_chunks_by_file(path, name)?;
         }
 
         // Phase 1: Process files (chunking and metadata)
@@ -568,7 +703,7 @@ impl DocumentStore {
             });
 
             let content = std::fs::read_to_string(path)?;
-            let raw_chunks = self.chunker.chunk(&content, &chunking_config);
+            let raw_chunks = self.chunker.chunk(&content, chunking_config);
 
             let mut chunk_ids = Vec::new();
 
@@ -582,7 +717,7 @@ impl DocumentStore {
                 if let Some(spool) = embedding_spool.as_mut() {
                     serde_json::to_writer(
                         &mut *spool,
-                        &(chunk_id.get(), raw_chunk.content.as_str()),
+                        &(chunk_id.get(), embedding_input(&raw_chunk)),
                     )
                     .map_err(|e| {
                         DocumentStoreError::Index(format!(
@@ -606,15 +741,12 @@ impl DocumentStore {
                 mtime: crate::indexing::file_info::get_file_mtime(path).unwrap_or(0),
             };
             self.file_states.insert(path.clone(), file_state);
+            self.chunking_fingerprints
+                .insert(path.clone(), fingerprint.to_string());
+            self.embedded_files.remove(path);
 
             stats.files_processed += 1;
         }
-
-        // Commit tantivy changes
-        on_progress(IndexProgress::Phase {
-            name: "committing metadata",
-        });
-        self.commit()?;
 
         // Phase 2: Generate embeddings in batches
         if let Some(mut spool) = embedding_spool {
@@ -630,13 +762,22 @@ impl DocumentStore {
         // Remove file states for deleted files
         for path in &removed {
             self.file_states.remove(path);
+            self.chunking_fingerprints.remove(path);
+            self.embedded_files.remove(path);
         }
+        if self.embedding_generator.is_some() {
+            if let Some(identity) = &self.embedding_identity {
+                for path in &changed {
+                    self.embedded_files.insert(path.clone(), identity.clone());
+                }
+            }
+        }
+        self.forced_collections.remove(name);
 
         // Persist state
         on_progress(IndexProgress::Phase {
-            name: "saving state",
+            name: "committing metadata and state",
         });
-        self.save_state()?;
 
         Ok(stats)
     }
@@ -654,6 +795,15 @@ impl DocumentStore {
     ) -> StoreResult<Option<usize>> {
         let chunking_config = ValidatedChunkingConfig::try_from(chunking_config.clone())
             .map_err(DocumentStoreError::InvalidChunkingConfig)?;
+        let path = normalize_source_path(path);
+        self.transaction(|store| store.reindex_file_inner(&path, &chunking_config))
+    }
+
+    fn reindex_file_inner(
+        &mut self,
+        path: &Path,
+        chunking_config: &ValidatedChunkingConfig,
+    ) -> StoreResult<Option<usize>> {
         // Look up collection from file state
         let (collection, old_chunk_count) = match self.file_states.get(path) {
             Some(state) => (state.collection.clone(), state.chunk_ids.len()),
@@ -664,7 +814,7 @@ impl DocumentStore {
         let content = std::fs::read_to_string(path)?;
 
         // Chunk the content
-        let raw_chunks = self.chunker.chunk(&content, &chunking_config);
+        let raw_chunks = self.chunker.chunk(&content, chunking_config);
 
         // Delete existing chunks
         self.delete_chunks_by_file(path, &collection)?;
@@ -686,11 +836,8 @@ impl DocumentStore {
             self.store_chunk(chunk_id, &collection, path, &raw_chunk, &content)?;
 
             // Queue for embedding
-            pending_embeddings.push((chunk_id, raw_chunk.content.clone()));
+            pending_embeddings.push((chunk_id, embedding_input(&raw_chunk)));
         }
-
-        // Commit tantivy changes
-        self.commit()?;
 
         // Generate embeddings
         let chunks_created = pending_embeddings.len();
@@ -713,9 +860,15 @@ impl DocumentStore {
             mtime: crate::indexing::file_info::get_file_mtime(path).unwrap_or(0),
         };
         self.file_states.insert(path.to_path_buf(), file_state);
-
-        // Persist state
-        self.save_state()?;
+        self.chunking_fingerprints
+            .insert(path.to_path_buf(), chunking_fingerprint(chunking_config)?);
+        self.embedded_files.remove(path);
+        if self.embedding_generator.is_some() {
+            if let Some(identity) = &self.embedding_identity {
+                self.embedded_files
+                    .insert(path.to_path_buf(), identity.clone());
+            }
+        }
 
         Ok(Some(chunks_created))
     }
@@ -725,6 +878,11 @@ impl DocumentStore {
     /// Used by the file watcher when a document is deleted.
     /// Returns true if the file was in the index.
     pub fn remove_file(&mut self, path: &Path) -> StoreResult<bool> {
+        let path = normalize_source_path(path);
+        self.transaction(|store| store.remove_file_inner(&path))
+    }
+
+    fn remove_file_inner(&mut self, path: &Path) -> StoreResult<bool> {
         let Some(state) = self.file_states.remove(path) else {
             return Ok(false);
         };
@@ -733,7 +891,8 @@ impl DocumentStore {
 
         // Delete chunks from tantivy
         self.delete_chunks_by_file(path, &state.collection)?;
-        self.commit()?;
+        self.chunking_fingerprints.remove(path);
+        self.embedded_files.remove(path);
 
         tracing::info!(
             target: "rag",
@@ -742,15 +901,14 @@ impl DocumentStore {
             path.display()
         );
 
-        // Persist state
-        self.save_state()?;
-
         Ok(true)
     }
 
     /// Get the collection name for a file, if indexed.
     pub fn get_file_collection(&self, path: &Path) -> Option<&str> {
-        self.file_states.get(path).map(|s| s.collection.as_str())
+        self.file_states
+            .get(&normalize_source_path(path))
+            .map(|s| s.collection.as_str())
     }
 
     /// Get all indexed file paths.
@@ -758,11 +916,11 @@ impl DocumentStore {
         self.file_states.keys().cloned().collect()
     }
 
-    /// Clear all file states to force full re-indexing.
-    ///
-    /// Used by `--force` flag to treat all files as new.
+    /// Mark indexed collections for replacement without discarding their source
+    /// ownership. A selected force operation must preserve other collections.
     pub fn clear_file_states(&mut self) {
-        self.file_states.clear();
+        self.forced_collections
+            .extend(self.collection_ids.keys().cloned());
     }
 
     /// Search for chunks matching a query.
@@ -776,9 +934,15 @@ impl DocumentStore {
             schema: self.schema,
             writer: Mutex::new(None),
             vector_storage: None,
+            vector_staging: None,
+            original_vectors: None,
             cluster_assignments: HashMap::new(),
             centroids: Vec::new(),
             file_states: HashMap::new(),
+            chunking_fingerprints: HashMap::new(),
+            embedded_files: HashMap::new(),
+            embedding_identity: self.embedding_identity.clone(),
+            forced_collections: HashSet::new(),
             collection_ids: HashMap::new(),
             next_chunk_id: self.next_chunk_id,
             chunker: Box::new(HybridChunker::new()),
@@ -791,8 +955,12 @@ impl DocumentStore {
     }
 
     pub fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
-        if query.text.is_empty() {
+        if query.text.trim().is_empty() || query.limit == 0 {
             return Ok(Vec::new());
+        }
+
+        if self.embedding_generator.is_none() {
+            return self.search_lexical(&query);
         }
 
         // Get candidate chunks based on filters
@@ -802,10 +970,7 @@ impl DocumentStore {
             return Ok(Vec::new());
         }
 
-        // If no embeddings, return candidates by tantivy score order
-        let Some(ref generator) = self.embedding_generator else {
-            return self.enrich_results(candidates, &query);
-        };
+        let generator = self.embedding_generator.as_ref().expect("checked above");
 
         // Generate query embedding
         let query_embeddings = generator
@@ -824,6 +989,58 @@ impl DocumentStore {
 
         // Enrich with full metadata and KWIC preview
         self.build_search_results(scored_candidates, &query)
+    }
+
+    fn search_lexical(&self, query: &SearchQuery) -> StoreResult<Vec<SearchResult>> {
+        // Natural-language input is analyzed as literal terms, never parsed as
+        // Tantivy query syntax. Headings contribute without excluding body hits.
+        let mut analyzer = self.index.tokenizers().get("default").ok_or_else(|| {
+            DocumentStoreError::Index("Document text tokenizer is unavailable".into())
+        })?;
+        let mut stream = analyzer.token_stream(&query.text);
+        let mut terms = HashSet::new();
+        while stream.advance() {
+            terms.insert(stream.token().text.clone());
+        }
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut text_queries: Vec<Box<dyn Query>> = Vec::new();
+        for text in terms {
+            for (field, boost) in [
+                (self.schema.content, 1.0),
+                (self.schema.heading_context, 2.0),
+            ] {
+                let term = Term::from_field_text(field, &text);
+                text_queries.push(Box::new(BoostQuery::new(
+                    Box::new(TermQuery::new(
+                        term,
+                        tantivy::schema::IndexRecordOption::WithFreqs,
+                    )),
+                    boost,
+                )));
+            }
+        }
+        let mut clauses = self.filter_clauses(query);
+        clauses.push((Occur::Must, Box::new(BooleanQuery::union(text_queries))));
+        let searcher = self.reader.searcher();
+        let hits = searcher.search(
+            &BooleanQuery::new(clauses),
+            &TopDocs::with_limit(query.limit).order_by_score(),
+        )?;
+        let mut scored = Vec::with_capacity(hits.len());
+        for (score, address) in hits {
+            let doc: Document = searcher.doc(address)?;
+            if let Some(id) = doc
+                .get_first(self.schema.chunk_id)
+                .and_then(|value| value.as_u64())
+                .and_then(|id| u32::try_from(id).ok())
+                .and_then(ChunkId::from_u32)
+            {
+                scored.push((id, score));
+            }
+        }
+        self.build_search_results(scored, query)
     }
 
     /// Delete all chunks from a collection.
@@ -854,6 +1071,11 @@ impl DocumentStore {
         // Each state records its collection; preserve every other collection,
         // including empty files and legacy states with an unknown collection.
         self.file_states.retain(|_, state| state.collection != name);
+        self.chunking_fingerprints
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.embedded_files
+            .retain(|path, _| self.file_states.contains_key(path));
+        self.forced_collections.remove(name);
 
         // Remove collection ID
         self.collection_ids.remove(name);
@@ -914,6 +1136,11 @@ impl DocumentStore {
     }
 
     fn collect_files(&self, config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
+        Self::discover_files(config)
+    }
+
+    /// Shared collection discovery for indexing and watcher reconciliation.
+    pub(crate) fn discover_files(config: &CollectionConfig) -> StoreResult<Vec<PathBuf>> {
         let mut files = Vec::new();
         let patterns = config
             .effective_patterns()
@@ -949,7 +1176,13 @@ impl DocumentStore {
                 .follow_links(false);
             walker.add_custom_ignore_filename(".codannaignore");
 
-            for entry in walker.build().filter_map(Result::ok) {
+            for entry in walker.build() {
+                let entry = entry.map_err(|error| {
+                    DocumentStoreError::Index(format!(
+                        "Document discovery failed beneath {}: {error}",
+                        base_path.display()
+                    ))
+                })?;
                 let path = entry.path();
                 if !path.is_file() {
                     continue;
@@ -965,6 +1198,12 @@ impl DocumentStore {
             }
         }
 
+        let mut files = files
+            .into_iter()
+            .map(|path| path.canonicalize())
+            .collect::<Result<Vec<_>, _>>()?;
+        files.sort();
+        files.dedup();
         Ok(files)
     }
 
@@ -972,7 +1211,8 @@ impl DocumentStore {
         &self,
         files: &[PathBuf],
         collection: &str,
-    ) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+        fingerprint: &str,
+    ) -> StoreResult<(Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>)> {
         let mut changed = Vec::new();
         let mut unchanged = Vec::new();
         let mut removed: Vec<PathBuf> = Vec::new();
@@ -982,32 +1222,22 @@ impl DocumentStore {
         // Find changed and unchanged files
         for path in files {
             if let Some(state) = self.file_states.get(path) {
-                // Fast path: check mtime first (stat only, no file read)
-                let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
-                if state.mtime > 0 && current_mtime == state.mtime {
-                    // mtime unchanged = file unchanged
+                // mtime is not content identity: multiple saves can share one
+                // second, and sync tools can preserve timestamps deliberately.
+                let content = std::fs::read_to_string(path)?;
+                let needs_vectors = self.embedding_generator.is_some()
+                    && self.embedded_files.get(path) != self.embedding_identity.as_ref();
+                if !self.forced_collections.contains(collection)
+                    && self
+                        .chunking_fingerprints
+                        .get(path)
+                        .is_some_and(|value| value == fingerprint)
+                    && !needs_vectors
+                    && calculate_hash(&content) == state.content_hash
+                {
                     unchanged.push(path.clone());
-                    continue;
-                }
-
-                // mtime changed or unknown - verify with hash (requires file read)
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    let current_hash = calculate_hash(&content);
-                    if current_hash == state.content_hash {
-                        unchanged.push(path.clone());
-                    } else {
-                        tracing::trace!(
-                            target: "rag",
-                            "file changed: {} (mtime: {} -> {})",
-                            path.display(),
-                            state.mtime,
-                            current_mtime
-                        );
-                        changed.push(path.clone());
-                    }
                 } else {
-                    // File unreadable, treat as removed
-                    removed.push(path.clone());
+                    changed.push(path.clone());
                 }
             } else {
                 // New file
@@ -1034,7 +1264,7 @@ impl DocumentStore {
             removed.len()
         );
 
-        (changed, unchanged, removed)
+        Ok((changed, unchanged, removed))
     }
 
     fn store_chunk(
@@ -1130,6 +1360,98 @@ impl DocumentStore {
 
         self.reader.reload()?;
 
+        Ok(())
+    }
+
+    /// Keep metadata mutations private until every embedding batch succeeds.
+    /// Vectors are copied lazily to a sibling staging inode, so failed batches
+    /// and active mmap readers cannot observe partially appended records.
+    fn transaction<T>(
+        &mut self,
+        action: impl FnOnce(&mut Self) -> StoreResult<T>,
+    ) -> StoreResult<T> {
+        let file_states = self.file_states.clone();
+        let chunking_fingerprints = self.chunking_fingerprints.clone();
+        let embedded_files = self.embedded_files.clone();
+        let collection_ids = self.collection_ids.clone();
+        let forced_collections = self.forced_collections.clone();
+        let result = action(self).and_then(|value| {
+            self.publish_staged_vectors()?;
+            self.commit()?;
+            Ok(value)
+        });
+        match result {
+            Ok(value) => {
+                // State publication is atomic. If this write fails after the
+                // Tantivy commit, retain the committed in-memory generation so
+                // a retry can persist it without duplicating document chunks.
+                self.save_state()?;
+                Ok(value)
+            }
+            Err(error) => {
+                if let Ok(mut guard) = self.writer.lock() {
+                    if let Some(writer) = guard.as_mut() {
+                        if let Err(rollback_error) = writer.rollback() {
+                            tracing::error!(target: "documents", %rollback_error, "document metadata rollback failed");
+                        }
+                    }
+                }
+                if let Some(original) = self.original_vectors.take() {
+                    self.vector_storage = Some(original);
+                }
+                self.vector_staging = None;
+                self.file_states = file_states;
+                self.chunking_fingerprints = chunking_fingerprints;
+                self.embedded_files = embedded_files;
+                self.collection_ids = collection_ids;
+                self.forced_collections = forced_collections;
+                // IDs are deliberately not reused after a failed attempt.
+                if let Err(state_error) = self.save_state() {
+                    tracing::warn!(target: "documents", %state_error, "failed to persist document retry state");
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn stage_vector_writes(&mut self) -> StoreResult<()> {
+        if self.vector_staging.is_some() {
+            return Ok(());
+        }
+        let Some(original) = self.vector_storage.take() else {
+            return Ok(());
+        };
+        self.original_vectors = Some(original);
+        let staging = tempfile::Builder::new()
+            .prefix(".document-vectors-")
+            .tempdir_in(&self.base_path)?;
+        let active = self.base_path.join("vectors/segment_0.vec");
+        if active.exists() {
+            std::fs::copy(active, staging.path().join("segment_0.vec"))?;
+        }
+        self.vector_storage = Some(MmapVectorStorage::open_or_create(
+            staging.path(),
+            SegmentOrdinal::new(0),
+            self.dimension,
+        )?);
+        self.vector_staging = Some(staging);
+        Ok(())
+    }
+
+    fn publish_staged_vectors(&mut self) -> StoreResult<()> {
+        let Some(staging) = self.vector_staging.take() else {
+            return Ok(());
+        };
+        let parent = self.base_path.join("vectors");
+        let temporary = tempfile::NamedTempFile::new_in(&parent)?.into_temp_path();
+        self.vector_storage = None;
+        std::fs::rename(staging.path().join("segment_0.vec"), &temporary)?;
+        std::fs::File::open(&temporary)?.sync_all()?;
+        temporary
+            .persist(parent.join("segment_0.vec"))
+            .map_err(|error| error.error)?;
+        self.vector_storage = Some(MmapVectorStorage::open(&parent, SegmentOrdinal::new(0))?);
+        self.original_vectors = None;
         Ok(())
     }
 
@@ -1248,6 +1570,7 @@ impl DocumentStore {
                 VectorId::new(chunk_id.get()).map(|id| (id, embedding.as_ref()))
             })
             .collect();
+        self.stage_vector_writes()?;
         self.vector_storage
             .as_mut()
             .expect("checked above")
@@ -1346,10 +1669,7 @@ impl DocumentStore {
         Ok(())
     }
 
-    fn get_filtered_candidates(&self, query: &SearchQuery) -> StoreResult<Vec<ChunkId>> {
-        let searcher = self.reader.searcher();
-
-        // Build filter query
+    fn filter_clauses(&self, query: &SearchQuery) -> Vec<(Occur, Box<dyn Query>)> {
         let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
 
         // Always filter for chunks (not metadata)
@@ -1387,7 +1707,12 @@ impl DocumentStore {
             ));
         }
 
-        let filter_query = BooleanQuery::new(subqueries);
+        subqueries
+    }
+
+    fn get_filtered_candidates(&self, query: &SearchQuery) -> StoreResult<Vec<ChunkId>> {
+        let searcher = self.reader.searcher();
+        let filter_query = BooleanQuery::new(self.filter_clauses(query));
 
         // Enumerate the complete filtered set. A TopDocs limit here used to
         // silently exclude matching chunks from semantic ranking once a
@@ -1435,20 +1760,6 @@ impl DocumentStore {
             .into_iter()
             .filter_map(|(id, score)| ChunkId::from_u32(id.get()).map(|chunk| (chunk, score)))
             .collect())
-    }
-
-    fn enrich_results(
-        &self,
-        candidates: Vec<ChunkId>,
-        query: &SearchQuery,
-    ) -> StoreResult<Vec<SearchResult>> {
-        let chunk_ids: Vec<(ChunkId, f32)> = candidates
-            .into_iter()
-            .take(query.limit)
-            .map(|id| (id, 0.0))
-            .collect();
-
-        self.build_search_results(chunk_ids, query)
     }
 
     fn build_search_results(
@@ -1555,31 +1866,12 @@ impl DocumentStore {
         Ok(results)
     }
 
-    #[allow(clippy::type_complexity)]
-    fn load_state(
-        path: &Path,
-    ) -> StoreResult<(
-        HashMap<PathBuf, FileState>,
-        HashMap<String, CollectionId>,
-        u64,
-    )> {
+    fn load_state(path: &Path) -> StoreResult<PersistedState> {
         let content = std::fs::read_to_string(path)?;
         let state: PersistedState = serde_json::from_str(&content)
             .map_err(|e| DocumentStoreError::Index(format!("Failed to parse state: {e}")))?;
 
-        let file_states = state
-            .file_states
-            .into_iter()
-            .map(|(k, v)| (PathBuf::from(k), v))
-            .collect();
-
-        let collection_ids = state
-            .collection_ids
-            .into_iter()
-            .filter_map(|(name, id)| CollectionId::from_u32(id).map(|cid| (name, cid)))
-            .collect();
-
-        Ok((file_states, collection_ids, state.next_chunk_id))
+        Ok(state)
     }
 
     fn save_state(&self) -> StoreResult<()> {
@@ -1595,13 +1887,28 @@ impl DocumentStore {
                 .map(|(name, id)| (name.clone(), id.get()))
                 .collect(),
             next_chunk_id: self.next_chunk_id,
+            chunking_fingerprints: self
+                .chunking_fingerprints
+                .iter()
+                .map(|(path, value)| (path.to_string_lossy().to_string(), value.clone()))
+                .collect(),
+            embedded_files: self
+                .embedded_files
+                .iter()
+                .map(|(path, value)| (path.to_string_lossy().to_string(), value.clone()))
+                .collect(),
+            embedding_identity: self.embedding_identity.clone(),
         };
 
         let content = serde_json::to_string_pretty(&state)
             .map_err(|e| DocumentStoreError::Index(format!("Failed to serialize state: {e}")))?;
 
         let state_path = self.base_path.join("state.json");
-        std::fs::write(state_path, content)?;
+        let mut staging = tempfile::NamedTempFile::new_in(&self.base_path)?;
+        staging.write_all(content.as_bytes())?;
+        staging.flush()?;
+        staging.as_file().sync_all()?;
+        staging.persist(state_path).map_err(|error| error.error)?;
 
         if let Some(cache) = &self.embedding_cache {
             if let Err(error) = cache.save(&self.base_path.join("embedding-cache.json")) {
@@ -1638,6 +1945,38 @@ impl DocumentStore {
     }
 }
 
+/// Normalize existing sources and deleted children beneath a canonical parent.
+/// This preserves ownership across platform aliases such as /var and /private/var.
+pub(crate) fn normalize_source_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if let Ok(canonical) = ancestor.canonicalize() {
+            if let Ok(suffix) = path.strip_prefix(ancestor) {
+                return canonical.join(suffix);
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+fn chunking_fingerprint(config: &ValidatedChunkingConfig) -> StoreResult<String> {
+    let encoded = serde_json::to_string(&**config)
+        .map_err(|error| DocumentStoreError::InvalidChunkingConfig(error.to_string()))?;
+    Ok(calculate_hash(&format!(
+        "hybrid-source-spans-v2\n{encoded}"
+    )))
+}
+
+fn embedding_input(chunk: &RawChunk) -> String {
+    if chunk.heading_context.is_empty() {
+        chunk.content.clone()
+    } else {
+        format!("{}\n\n{}", chunk.heading_context.join(" > "), chunk.content)
+    }
+}
+
 fn retain_top_chunks(scored: &mut Vec<(ChunkId, f32)>, limit: usize) {
     if limit == 0 {
         scored.clear();
@@ -1662,11 +2001,17 @@ pub struct CollectionStats {
 }
 
 /// Persisted state for the document store.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct PersistedState {
     file_states: HashMap<String, FileState>,
     collection_ids: HashMap<String, u32>,
     next_chunk_id: u64,
+    #[serde(default)]
+    chunking_fingerprints: HashMap<String, String>,
+    #[serde(default)]
+    embedded_files: HashMap<String, String>,
+    #[serde(default)]
+    embedding_identity: Option<String>,
 }
 
 /// Persisted cluster data.
@@ -1767,6 +2112,41 @@ mod tests {
             })
             .unwrap();
         assert_eq!(candidates.len(), 10_001);
+    }
+
+    #[test]
+    fn lexical_search_finds_relevant_chunk_after_ten_thousand_nonmatches() {
+        let temp = TempDir::new().unwrap();
+        let mut store = DocumentStore::new(temp.path(), test_dimension()).unwrap();
+        let ordinary = RawChunk::new((0, 4), "body".to_string(), Vec::new());
+        let relevant = RawChunk::new((0, 12), "rarechecksum".to_string(), Vec::new());
+        for raw_id in 1..=10_001 {
+            let chunk = if raw_id == 10_001 {
+                &relevant
+            } else {
+                &ordinary
+            };
+            store
+                .store_chunk(
+                    ChunkId::from_u32(raw_id).unwrap(),
+                    "large",
+                    Path::new("large.md"),
+                    chunk,
+                    &chunk.content,
+                )
+                .unwrap();
+        }
+        store.commit().unwrap();
+        let hits = store
+            .search(SearchQuery {
+                text: "rarechecksum".into(),
+                collection: Some("large".into()),
+                limit: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_id.get(), 10_001);
     }
 
     #[test]

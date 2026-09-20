@@ -96,9 +96,9 @@ impl CParser {
 
         let range = Range::new(
             full_node.start_position().row as u32,
-            full_node.start_position().column as u16,
+            full_node.start_position().column as u32,
             full_node.end_position().row as u32,
-            full_node.end_position().column as u16,
+            full_node.end_position().column as u32,
         );
 
         let mut symbol = Symbol::new(symbol_id, name.to_string(), kind, file_id, range);
@@ -812,9 +812,9 @@ impl CParser {
             if let Some(function_node) = node.child_by_field_name("function") {
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 let caller = enclosing.unwrap_or("<module>");
 
@@ -861,9 +861,9 @@ impl CParser {
                 let target_name = &code[function_node.byte_range()];
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 calls.push((enclosing.unwrap_or("<module>"), target_name, range));
             }
@@ -886,9 +886,9 @@ impl CParser {
             let identifier_name = &code[node.byte_range()];
             let range = Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             );
             // Use empty string for context for now
             uses.push(("", identifier_name, range));
@@ -917,17 +917,17 @@ impl CParser {
                     let var_name = declarator_text[..equals_pos].trim();
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     defines.push((var_name, "variable", range));
                 } else {
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     defines.push((declarator_text.trim(), "variable", range));
                 }
@@ -939,9 +939,9 @@ impl CParser {
                 let macro_name = &code[name_node.byte_range()];
                 let range = Range::new(
                     node.start_position().row as u32,
-                    node.start_position().column as u16,
+                    node.start_position().column as u32,
                     node.end_position().row as u32,
-                    node.end_position().column as u16,
+                    node.end_position().column as u32,
                 );
                 defines.push((macro_name, "macro", range));
             }

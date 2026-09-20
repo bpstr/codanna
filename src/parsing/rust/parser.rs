@@ -40,6 +40,9 @@ use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind};
 use tree_sitter::{Node, Parser};
 
+type FactoryReturns<'a> = std::collections::HashMap<(usize, &'a str, &'a str), Option<&'a str>>;
+type FactoryOwners<'a> = std::collections::HashMap<&'a str, Option<usize>>;
+
 // Helper enum for doc comment type classification
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DocCommentType {
@@ -825,7 +828,8 @@ impl RustParser {
         let containing_function = self.find_containing_function(node, code);
 
         if node.kind() == "call_expression" {
-            if let Some(function_node) = node.child_by_field_name("function") {
+            if let Some(function_node) = node.child_by_field_name("function").map(Self::callee_node)
+            {
                 // Enable via tracing::trace! when needed
                 // tracing::trace!("[parser] call_expression, function node kind: {}", function_node.kind());
                 let mut target_name = None;
@@ -851,9 +855,9 @@ impl RustParser {
                 if let (Some(target), Some(caller)) = (target_name, containing_function) {
                     let range = Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     );
                     // Enable via tracing::trace! when needed
                     // tracing::trace!("[parser] adding call '{}' -> '{}'", caller, target);
@@ -880,6 +884,17 @@ impl RustParser {
         }
     }
 
+    /// Generic arguments decorate the callee; they do not change its identity.
+    fn callee_node(mut node: Node) -> Node {
+        while node.kind() == "generic_function" {
+            let Some(inner) = node.child_by_field_name("function") else {
+                break;
+            };
+            node = inner;
+        }
+        node
+    }
+
     /// Recursively extracts method calls from AST nodes with enhanced receiver detection.
     ///
     /// Handles direct function calls, instance methods, and static method calls.
@@ -893,16 +908,17 @@ impl RustParser {
         let containing_function = self.find_containing_function(node, code);
 
         if node.kind() == "call_expression" {
-            if let Some(function_node) = node.child_by_field_name("function") {
+            if let Some(function_node) = node.child_by_field_name("function").map(Self::callee_node)
+            {
                 // Handle direct function calls (e.g., `my_function()`)
                 if function_node.kind() == "identifier" {
                     let method_name = code[function_node.byte_range()].to_string();
                     if let Some(caller) = containing_function {
                         let range = Range::new(
                             node.start_position().row as u32,
-                            node.start_position().column as u16,
+                            node.start_position().column as u32,
                             node.end_position().row as u32,
-                            node.end_position().column as u16,
+                            node.end_position().column as u32,
                         );
                         let method_call = MethodCall::new(caller, &method_name, range);
                         // Debug: Found function call (enable debug mode to see)
@@ -922,9 +938,9 @@ impl RustParser {
                             if let Some(caller) = containing_function {
                                 let range = Range::new(
                                     node.start_position().row as u32,
-                                    node.start_position().column as u16,
+                                    node.start_position().column as u32,
                                     node.end_position().row as u32,
-                                    node.end_position().column as u16,
+                                    node.end_position().column as u32,
                                 );
 
                                 let method_call = match value_node.kind() {
@@ -971,9 +987,9 @@ impl RustParser {
                         if let Some(caller) = containing_function {
                             let range = Range::new(
                                 node.start_position().row as u32,
-                                node.start_position().column as u16,
+                                node.start_position().column as u32,
                                 node.end_position().row as u32,
-                                node.end_position().column as u16,
+                                node.end_position().column as u32,
                             );
 
                             let method_call = MethodCall::new(caller, method_name, range)
@@ -1011,9 +1027,9 @@ impl RustParser {
                     if let (Some(trait_name), Some(type_name)) = (trait_name, type_name) {
                         let range = Range::new(
                             node.start_position().row as u32,
-                            node.start_position().column as u16,
+                            node.start_position().column as u32,
                             node.end_position().row as u32,
-                            node.end_position().column as u16,
+                            node.end_position().column as u32,
                         );
                         implementations.push((type_name, trait_name, range));
                     }
@@ -1031,116 +1047,192 @@ impl RustParser {
         &self,
         node: Node,
         code: &'a str,
+        factories: &FactoryReturns<'a>,
         bindings: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
         if node.kind() == "let_declaration" {
-            tracing::debug!(
-                "[rust-parser] found let_declaration at line {}",
-                node.start_position().row
-            );
-
-            // Extract variable name from pattern
-            if let Some(pattern_node) = node.child_by_field_name("pattern") {
-                // eprintln!("  - Pattern node kind: {}", pattern_node.kind());
-
-                if let Some(var_name) = self.extract_variable_name(pattern_node, code) {
-                    // eprintln!("  - Extracted variable name: '{}'", var_name);
-                    // Extract type from value expression
-                    if let Some(value_node) = node.child_by_field_name("value") {
-                        // eprintln!("  - Value node kind: {}", value_node.kind());
-                        // eprintln!("  - Value text: '{}'", &code[value_node.byte_range()]);
-
-                        if let Some(type_name) = self.extract_value_type(value_node, code) {
-                            // eprintln!("  - Extracted type name: '{}'", type_name);
-                            let range = Range::new(
-                                node.start_position().row as u32,
-                                node.start_position().column as u16,
-                                node.end_position().row as u32,
-                                node.end_position().column as u16,
-                            );
-                            bindings.push((var_name, type_name, range));
-                            // eprintln!("  ✓ Added binding: {} -> {}", var_name, type_name);
-                        } else {
-                            // eprintln!("  ✗ Could not extract type from value");
-                        }
-                    } else {
-                        // eprintln!("  ✗ No value node found");
-                    }
-                } else {
-                    // eprintln!("  ✗ Could not extract variable name");
+            if let Some(name) = node
+                .child_by_field_name("pattern")
+                .filter(|n| n.kind() == "identifier")
+            {
+                // An annotation is direct evidence and outranks the initializer.
+                let type_name = node
+                    .child_by_field_name("type")
+                    .and_then(|n| self.binding_type_name(n, code))
+                    .or_else(|| {
+                        node.child_by_field_name("value")
+                            .and_then(|n| self.extract_value_type(n, code, factories))
+                    });
+                if let Some(type_name) = type_name {
+                    bindings.push((
+                        &code[name.byte_range()],
+                        type_name,
+                        Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u32,
+                            node.end_position().row as u32,
+                            node.end_position().column as u32,
+                        ),
+                    ));
                 }
-            } else {
-                // eprintln!("  ✗ No pattern node found");
             }
         }
-
-        // Recurse into children
         for child in node.children(&mut node.walk()) {
-            self.find_variable_types_in_node(child, code, bindings);
+            self.find_variable_types_in_node(child, code, factories, bindings);
         }
     }
 
-    fn extract_variable_name<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
+    fn binding_type_name<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
         match node.kind() {
-            "identifier" => Some(&code[node.byte_range()]),
+            "type_identifier" | "primitive_type" | "scoped_type_identifier" => {
+                Some(&code[node.byte_range()])
+            }
+            "reference_type" | "generic_type" => {
+                self.binding_type_name(node.child_by_field_name("type")?, code)
+            }
             _ => None,
         }
     }
 
-    fn extract_value_type<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
-        tracing::debug!(
-            "[rust-parser] extract_value_type node kind: '{}', text: '{}'",
-            node.kind(),
-            &code[node.byte_range()]
-        );
-
+    fn extract_value_type<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        factories: &FactoryReturns<'a>,
+    ) -> Option<&'a str> {
         match node.kind() {
-            // Direct struct construction: MyType { ... }
-            "struct_expression" => {
-                if let Some(type_node) = node.child_by_field_name("name") {
-                    // eprintln!("    → struct_expression extracted type: {:?}", result);
-                    self.extract_type_name(type_node, code)
-                } else {
-                    // eprintln!("    → struct_expression has no name field");
-                    None
-                }
-            }
-            // Reference: &expr - can't handle this without allocation
-            "reference_expression" => {
-                // For now, skip reference types as they require allocation
-                // A full solution would need Cow<'a, str> or similar
-                // eprintln!("    → reference_expression skipped (would require allocation)");
-                None
-            }
-            // Variable reference: x = y
-            "identifier" => {
-                // Direct type name without prefix
-                let result = &code[node.byte_range()];
-                // eprintln!("    → identifier extracted: '{}'", result);
-                Some(result)
-            }
-            // Call expressions like Type::new() - extract the type part
+            "struct_expression" => self.binding_type_name(node.child_by_field_name("name")?, code),
             "call_expression" => {
-                if let Some(function_node) = node.child_by_field_name("function") {
-                    // eprintln!("    → call_expression function kind: '{}'", function_node.kind());
-                    if function_node.kind() == "scoped_identifier" {
-                        // Extract type from Type::method pattern
-                        let full_path = &code[function_node.byte_range()];
-                        // eprintln!("    → scoped_identifier full path: '{}'", full_path);
-                        if let Some(scope_pos) = full_path.find("::") {
-                            let type_part = &full_path[..scope_pos];
-                            // eprintln!("    → extracted type part: '{}'", type_part);
-                            return Some(type_part);
+                let callee = Self::callee_node(node.child_by_field_name("function")?);
+                if callee.kind() != "scoped_identifier" {
+                    return None;
+                }
+                let path = &code[callee.byte_range()];
+                let (owner, method) = path.rsplit_once("::")?;
+                // Cross-file and qualified calls need resolved symbol identity. Do
+                // not guess a return type from an associated function's owner.
+                if owner.contains("::") {
+                    return None;
+                }
+                factories
+                    .get(&(Self::factory_module_scope(node), owner, method))
+                    .copied()
+                    .flatten()
+            }
+            _ => None,
+        }
+    }
+
+    fn factory_module_scope(mut node: Node) -> usize {
+        loop {
+            if node.kind() == "source_file"
+                || (node.kind() == "declaration_list"
+                    && node.parent().is_some_and(|p| p.kind() == "mod_item"))
+            {
+                return node.id();
+            }
+            let Some(parent) = node.parent() else {
+                return node.id();
+            };
+            node = parent;
+        }
+    }
+
+    fn collect_factory_owners<'a>(
+        node: Node,
+        code: &'a str,
+        owners: &mut FactoryOwners<'a>,
+        in_import: bool,
+        glob: &mut bool,
+    ) {
+        let in_import = in_import || node.kind() == "use_declaration";
+        if in_import && node.kind() == "*" {
+            *glob = true;
+        }
+        let declaration = matches!(
+            node.kind(),
+            "struct_item" | "enum_item" | "type_item" | "type_parameter"
+        );
+        let name = if declaration {
+            node.child_by_field_name("name")
+        } else if in_import && matches!(node.kind(), "identifier" | "type_identifier") {
+            Some(node)
+        } else {
+            None
+        };
+        if let Some(name) = name {
+            let scope = node
+                .parent()
+                .filter(|p| p.id() == Self::factory_module_scope(node))
+                .filter(|_| matches!(node.kind(), "struct_item" | "enum_item"))
+                .map(|p| p.id());
+            owners
+                .entry(&code[name.byte_range()])
+                .and_modify(|old| *old = None)
+                .or_insert(scope);
+        }
+        for child in node.children(&mut node.walk()) {
+            Self::collect_factory_owners(child, code, owners, in_import, glob);
+        }
+    }
+
+    fn collect_factory_returns<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        owners: &FactoryOwners<'a>,
+        returns: &mut FactoryReturns<'a>,
+    ) {
+        if node.kind() == "impl_item" {
+            if let Some(owner) = node
+                .child_by_field_name("type")
+                .and_then(|n| self.binding_type_name(n, code))
+                .filter(|owner| {
+                    owners.get(owner).copied().flatten() == node.parent().map(|p| p.id())
+                })
+            {
+                if let Some(body) = node.child_by_field_name("body") {
+                    for member in body.named_children(&mut body.walk()) {
+                        if member.kind() != "function_item" {
+                            continue;
+                        }
+                        if let Some(name) = member.child_by_field_name("name") {
+                            let ty = member
+                                .child_by_field_name("return_type")
+                                .and_then(|n| self.binding_type_name(n, code))
+                                .filter(|ty| {
+                                    ![node, member].iter().any(|decl| {
+                                        decl.child_by_field_name("type_parameters").is_some_and(
+                                            |params| {
+                                                params.named_children(&mut params.walk()).any(
+                                                    |param| {
+                                                        param
+                                                            .child_by_field_name("name")
+                                                            .is_some_and(|name| {
+                                                                &code[name.byte_range()] == *ty
+                                                            })
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    })
+                                })
+                                .map(|ty| if ty == "Self" { owner } else { ty });
+                            returns
+                                .entry((
+                                    Self::factory_module_scope(node),
+                                    owner,
+                                    &code[name.byte_range()],
+                                ))
+                                .and_modify(|r| *r = None)
+                                .or_insert(ty);
                         }
                     }
                 }
-                // eprintln!("    → call_expression: no type extracted");
-                None
             }
-            _ => {
-                // eprintln!("    → unhandled node kind: '{}'", node.kind());
-                None
-            }
+        }
+        for child in node.named_children(&mut node.walk()) {
+            self.collect_factory_returns(child, code, owners, returns);
         }
     }
 
@@ -1324,9 +1416,9 @@ impl RustParser {
                                     {
                                         let range = Range::new(
                                             type_node.start_position().row as u32,
-                                            type_node.start_position().column as u16,
+                                            type_node.start_position().column as u32,
                                             type_node.end_position().row as u32,
-                                            type_node.end_position().column as u16,
+                                            type_node.end_position().column as u32,
                                         );
                                         uses.push((struct_name, type_name, range));
                                     }
@@ -1353,9 +1445,9 @@ impl RustParser {
                                     {
                                         let range = Range::new(
                                             type_node.start_position().row as u32,
-                                            type_node.start_position().column as u16,
+                                            type_node.start_position().column as u32,
                                             type_node.end_position().row as u32,
-                                            type_node.end_position().column as u16,
+                                            type_node.end_position().column as u32,
                                         );
                                         uses.push((context_name, type_name, range));
                                     }
@@ -1369,9 +1461,9 @@ impl RustParser {
                         if let Some(type_name) = self.extract_type_name(return_type_node, code) {
                             let range = Range::new(
                                 return_type_node.start_position().row as u32,
-                                return_type_node.start_position().column as u16,
+                                return_type_node.start_position().column as u32,
                                 return_type_node.end_position().row as u32,
-                                return_type_node.end_position().column as u16,
+                                return_type_node.end_position().column as u32,
                             );
                             uses.push((context_name, type_name, range));
                         }
@@ -1408,9 +1500,9 @@ impl RustParser {
                                     let method_name = &code[method_name_node.byte_range()];
                                     let range = Range::new(
                                         child.start_position().row as u32,
-                                        child.start_position().column as u16,
+                                        child.start_position().column as u32,
                                         child.end_position().row as u32,
-                                        child.end_position().column as u16,
+                                        child.end_position().column as u32,
                                     );
                                     defines.push((trait_name, method_name, range));
                                 }
@@ -1435,9 +1527,9 @@ impl RustParser {
                                         let method_name = &code[method_name_node.byte_range()];
                                         let range = Range::new(
                                             child.start_position().row as u32,
-                                            child.start_position().column as u16,
+                                            child.start_position().column as u32,
                                             child.end_position().row as u32,
-                                            child.end_position().column as u16,
+                                            child.end_position().column as u32,
                                         );
                                         defines.push((type_name, method_name, range));
                                     }
@@ -1477,9 +1569,9 @@ impl RustParser {
                                     let method_name = &code[method_name_node.byte_range()];
                                     let range = Range::new(
                                         child.start_position().row as u32,
-                                        child.start_position().column as u16,
+                                        child.start_position().column as u32,
                                         child.end_position().row as u32,
-                                        child.end_position().column as u16,
+                                        child.end_position().column as u32,
                                     );
                                     methods.push((
                                         type_name.clone(),
@@ -1515,9 +1607,9 @@ impl RustParser {
 
         let range = Range::new(
             full_node.start_position().row as u32,
-            full_node.start_position().column as u16,
+            full_node.start_position().column as u32,
             full_node.end_position().row as u32,
-            full_node.end_position().column as u16,
+            full_node.end_position().column as u32,
         );
 
         // Find the parent node that might have doc comments
@@ -1784,7 +1876,14 @@ impl LanguageParser for RustParser {
         let root_node = tree.root_node();
         let mut bindings = Vec::new();
 
-        self.find_variable_types_in_node(root_node, code, &mut bindings);
+        let mut factories = FactoryReturns::new();
+        let mut owners = FactoryOwners::new();
+        let mut glob = false;
+        Self::collect_factory_owners(root_node, code, &mut owners, false, &mut glob);
+        if !glob {
+            self.collect_factory_returns(root_node, code, &owners, &mut factories);
+        }
+        self.find_variable_types_in_node(root_node, code, &factories, &mut bindings);
 
         bindings
     }
@@ -2479,6 +2578,7 @@ fn trim_test() {}
             struct Config {
                 host: String,
             }
+            impl Config { fn new() -> Self { Config { host: String::new() } } }
 
             struct Server {
                 port: u16,
@@ -2524,6 +2624,12 @@ fn trim_test() {}
         let mut parser = RustParser::new().unwrap();
         // This tests the REAL use case: method resolution
         let code = r#"
+            struct Point { x: i32, y: i32 }
+            struct DataProcessor;
+            struct Vec;
+            impl Point { fn new(x: i32, y: i32) -> Self { todo!() } }
+            impl DataProcessor { fn default() -> Self { todo!() } }
+            impl Vec { fn new() -> Self { todo!() } }
             impl Display for Point {
                 fn fmt(&self, f: &mut Formatter) -> Result {
                     write!(f, "({}, {})", self.x, self.y)

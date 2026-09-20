@@ -33,12 +33,14 @@ impl IndexingResult {
     }
 }
 
+/// Zero-based source coordinates. Columns count UTF-8 bytes, matching
+/// tree-sitter, and remain exact on generated lines longer than 64 KiB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Range {
     pub start_line: u32,
-    pub start_column: u16,
+    pub start_column: u32,
     pub end_line: u32,
-    pub end_column: u16,
+    pub end_column: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -109,7 +111,7 @@ impl FileId {
 }
 
 impl Range {
-    pub fn new(start_line: u32, start_column: u16, end_line: u32, end_column: u16) -> Self {
+    pub fn new(start_line: u32, start_column: u32, end_line: u32, end_column: u32) -> Self {
         Self {
             start_line,
             start_column,
@@ -118,7 +120,7 @@ impl Range {
         }
     }
 
-    pub fn contains(&self, line: u32, column: u16) -> bool {
+    pub fn contains(&self, line: u32, column: u32) -> bool {
         if line < self.start_line || line > self.end_line {
             return false;
         }

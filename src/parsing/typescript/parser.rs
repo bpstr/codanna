@@ -455,9 +455,9 @@ impl TypeScriptParser {
                             let symbol_id = counter.next_id();
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 next.end_position().row as u32,
-                                next.end_position().column as u16,
+                                next.end_position().column as u32,
                             );
 
                             let mut symbol = Symbol::new(
@@ -554,9 +554,9 @@ impl TypeScriptParser {
                                     let symbol_id = counter.next_id();
                                     let range = Range::new(
                                         node.start_position().row as u32,
-                                        node.start_position().column as u16,
+                                        node.start_position().column as u32,
                                         node.end_position().row as u32,
-                                        node.end_position().column as u16,
+                                        node.end_position().column as u32,
                                     );
                                     let mut symbol = Symbol::new(
                                         symbol_id,
@@ -712,9 +712,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -749,9 +749,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -786,6 +786,26 @@ impl TypeScriptParser {
                             self.process_method(child, code, file_id, counter, module_path)
                         {
                             symbols.push(symbol);
+                        }
+
+                        // Constructor parameter properties are instance fields,
+                        // with class scope even though their syntax is a parameter.
+                        if method_name.as_deref() == Some("constructor") {
+                            if let Some(parameters) = child.child_by_field_name("parameters") {
+                                for parameter in parameters.named_children(&mut parameters.walk()) {
+                                    if is_parameter_property(parameter) {
+                                        if let Some(symbol) = self.process_property(
+                                            parameter,
+                                            code,
+                                            file_id,
+                                            counter,
+                                            module_path,
+                                        ) {
+                                            symbols.push(symbol);
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Also process the method body for nested classes/functions
@@ -860,9 +880,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -894,9 +914,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature.to_string()),
             doc_comment,
@@ -928,9 +948,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature.to_string()),
             doc_comment,
@@ -991,9 +1011,9 @@ impl TypeScriptParser {
                             file_id,
                             Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             ),
                             None,
                             doc_comment,
@@ -1126,9 +1146,9 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -1146,7 +1166,9 @@ impl TypeScriptParser {
         counter: &mut SymbolCounter,
         module_path: &str,
     ) -> Option<Symbol> {
-        let name_node = node.child_by_field_name("name")?;
+        let name_node = node
+            .child_by_field_name("name")
+            .or_else(|| node.child_by_field_name("pattern"))?;
         let name = &code[name_node.byte_range()];
 
         let visibility = self.determine_method_visibility(node, code);
@@ -1159,11 +1181,11 @@ impl TypeScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
-            None,
+            Some(code[node.byte_range()].trim().to_string()),
             doc_comment,
             module_path,
             visibility,
@@ -1308,9 +1330,9 @@ impl TypeScriptParser {
                                     {
                                         let range = Range::new(
                                             type_node.start_position().row as u32,
-                                            type_node.start_position().column as u16,
+                                            type_node.start_position().column as u32,
                                             type_node.end_position().row as u32,
-                                            type_node.end_position().column as u16,
+                                            type_node.end_position().column as u32,
                                         );
                                         implementations.push((interface_name, base_name, range));
                                     }
@@ -1365,9 +1387,9 @@ impl TypeScriptParser {
                                 {
                                     let range = Range::new(
                                         extends_child.start_position().row as u32,
-                                        extends_child.start_position().column as u16,
+                                        extends_child.start_position().column as u32,
                                         extends_child.end_position().row as u32,
-                                        extends_child.end_position().column as u16,
+                                        extends_child.end_position().column as u32,
                                     );
                                     implementations.push((class_name, base_name, range));
                                 }
@@ -1390,9 +1412,9 @@ impl TypeScriptParser {
                                 {
                                     let range = Range::new(
                                         impl_child.start_position().row as u32,
-                                        impl_child.start_position().column as u16,
+                                        impl_child.start_position().column as u32,
                                         impl_child.end_position().row as u32,
-                                        impl_child.end_position().column as u16,
+                                        impl_child.end_position().column as u32,
                                     );
                                     implementations.push((class_name, interface_name, range));
                                 }
@@ -1418,9 +1440,9 @@ impl TypeScriptParser {
                 if let Some(base_interface) = self.extract_type_name(child, code) {
                     let range = Range::new(
                         child.start_position().row as u32,
-                        child.start_position().column as u16,
+                        child.start_position().column as u32,
                         child.end_position().row as u32,
-                        child.end_position().column as u16,
+                        child.end_position().column as u32,
                     );
                     implementations.push((interface_name, base_interface, range));
                 }
@@ -1504,7 +1526,7 @@ impl TypeScriptParser {
                 node.field_name_for_child(i as u32)
             );
             // Check for 'type' keyword (appears in type-only imports)
-            if child.kind() == "type" && i == 1 {
+            if child.kind() == "type" {
                 is_type_only = true;
                 tracing::debug!("[typescript]     detected type-only import!");
             }
@@ -1576,7 +1598,10 @@ impl TypeScriptParser {
                                     alias: local,
                                     file_id,
                                     is_glob: false,
-                                    is_type_only,
+                                    is_type_only: is_type_only
+                                        || ni
+                                            .children(&mut ni.walk())
+                                            .any(|part| part.kind() == "type"),
                                 });
                             }
                         }
@@ -1612,32 +1637,16 @@ impl TypeScriptParser {
                     is_glob: true,
                     is_type_only,
                 });
-            } else if has_default && has_named {
-                // Mixed import: import React, { Component } from 'react'
-                // We create one import with the default as alias
+            }
+            if has_default {
                 imports.push(Import {
                     path: source_path.to_string(),
-                    imported_name: None,
+                    imported_name: Some("default".to_string()),
                     alias: default_name,
                     file_id,
                     is_glob: false,
                     is_type_only,
                 });
-            } else if has_default {
-                // Default only: import React from 'react'
-                tracing::debug!(
-                    "[typescript]   adding default import: path='{source_path}', alias={default_name:?}, type_only={is_type_only}"
-                );
-                imports.push(Import {
-                    path: source_path.to_string(),
-                    imported_name: None,
-                    alias: default_name,
-                    file_id,
-                    is_glob: false,
-                    is_type_only,
-                });
-            } else if has_named {
-                // Named-only already pushed per specifier above
             }
         } else {
             // Side-effect import (no import clause)
@@ -1741,6 +1750,11 @@ impl TypeScriptParser {
         {
             // We're entering a NEW function scope - extract its name
             if let Some(name_node) = node.child_by_field_name("name").or_else(|| {
+                // A bare arrow parameter is an identifier, not a function name.
+                // Arrow ownership comes from its binding or lexical enclosure.
+                if node.kind() == "arrow_function" {
+                    return None;
+                }
                 // Fallback: some fragmented/ERROR-wrapped trees may not label fields
                 let mut w = node.walk();
                 node.children(&mut w).find(|n| n.kind() == "identifier")
@@ -1910,9 +1924,9 @@ impl TypeScriptParser {
                     if let Some(context) = function_context.or(inferred_context) {
                         let range = Range {
                             start_line: node.start_position().row as u32,
-                            start_column: node.start_position().column as u16,
+                            start_column: node.start_position().column as u32,
                             end_line: node.end_position().row as u32,
-                            end_column: node.end_position().column as u16,
+                            end_column: node.end_position().column as u32,
                         };
                         calls.push((context, fn_name, range));
                         // Debug: Added call context -> fn_name
@@ -2179,9 +2193,9 @@ impl TypeScriptParser {
             }
             let range = Range::new(
                 type_node.start_position().row as u32,
-                type_node.start_position().column as u16,
+                type_node.start_position().column as u32,
                 type_node.end_position().row as u32,
-                type_node.end_position().column as u16,
+                type_node.end_position().column as u32,
             );
             uses.push((context_name, type_name, range));
         }
@@ -2246,9 +2260,9 @@ impl TypeScriptParser {
                 if let Some(type_name) = self.extract_simple_type_name(&child, code) {
                     let range = Range::new(
                         child.start_position().row as u32,
-                        child.start_position().column as u16,
+                        child.start_position().column as u32,
                         child.end_position().row as u32,
-                        child.end_position().column as u16,
+                        child.end_position().column as u32,
                     );
                     uses.push((class_name, type_name, range));
                 }
@@ -2268,9 +2282,9 @@ impl TypeScriptParser {
                 if let Some(type_name) = self.extract_simple_type_name(&child, code) {
                     let range = Range::new(
                         child.start_position().row as u32,
-                        child.start_position().column as u16,
+                        child.start_position().column as u32,
                         child.end_position().row as u32,
-                        child.end_position().column as u16,
+                        child.end_position().column as u32,
                     );
                     uses.push((interface_name, type_name, range));
                 }
@@ -2295,9 +2309,9 @@ impl TypeScriptParser {
                     let type_name = &code[child.byte_range()];
                     let range = Range::new(
                         child.start_position().row as u32,
-                        child.start_position().column as u16,
+                        child.start_position().column as u32,
                         child.end_position().row as u32,
-                        child.end_position().column as u16,
+                        child.end_position().column as u32,
                     );
                     uses.push((context_name, type_name, range));
                 }
@@ -2308,9 +2322,9 @@ impl TypeScriptParser {
                         let type_name = &code[name_node.byte_range()];
                         let range = Range::new(
                             name_node.start_position().row as u32,
-                            name_node.start_position().column as u16,
+                            name_node.start_position().column as u32,
                             name_node.end_position().row as u32,
-                            name_node.end_position().column as u16,
+                            name_node.end_position().column as u32,
                         );
                         uses.push((context_name, type_name, range));
                     }
@@ -2353,9 +2367,9 @@ impl TypeScriptParser {
                                 let method_name = &code[name_node.byte_range()];
                                 let range = Range::new(
                                     child.start_position().row as u32,
-                                    child.start_position().column as u16,
+                                    child.start_position().column as u32,
                                     child.end_position().row as u32,
-                                    child.end_position().column as u16,
+                                    child.end_position().column as u32,
                                 );
                                 defines.push((interface_name, method_name, range));
                             }
@@ -2381,9 +2395,9 @@ impl TypeScriptParser {
                                 let method_name = &code[name_node.byte_range()];
                                 let range = Range::new(
                                     child.start_position().row as u32,
-                                    child.start_position().column as u16,
+                                    child.start_position().column as u32,
                                     child.end_position().row as u32,
-                                    child.end_position().column as u16,
+                                    child.end_position().column as u32,
                                 );
                                 defines.push((class_name, method_name, range));
                             }
@@ -2407,9 +2421,9 @@ impl TypeScriptParser {
                                     let method_name = &code[name_node.byte_range()];
                                     let range = Range::new(
                                         child.start_position().row as u32,
-                                        child.start_position().column as u16,
+                                        child.start_position().column as u32,
                                         child.end_position().row as u32,
-                                        child.end_position().column as u16,
+                                        child.end_position().column as u32,
                                     );
                                     defines.push((type_name, method_name, range));
                                 }
@@ -2509,9 +2523,9 @@ impl TypeScriptParser {
                         if let Some(context) = function_context {
                             let range = Range {
                                 start_line: node.start_position().row as u32,
-                                start_column: node.start_position().column as u16,
+                                start_column: node.start_position().column as u32,
                                 end_line: node.end_position().row as u32,
-                                end_column: node.end_position().column as u16,
+                                end_column: node.end_position().column as u32,
                             };
 
                             let method_call = MethodCall {
@@ -2684,9 +2698,9 @@ impl TypeScriptParser {
                     if let Some(fn_name) = func_context {
                         let range = Range {
                             start_line: node.start_position().row as u32,
-                            start_column: node.start_position().column as u16,
+                            start_column: node.start_position().column as u32,
                             end_line: node.end_position().row as u32,
-                            end_column: node.end_position().column as u16,
+                            end_column: node.end_position().column as u32,
                         };
                         uses.push((fn_name, component_name, range));
                     }
@@ -2827,6 +2841,20 @@ impl LanguageParser for TypeScriptParser {
         imports
     }
 
+    fn find_exports(&mut self, code: &str) -> Option<Vec<crate::parsing::Export>> {
+        let tree = self.syntax_tree(code)?;
+        let mut exports = crate::parsing::exports::ecmascript_exports(tree.root_node(), code);
+        let imports = self.find_imports(code, FileId::new(1).expect("one is a valid file id"));
+        crate::parsing::exports::link_imported_exports(&mut exports, &imports);
+        Some(exports)
+    }
+
+    fn find_references(&mut self, code: &str) -> Vec<crate::parsing::references::Reference> {
+        self.syntax_tree(code)
+            .map(|tree| crate::parsing::references::argument_references(tree.root_node(), code))
+            .unwrap_or_default()
+    }
+
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.syntax_tree(code) {
             Some(tree) => tree,
@@ -2871,9 +2899,9 @@ impl LanguageParser for TypeScriptParser {
                 if BARRIERS.contains(&node.kind()) {
                     spans.push(Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     ));
                 }
                 let mut cursor = node.walk();
@@ -2941,9 +2969,9 @@ impl LanguageParser for TypeScriptParser {
                                         if let Some(typ) = type_name {
                                             let range = Range::new(
                                                 child.start_position().row as u32,
-                                                child.start_position().column as u16,
+                                                child.start_position().column as u32,
                                                 child.end_position().row as u32,
-                                                child.end_position().column as u16,
+                                                child.end_position().column as u32,
                                             );
                                             out.push((var, typ, range));
                                         }
@@ -2961,9 +2989,144 @@ impl LanguageParser for TypeScriptParser {
             }
 
             walk(&root, code, &mut bindings);
+            collect_typed_property_receivers(root, code, &mut bindings);
         }
 
         bindings
+    }
+}
+
+fn is_parameter_property(node: Node<'_>) -> bool {
+    matches!(node.kind(), "required_parameter" | "optional_parameter")
+        && node
+            .children(&mut node.walk())
+            .any(|child| matches!(child.kind(), "accessibility_modifier" | "readonly"))
+}
+
+/// One declared instance type is enough evidence for a field receiver. Union,
+/// structural, inferred, inherited, and computed property types stay unresolved.
+fn property_type<'a>(node: Node<'_>, code: &'a str) -> Option<&'a str> {
+    let annotation = node.child_by_field_name("type")?;
+    let typ = annotation.named_child(0)?;
+    (typ.kind() == "type_identifier").then(|| &code[typ.byte_range()])
+}
+
+fn collect_typed_property_receivers<'a>(
+    node: Node<'_>,
+    code: &'a str,
+    bindings: &mut Vec<(&'a str, &'a str, Range)>,
+) {
+    if matches!(
+        node.kind(),
+        "class_declaration" | "abstract_class_declaration" | "class"
+    ) {
+        if let Some(body) = node.child_by_field_name("body") {
+            let mut fields = std::collections::HashMap::new();
+            for declaration in body.named_children(&mut body.walk()) {
+                let is_static = declaration
+                    .children(&mut declaration.walk())
+                    .any(|child| child.kind() == "static");
+                if matches!(
+                    declaration.kind(),
+                    "public_field_definition" | "property_declaration"
+                ) && !is_static
+                {
+                    if let (Some(name), Some(typ)) = (
+                        declaration.child_by_field_name("name"),
+                        property_type(declaration, code),
+                    ) {
+                        fields.insert(&code[name.byte_range()], typ);
+                    }
+                } else if declaration.kind() == "method_definition"
+                    && declaration
+                        .child_by_field_name("name")
+                        .is_some_and(|name| &code[name.byte_range()] == "constructor")
+                {
+                    if let Some(parameters) = declaration.child_by_field_name("parameters") {
+                        for parameter in parameters
+                            .named_children(&mut parameters.walk())
+                            .filter(|parameter| is_parameter_property(*parameter))
+                        {
+                            if let (Some(name), Some(typ)) = (
+                                parameter.child_by_field_name("pattern"),
+                                property_type(parameter, code),
+                            ) {
+                                fields.insert(&code[name.byte_range()], typ);
+                            }
+                        }
+                    }
+                }
+            }
+            for declaration in body.named_children(&mut body.walk()) {
+                if declaration.kind() == "method_definition"
+                    && !declaration
+                        .children(&mut declaration.walk())
+                        .any(|child| child.kind() == "static")
+                {
+                    if let Some(body) = declaration.child_by_field_name("body") {
+                        bind_typed_property_calls(body, code, &fields, bindings);
+                    }
+                }
+            }
+        }
+    }
+    for child in node.named_children(&mut node.walk()) {
+        collect_typed_property_receivers(child, code, bindings);
+    }
+}
+
+fn bind_typed_property_calls<'a>(
+    node: Node<'_>,
+    code: &'a str,
+    fields: &std::collections::HashMap<&'a str, &'a str>,
+    bindings: &mut Vec<(&'a str, &'a str, Range)>,
+) {
+    // Arrows retain lexical this. Ordinary functions and nested classes own it.
+    if matches!(
+        node.kind(),
+        "function_declaration"
+            | "function_expression"
+            | "generator_function"
+            | "generator_function_declaration"
+            | "method_definition"
+            | "class_declaration"
+            | "class"
+    ) {
+        return;
+    }
+    if node.kind() == "call_expression" {
+        if let Some(function) = node
+            .child_by_field_name("function")
+            .filter(|function| function.kind() == "member_expression")
+        {
+            if let Some(receiver) = function
+                .child_by_field_name("object")
+                .filter(|receiver| receiver.kind() == "member_expression")
+            {
+                if let (Some(object), Some(property)) = (
+                    receiver.child_by_field_name("object"),
+                    receiver.child_by_field_name("property"),
+                ) {
+                    if object.kind() == "this" {
+                        if let Some(typ) = fields.get(&code[property.byte_range()]) {
+                            bindings.push((
+                                &code[receiver.byte_range()],
+                                typ,
+                                Range::new(
+                                    receiver.start_position().row as u32,
+                                    receiver.start_position().column as u32,
+                                    receiver.end_position().row as u32,
+                                    receiver.end_position().column as u32,
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for child in node.named_children(&mut node.walk()) {
+        bind_typed_property_calls(child, code, fields, bindings);
     }
 }
 

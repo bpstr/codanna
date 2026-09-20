@@ -49,9 +49,9 @@ impl GdscriptParser {
         let end = node.end_position();
         Range {
             start_line: start.row as u32,
-            start_column: start.column as u16,
+            start_column: start.column as u32,
             end_line: end.row as u32,
-            end_column: end.column as u16,
+            end_column: end.column as u32,
         }
     }
 
@@ -1119,9 +1119,9 @@ fn collect_variable_types<'a>(
         ) {
             let range = Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             );
             bindings.push((&code[name.byte_range()], ty, range));
         }

@@ -2,7 +2,11 @@
 
 Inspected `main` at `f776840bf9a2a6241c0b62975ea2bf4e44e93e0d`.
 Findings below come from source inspection, not a measured Codanna execution.
-This change adds a corpus and evaluator; it does not repair the production engine.
+This original audit accompanied the corpus and evaluator. Its findings describe
+the pinned revision, not the current implementation. See the subsequent
+[implementation report](adversarial/IMPLEMENTATION.md) and document audit for
+repairs and measured follow-up results. The acceptance requirements below remain
+unchanged.
 
 ## 1. Important retrieval paths and weak points
 

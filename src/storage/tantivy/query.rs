@@ -76,36 +76,19 @@ impl DocumentIndex {
         // for queries with special characters (interface{}, Vec<T>, etc.)
         let main_query = match query_parser.parse_query(query_str) {
             Ok(query) => query,
-            Err(_parse_error) => {
-                // Query contains syntax that conflicts with Tantivy parser.
-                // Fall back to literal term matching across searchable fields.
-                let name_term = Term::from_field_text(self.schema.name_text, query_str);
-                let doc_term = Term::from_field_text(self.schema.doc_comment, query_str);
-                let sig_term = Term::from_field_text(self.schema.signature, query_str);
-                let ctx_term = Term::from_field_text(self.schema.context, query_str);
-
-                Box::new(BooleanQuery::new(vec![
-                    (
-                        Occur::Should,
-                        Box::new(TermQuery::new(name_term, IndexRecordOption::Basic))
-                            as Box<dyn Query>,
-                    ),
-                    (
-                        Occur::Should,
-                        Box::new(TermQuery::new(doc_term, IndexRecordOption::Basic))
-                            as Box<dyn Query>,
-                    ),
-                    (
-                        Occur::Should,
-                        Box::new(TermQuery::new(sig_term, IndexRecordOption::Basic))
-                            as Box<dyn Query>,
-                    ),
-                    (
-                        Occur::Should,
-                        Box::new(TermQuery::new(ctx_term, IndexRecordOption::Basic))
-                            as Box<dyn Query>,
-                    ),
-                ])) as Box<dyn Query>
+            Err(_) => {
+                // A copied code fragment is literal text, not an index term.
+                // Parse an escaped phrase so each field uses its own analyzer,
+                // including the lowercase signature/doc tokens. Raw compound
+                // terms such as `std::collections::HashMap` cannot exist there.
+                let escaped = query_str.replace('\\', "\\\\").replace('"', "\\\"");
+                query_parser
+                    .parse_query(&format!("\"{escaped}\""))
+                    .map_err(|error| {
+                        StorageError::General(format!(
+                            "Could not search literal code fragment: {error}"
+                        ))
+                    })?
             }
         };
 
@@ -209,7 +192,7 @@ impl DocumentIndex {
             let column = doc
                 .get_first(self.schema.column)
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u16;
+                .unwrap_or(0) as u32;
 
             let doc_comment = doc
                 .get_first(self.schema.doc_comment)
@@ -373,7 +356,11 @@ impl DocumentIndex {
 
         let final_query = BooleanQuery::new(query_clauses);
 
-        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(100).order_by_score())?;
+        // Name lookup feeds resolution, including owner qualification. Capping
+        // the global candidates here makes a precise Type.member lookup fail
+        // when another hundred types happen to declare the same member name.
+        // Public presentation applies pagination after all identity filters.
+        let top_docs = Self::search_all(&searcher, &final_query)?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -381,6 +368,20 @@ impl DocumentIndex {
             symbols.push(self.document_to_symbol(&doc)?);
         }
 
+        symbols.sort_by(|a, b| {
+            (
+                &a.file_path,
+                a.range.start_line,
+                a.range.start_column,
+                a.id.value(),
+            )
+                .cmp(&(
+                    &b.file_path,
+                    b.range.start_line,
+                    b.range.start_column,
+                    b.id.value(),
+                ))
+        });
         Ok(symbols)
     }
 
@@ -971,6 +972,61 @@ impl DocumentIndex {
         }
     }
 
+    /// Read explicit export surfaces, including files containing no symbols.
+    pub fn get_all_exports(&self) -> StorageResult<Vec<crate::parsing::FileExports>> {
+        self.read_file_exports(None)
+    }
+
+    pub fn get_exports_for_file(
+        &self,
+        file_id: FileId,
+    ) -> StorageResult<Option<crate::parsing::FileExports>> {
+        let records = self.read_file_exports(Some(file_id))?;
+        match records.as_slice() {
+            [] => Ok(None),
+            [record] => Ok(Some(record.clone())),
+            _ => Err(StorageError::General(format!(
+                "Multiple export surfaces for file {}",
+                file_id.value()
+            ))),
+        }
+    }
+
+    fn read_file_exports(
+        &self,
+        file_id: Option<FileId>,
+    ) -> StorageResult<Vec<crate::parsing::FileExports>> {
+        let mut terms: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![(
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "exports"),
+                IndexRecordOption::Basic,
+            )),
+        )];
+        if let Some(file_id) = file_id {
+            terms.push((
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(self.schema.import_file_id, u64::from(file_id.value())),
+                    IndexRecordOption::Basic,
+                )),
+            ));
+        }
+        let searcher = self.reader.searcher();
+        let mut exports = Vec::new();
+        for (_, address) in Self::search_all(&searcher, &BooleanQuery::new(terms))? {
+            let doc: Document = searcher.doc(address)?;
+            let json = doc
+                .get_first(self.schema.context)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| StorageError::General("Missing export metadata".into()))?;
+            exports.push(serde_json::from_str(json).map_err(|error| {
+                StorageError::General(format!("Invalid export metadata: {error}"))
+            })?);
+        }
+        Ok(exports)
+    }
+
     /// Get all imports for a specific file
     ///
     /// Returns raw import metadata - resolution happens in the resolution layer.
@@ -978,22 +1034,68 @@ impl DocumentIndex {
         &self,
         file_id: FileId,
     ) -> StorageResult<Vec<crate::parsing::Import>> {
-        let query = BooleanQuery::new(vec![
-            (
-                Occur::Must,
-                Box::new(TermQuery::new(
-                    Term::from_field_text(self.schema.doc_type, "import"),
-                    IndexRecordOption::Basic,
-                )),
+        self.query_imports(Some(file_id))
+    }
+
+    /// Read persisted import evidence, including imports with no resolved target.
+    /// Used by incremental invalidation; source files do not need to be reopened
+    /// merely to decide which consumers are affected.
+    pub fn get_all_imports(&self) -> StorageResult<Vec<crate::parsing::Import>> {
+        self.query_imports(None)
+    }
+
+    /// Files whose dependency output is deliberately invalidated until an
+    /// unbounded indexing pass can read and resolve their source again.
+    pub fn get_pending_resolution_paths(&self) -> StorageResult<Vec<PathBuf>> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "pending_resolution"),
+            IndexRecordOption::Basic,
+        );
+        let mut paths = std::collections::BTreeSet::new();
+        for (_score, address) in Self::search_all(&searcher, &query)? {
+            let doc: Document = searcher.doc(address)?;
+            let path = doc
+                .get_first(self.schema.context)
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| StorageError::InvalidFieldValue {
+                    field: "context".to_owned(),
+                    reason: "pending resolution record has no path".to_owned(),
+                })?;
+            paths.insert(PathBuf::from(path));
+        }
+        Ok(paths.into_iter().collect())
+    }
+
+    pub(crate) fn has_pending_resolution(&self, path: &std::path::Path) -> StorageResult<bool> {
+        let query = TermQuery::new(
+            Term::from_field_text(
+                self.schema.meta_key,
+                &format!("pending_resolution:{}", path.display()),
             ),
-            (
+            IndexRecordOption::Basic,
+        );
+        Ok(self.reader.searcher().search(&query, &Count)? > 0)
+    }
+
+    fn query_imports(&self, file_id: Option<FileId>) -> StorageResult<Vec<crate::parsing::Import>> {
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![(
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "import"),
+                IndexRecordOption::Basic,
+            )),
+        )];
+        if let Some(file_id) = file_id {
+            clauses.push((
                 Occur::Must,
                 Box::new(TermQuery::new(
                     Term::from_field_u64(self.schema.import_file_id, file_id.value() as u64),
                     IndexRecordOption::Basic,
                 )),
-            ),
-        ]);
+            ));
+        }
+        let query = BooleanQuery::new(clauses);
 
         let searcher = self.reader.searcher();
         let top_docs = Self::search_all(&searcher, &query)
@@ -1004,6 +1106,13 @@ impl DocumentIndex {
             let doc: Document = searcher.doc(doc_address).map_err(|e| {
                 StorageError::General(format!("Failed to retrieve import document: {e}"))
             })?;
+
+            let file_id = doc
+                .get_first(self.schema.import_file_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| u32::try_from(id).ok())
+                .and_then(FileId::new)
+                .ok_or_else(|| StorageError::General("Missing or invalid import_file_id".into()))?;
 
             // Extract fields from document
             let import_path = doc
@@ -2735,6 +2844,56 @@ mod tests {
 #[cfg(test)]
 mod review_budget_tests {
     use super::*;
+    #[test]
+    fn literal_code_fallback_uses_analyzed_phrase_and_rejects_decoys() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = DocumentIndex::new(dir.path(), &crate::Settings::default()).unwrap();
+        index.start_batch().unwrap();
+        for (id, signature) in [
+            (
+                1,
+                "fn merge_items(input: std::collections::HashMap<String, String>)",
+            ),
+            (
+                2,
+                "fn different_namespace(input: custom::collections::HashMap<String, String>)",
+            ),
+            (3, "fn nonadjacent() // std unrelated collections HashMap"),
+        ] {
+            let symbol = crate::Symbol::new(
+                SymbolId::new(id).unwrap(),
+                format!("fixture{id}"),
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                crate::Range::new(id, 0, id, 20),
+            )
+            .with_signature(signature);
+            index.index_symbol(&symbol, "fixture.rs").unwrap();
+        }
+        index.commit_batch().unwrap();
+        for query in [
+            "std::collections::HashMap",
+            "\"std::collections::HashMap\"",
+            "std::collections::HashMap\"",
+        ] {
+            let results = index.search(query, 10, None, None, None).unwrap();
+            assert_eq!(
+                results
+                    .iter()
+                    .map(|result| result.symbol_id.value())
+                    .collect::<Vec<_>>(),
+                vec![1],
+                "query={query}"
+            );
+        }
+        assert!(
+            index
+                .search("missing::collections::HashMap", 10, None, None, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn hardening_review_storage_limits_do_not_panic_or_allocate_from_caller_input() {
         let dir = tempfile::tempdir().unwrap();

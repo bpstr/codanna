@@ -384,6 +384,17 @@ impl CollectStage {
         }
 
         // Process imports
+        if let Some(exports) = parsed.raw_exports {
+            state
+                .current_batch
+                .file_exports
+                .push(crate::parsing::FileExports {
+                    file_id,
+                    file_path: file_path.to_string(),
+                    module_path: parsed.module_path.clone(),
+                    exports,
+                });
+        }
         for raw_import in parsed.raw_imports {
             let import = raw_import.into_import(file_id);
             state.current_batch.imports.push(import);
@@ -477,6 +488,7 @@ mod tests {
             module_path: None,
             raw_symbols: symbols,
             raw_imports: Vec::new(),
+            raw_exports: None,
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
             this_barrier_spans: Vec::new(),
@@ -901,6 +913,7 @@ mod tests {
             module_path: Some("mylib".to_string()),
             raw_symbols: vec![sym_with_doc, sym_without_doc, sym_with_short_doc],
             raw_imports: Vec::new(),
+            raw_exports: None,
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
             this_barrier_spans: Vec::new(),

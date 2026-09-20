@@ -111,7 +111,7 @@ struct Endpoint<'a> {
 #[derive(Serialize)]
 struct EdgeMetadata<'a> {
     line: Option<u32>,
-    column: Option<u16>,
+    column: Option<u32>,
     receiver: Option<&'a str>,
     static_call: bool,
     context: Option<&'a str>,

@@ -162,7 +162,10 @@ impl GraphView<'_> {
                 return if self.searcher.search(&query, &Count)? == 0 {
                     Ok(vec![])
                 } else {
-                    Err(StorageError::General("graph edge budget exceeded".into()))
+                    Err(StorageError::GraphBudgetExceeded {
+                        resource: "edge",
+                        limit: max,
+                    })
                 };
             }
             if max > 100_000 {
@@ -175,9 +178,10 @@ impl GraphView<'_> {
                 .searcher
                 .search(&query, &(Count, TopDocs::with_limit(max).order_by_score()))?;
             if count > max {
-                return Err(StorageError::General(
-                    "graph edge budget exceeded; narrow the query or depth".into(),
-                ));
+                return Err(StorageError::GraphBudgetExceeded {
+                    resource: "edge",
+                    limit: max,
+                });
             }
             docs.into_iter().map(|(_, addr)| self.edge(addr)).collect()
         } else {
@@ -253,6 +257,7 @@ impl GraphView<'_> {
                     true,
                     &[
                         RelationKind::Calls,
+                        RelationKind::References,
                         RelationKind::Uses,
                         RelationKind::Implements,
                         RelationKind::Extends,
@@ -262,10 +267,13 @@ impl GraphView<'_> {
                 used_edges += edges.len();
                 for (from, _, _) in edges {
                     if visited.insert(from) {
-                        if budget.is_some_and(|(max, _)| visited.len() - 1 > max) {
-                            return Err(StorageError::General(
-                                "graph node budget exceeded; narrow the query or depth".into(),
-                            ));
+                        if let Some((max, _)) = budget
+                            && visited.len() - 1 > max
+                        {
+                            return Err(StorageError::GraphBudgetExceeded {
+                                resource: "node",
+                                limit: max,
+                            });
                         }
                         next.push(from);
                     }

@@ -57,20 +57,10 @@ impl Pipeline {
         let start = Instant::now();
         let total_relationships = unresolved.len();
 
-        if unresolved.is_empty() {
-            return Ok(Phase2Stats {
-                total_relationships: 0,
-                defines_resolved: 0,
-                calls_resolved: 0,
-                other_resolved: 0,
-                unresolved: 0,
-                elapsed: start.elapsed(),
-            });
-        }
-
         // Pre-pass: register re-export aliases before any context is built,
         // so both context-time import bindings and Tier 2 matching see them.
         populate_reexport_aliases(&symbol_cache, &index);
+        symbol_cache.replace_file_exports(index.get_all_exports()?);
 
         // Create stages
         let factory = Arc::new(ParserFactory::new(Arc::clone(&self.settings)));
@@ -142,7 +132,9 @@ impl Pipeline {
                 context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans)?;
             let behaviors = context_stage.behaviors()?;
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors)
-                .with_inheritance_resolvers(inheritance_resolvers);
+                .with_inheritance_resolvers(inheritance_resolvers)
+                .with_class_parents(context_stage.persisted_class_parents()?)
+                .with_resolution_contexts(&contexts);
 
             for ctx in contexts {
                 let rel_count = ctx.unresolved_rels.len() as u64;
@@ -168,6 +160,9 @@ impl Pipeline {
                 .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
         }
 
+        let structural = context_stage.rebuild_go_implementations()?;
+        stats.total_relationships += structural;
+        stats.other_resolved += structural;
         stats.unresolved = stats.total_relationships
             - stats.defines_resolved
             - stats.calls_resolved

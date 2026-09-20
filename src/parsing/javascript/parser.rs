@@ -286,9 +286,9 @@ impl JavaScriptParser {
                             let symbol_id = counter.next_id();
                             let range = Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 next.end_position().row as u32,
-                                next.end_position().column as u16,
+                                next.end_position().column as u32,
                             );
 
                             let mut symbol = Symbol::new(
@@ -483,9 +483,9 @@ impl JavaScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -518,9 +518,9 @@ impl JavaScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -653,9 +653,9 @@ impl JavaScriptParser {
                             file_id,
                             Range::new(
                                 child.start_position().row as u32,
-                                child.start_position().column as u16,
+                                child.start_position().column as u32,
                                 child.end_position().row as u32,
-                                child.end_position().column as u16,
+                                child.end_position().column as u32,
                             ),
                             None,
                             doc_comment,
@@ -782,9 +782,9 @@ impl JavaScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             Some(signature),
             doc_comment,
@@ -815,9 +815,9 @@ impl JavaScriptParser {
             file_id,
             Range::new(
                 node.start_position().row as u32,
-                node.start_position().column as u16,
+                node.start_position().column as u32,
                 node.end_position().row as u32,
-                node.end_position().column as u16,
+                node.end_position().column as u32,
             ),
             None,
             doc_comment,
@@ -927,9 +927,9 @@ impl JavaScriptParser {
                                 let base_name = &code[heritage_child.byte_range()];
                                 let range = Range::new(
                                     heritage_child.start_position().row as u32,
-                                    heritage_child.start_position().column as u16,
+                                    heritage_child.start_position().column as u32,
                                     heritage_child.end_position().row as u32,
-                                    heritage_child.end_position().column as u16,
+                                    heritage_child.end_position().column as u32,
                                 );
                                 implementations.push((class_name, base_name, range));
                             }
@@ -1089,32 +1089,16 @@ impl JavaScriptParser {
                     is_glob: true,
                     is_type_only: false,
                 });
-            } else if has_default && has_named {
-                // Mixed import: import React, { Component } from 'react'
-                // We create one import with the default as alias
+            }
+            if has_default {
                 imports.push(Import {
                     path: source_path.to_string(),
-                    imported_name: None,
+                    imported_name: Some("default".to_string()),
                     alias: default_name,
                     file_id,
                     is_glob: false,
                     is_type_only: false,
                 });
-            } else if has_default {
-                // Default only: import React from 'react'
-                tracing::debug!(
-                    "[javascript]   adding default import: path='{source_path}', alias={default_name:?}"
-                );
-                imports.push(Import {
-                    path: source_path.to_string(),
-                    imported_name: None,
-                    alias: default_name,
-                    file_id,
-                    is_glob: false,
-                    is_type_only: false,
-                });
-            } else if has_named {
-                // Named-only already pushed per specifier above
             }
         } else {
             // Side-effect import (no import clause)
@@ -1211,6 +1195,11 @@ impl JavaScriptParser {
         {
             // We're entering a NEW function scope - extract its name
             if let Some(name_node) = node.child_by_field_name("name").or_else(|| {
+                // A bare arrow parameter is an identifier, not a function name.
+                // Arrow ownership comes from its binding or lexical enclosure.
+                if node.kind() == "arrow_function" {
+                    return None;
+                }
                 // Fallback: some fragmented/ERROR-wrapped trees may not label fields
                 let mut w = node.walk();
                 node.children(&mut w).find(|n| n.kind() == "identifier")
@@ -1372,9 +1361,9 @@ impl JavaScriptParser {
                     if let Some(context) = function_context.or(inferred_context) {
                         let range = Range {
                             start_line: node.start_position().row as u32,
-                            start_column: node.start_position().column as u16,
+                            start_column: node.start_position().column as u32,
                             end_line: node.end_position().row as u32,
-                            end_column: node.end_position().column as u16,
+                            end_column: node.end_position().column as u32,
                         };
                         calls.push((context, fn_name, range));
                     }
@@ -1508,9 +1497,9 @@ impl JavaScriptParser {
                         if let Some(context) = function_context {
                             let range = Range {
                                 start_line: node.start_position().row as u32,
-                                start_column: node.start_position().column as u16,
+                                start_column: node.start_position().column as u32,
                                 end_line: node.end_position().row as u32,
-                                end_column: node.end_position().column as u16,
+                                end_column: node.end_position().column as u32,
                             };
 
                             let method_call = MethodCall {
@@ -1683,9 +1672,9 @@ impl JavaScriptParser {
                     if let Some(fn_name) = func_context {
                         let range = Range {
                             start_line: node.start_position().row as u32,
-                            start_column: node.start_position().column as u16,
+                            start_column: node.start_position().column as u32,
                             end_line: node.end_position().row as u32,
-                            end_column: node.end_position().column as u16,
+                            end_column: node.end_position().column as u32,
                         };
                         uses.push((fn_name, component_name, range));
                     }
@@ -1822,6 +1811,21 @@ impl LanguageParser for JavaScriptParser {
         imports
     }
 
+    fn find_exports(&mut self, code: &str) -> Option<Vec<crate::parsing::Export>> {
+        let tree = self.parser.parse(code, None)?;
+        let mut exports = crate::parsing::exports::ecmascript_exports(tree.root_node(), code);
+        let imports = self.find_imports(code, FileId::new(1).expect("one is a valid file id"));
+        crate::parsing::exports::link_imported_exports(&mut exports, &imports);
+        Some(exports)
+    }
+
+    fn find_references(&mut self, code: &str) -> Vec<crate::parsing::references::Reference> {
+        self.parser
+            .parse(code, None)
+            .map(|tree| crate::parsing::references::argument_references(tree.root_node(), code))
+            .unwrap_or_default()
+    }
+
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
@@ -1861,9 +1865,9 @@ impl LanguageParser for JavaScriptParser {
                 if BARRIERS.contains(&node.kind()) {
                     spans.push(Range::new(
                         node.start_position().row as u32,
-                        node.start_position().column as u16,
+                        node.start_position().column as u32,
                         node.end_position().row as u32,
-                        node.end_position().column as u16,
+                        node.end_position().column as u32,
                     ));
                 }
                 let mut cursor = node.walk();
@@ -1931,9 +1935,9 @@ impl LanguageParser for JavaScriptParser {
                                         if let Some(typ) = type_name {
                                             let range = Range::new(
                                                 child.start_position().row as u32,
-                                                child.start_position().column as u16,
+                                                child.start_position().column as u32,
                                                 child.end_position().row as u32,
-                                                child.end_position().column as u16,
+                                                child.end_position().column as u32,
                                             );
                                             out.push((var, typ, range));
                                         }

@@ -19,7 +19,7 @@ pub struct FileInfo {
     pub hash: String,
     /// UTC timestamp when last indexed (seconds since UNIX_EPOCH)
     pub last_indexed_utc: u64,
-    /// File modification time (seconds since UNIX_EPOCH)
+    /// File modification time (nanoseconds since UNIX_EPOCH)
     pub mtime: u64,
 }
 
@@ -42,13 +42,14 @@ impl FileInfo {
     }
 }
 
-/// Get file modification time in seconds since UNIX_EPOCH
+/// Get file modification time in nanoseconds since UNIX_EPOCH.
+/// Legacy second-valued index entries differ and are verified by content hash.
 pub fn get_file_mtime(path: &Path) -> Option<u64> {
     std::fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .and_then(|d| u64::try_from(d.as_nanos()).ok())
 }
 
 /// Calculate SHA256 hash of content

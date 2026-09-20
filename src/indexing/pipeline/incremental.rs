@@ -4,8 +4,8 @@ use super::stages::{CleanupStage, CollectStage, DiscoverStage, IndexStage, ReadS
 use super::{
     CleanupStats, DiscoverResult, EmbedOptions, FileBarriers, FileBindings, FileSource,
     IncrementalStats, ParseStage, Phase1Options, Phase2Stats, Pipeline, PipelineError,
-    PipelineResult, ProgressSink, SingleFileStats, SymbolLookupCache, SyncStats,
-    UnresolvedRelationship, init_parser_cache,
+    PipelineResult, ProgressSink, SingleFileStats, SyncStats, UnresolvedRelationship,
+    init_parser_cache,
 };
 use crate::FileId;
 use crate::indexing::IndexStats;
@@ -32,6 +32,22 @@ pub struct PendingResolution {
     /// and embedding persistence are skipped entirely (matches the
     /// pre-deferral early-return).
     ran: bool,
+    changed_paths: std::collections::HashSet<PathBuf>,
+    processed_paths: std::collections::HashSet<PathBuf>,
+    embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
+    /// Explicitly bounded inventories (network preflight and --max-files)
+    /// cannot reopen additional source files outside their admitted input.
+    bounded_inventory: bool,
+}
+
+impl PendingResolution {
+    /// An explicit inventory remains bounded even when it admits no files.
+    pub(crate) fn bounded_inventory() -> Self {
+        Self {
+            bounded_inventory: true,
+            ..Self::default()
+        }
+    }
 }
 
 impl Pipeline {
@@ -118,7 +134,49 @@ impl Pipeline {
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
     ) -> PipelineResult<SingleFileStats> {
-        self.index_file_content(path, index, semantic, embedding_pool, None, None)
+        let mut pending = PendingResolution {
+            embedding_pool: embedding_pool.clone(),
+            ..PendingResolution::default()
+        };
+        let mut stats = self.index_file_content(
+            path,
+            Arc::clone(&index),
+            semantic.clone(),
+            embedding_pool,
+            None,
+            Some(&mut pending),
+            false,
+        )?;
+        let phase2 = self.resolve_pending(pending, index, semantic, false)?;
+        stats.relationships_resolved =
+            phase2.defines_resolved + phase2.calls_resolved + phase2.other_resolved;
+        Ok(stats)
+    }
+
+    /// Index an explicitly selected local file without expanding its inventory.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn index_selected_file(
+        &self,
+        path: &Path,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
+        force: bool,
+        pending: &mut PendingResolution,
+    ) -> PipelineResult<SingleFileStats> {
+        pending.bounded_inventory = true;
+        let mut settings = (*self.settings).clone();
+        settings.indexed_paths_cache.push(root.to_path_buf());
+        Self::with_settings(Arc::new(settings)).index_file_content(
+            path,
+            index,
+            semantic,
+            embedding_pool,
+            None,
+            Some(pending),
+            force,
+        )
     }
 
     /// Consume a bounded, pre-read source without reopening it after authorization.
@@ -131,6 +189,7 @@ impl Pipeline {
         pending: &mut PendingResolution,
     ) -> PipelineResult<SingleFileStats> {
         let path = content.path.clone();
+        pending.bounded_inventory = true;
         self.index_file_content(
             &path,
             index,
@@ -138,9 +197,11 @@ impl Pipeline {
             embedding_pool,
             Some(content),
             Some(pending),
+            false,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn index_file_content(
         &self,
         path: &Path,
@@ -149,6 +210,7 @@ impl Pipeline {
         embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         prepared: Option<super::FileContent>,
         mut pending: Option<&mut PendingResolution>,
+        force: bool,
     ) -> PipelineResult<SingleFileStats> {
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
@@ -192,7 +254,10 @@ impl Pipeline {
             crate::indexing::pipeline::stages::cleanup::CapturedInboundEdge,
         > = Vec::new();
         if let Ok(Some((existing_file_id, existing_hash, _mtime))) = index.get_file_info(path_str) {
-            if existing_hash == content_hash {
+            if !force
+                && existing_hash == content_hash
+                && !index.has_pending_resolution(normalized_path)?
+            {
                 // File hasn't changed, skip re-indexing
                 return Ok(SingleFileStats {
                     file_id: existing_file_id,
@@ -210,8 +275,9 @@ impl Pipeline {
         // Parse BEFORE cleanup: parse is pure (settings-only), so a parse
         // failure here leaves the file's old rows untouched. Cleanup-first
         // turned a construction failure into durable row loss.
-        init_parser_cache(Arc::clone(&self.settings));
-        let parse_stage = ParseStage::new(Arc::clone(&self.settings));
+        let parse_settings = Arc::new(self.settings_with_dependency_roots());
+        init_parser_cache(Arc::clone(&parse_settings));
+        let parse_stage = ParseStage::new(parse_settings);
         let parsed = parse_stage.parse(file_content)?;
 
         if existing_changed {
@@ -354,6 +420,11 @@ impl Pipeline {
 
         if let Some(pending) = pending {
             pending.ran = true;
+            pending.changed_paths.insert(normalized_path.to_path_buf());
+            pending
+                .processed_paths
+                .insert(normalized_path.to_path_buf());
+            pending.embedding_pool = embedding_pool;
             pending.unresolved.extend(unresolved);
             pending.variable_bindings.extend(variable_bindings);
             pending.this_barriers.extend(this_barrier_spans);
@@ -464,6 +535,8 @@ impl Pipeline {
         total_files: usize,
         pending: &mut PendingResolution,
     ) -> PipelineResult<IncrementalStats> {
+        self.register_dependency_root(root);
+        pending.embedding_pool = embedding_pool.clone();
         use crate::io::status_line::{
             ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
         };
@@ -619,6 +692,19 @@ impl Pipeline {
                 });
             }
 
+            pending
+                .changed_paths
+                .extend(discover_result.new_files.iter().cloned());
+            pending
+                .changed_paths
+                .extend(discover_result.modified_files.iter().cloned());
+            pending
+                .changed_paths
+                .extend(discover_result.deleted_files.iter().cloned());
+            for (old, new) in &discover_result.renamed_files {
+                pending.changed_paths.insert(old.clone());
+                pending.changed_paths.insert(new.clone());
+            }
             let modified_on_disk = discover_result.modified_files.len();
             let invalidated_caller_files =
                 Self::invalidate_target_callers(&index, &mut discover_result)?;
@@ -630,6 +716,10 @@ impl Pipeline {
                 .chain(discover_result.renamed_files.iter().map(|(_, new)| new))
                 .cloned()
                 .collect();
+
+            pending
+                .processed_paths
+                .extend(files_to_index.iter().cloned());
 
             // Validate parser construction for every language in the
             // change set BEFORE removing the modified files' old rows: a
@@ -737,6 +827,21 @@ impl Pipeline {
             )
         };
 
+        if force {
+            let normalized_root = self
+                .settings
+                .workspace_root
+                .as_ref()
+                .and_then(|workspace| root.strip_prefix(workspace).ok())
+                .unwrap_or(root);
+            for path in index.get_all_indexed_paths()? {
+                if path.starts_with(normalized_root) {
+                    pending.changed_paths.insert(path.clone());
+                    pending.processed_paths.insert(path);
+                }
+            }
+        }
+        pending.embedding_pool = embedding_pool;
         // Resolution is deferred: accumulate this root's Phase 1 outputs.
         pending.unresolved.extend(unresolved);
         pending.variable_bindings.extend(variable_bindings);
@@ -763,18 +868,75 @@ impl Pipeline {
     /// only their own walk's files, hiding other roots' and unchanged
     /// files' symbols and re-export aliases), run Phase 2 once, re-point
     /// captured inbound edges at the committed replacements, persist
-    /// embeddings. A `pending` from all-cached runs is a no-op.
+    /// embeddings. All-cached runs also drain persisted importer obligations
+    /// left by earlier bounded runs.
     pub fn resolve_pending(
         &self,
-        pending: PendingResolution,
+        mut pending: PendingResolution,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         show_progress: bool,
     ) -> PipelineResult<Phase2Stats> {
-        if !pending.ran {
+        let mut queued: std::collections::HashSet<_> =
+            index.get_pending_resolution_paths()?.into_iter().collect();
+        if !pending.ran && (pending.bounded_inventory || queued.is_empty()) {
             return Ok(Phase2Stats::default());
         }
         let semantic_path = self.settings.index_path.join("semantic");
+
+        let dependency_settings = self.settings_with_dependency_roots();
+        let dependents = super::dependencies::import_dependents(
+            &index,
+            &dependency_settings,
+            &pending.changed_paths,
+            &pending.processed_paths,
+        )?;
+        let dirty_sources = super::dependencies::invalidate_importers(&index, &dependents)?;
+        queued.extend(dependents.iter().cloned());
+        pending
+            .captured_inbound
+            .retain(|edge| !dirty_sources.contains(&edge.from));
+        let mut completed_queue = std::collections::HashSet::new();
+        if pending.bounded_inventory {
+            if !dependents.is_empty() {
+                tracing::info!(target: "pipeline",
+                    "Deferred resolution for {} importer file(s) outside the bounded inventory",
+                    dependents.len());
+            }
+        } else {
+            let to_reparse: std::collections::BTreeSet<_> = queued
+                .iter()
+                .filter(|&path| !pending.processed_paths.contains(path))
+                .cloned()
+                .collect();
+            for path in to_reparse {
+                let absolute_path = super::dependencies::absolute(&path, &self.settings);
+                // An authoritative walk may have removed an excluded file's
+                // registration while its pending obligation remained durable.
+                if index.get_file_info(&path.to_string_lossy())?.is_none()
+                    || !std::fs::symlink_metadata(&absolute_path)
+                        .is_ok_and(|metadata| metadata.is_file())
+                {
+                    completed_queue.insert(path);
+                    continue;
+                }
+                let pool = pending.embedding_pool.clone();
+                self.index_file_content(
+                    &absolute_path,
+                    Arc::clone(&index),
+                    semantic.clone(),
+                    pool,
+                    None,
+                    Some(&mut pending),
+                    true,
+                )?;
+            }
+        }
+
+        if !pending.ran {
+            super::dependencies::clear_pending_paths(&index, &completed_queue)?;
+            return Ok(Phase2Stats::default());
+        }
 
         let symbol_cache =
             self.resolution_cache(&index, None, &[], !pending.unresolved.is_empty())?;
@@ -799,9 +961,19 @@ impl Pipeline {
             rebind_stage.rebind_inbound_edges(&pending.captured_inbound)?;
         }
 
-        self.finish_resolution_cache(&index, &symbol_cache)?;
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+
+        // Clearing follows successful relationship and embedding commits;
+        // file cleanup alone is never sufficient to discharge this work.
+        completed_queue.extend(
+            pending
+                .processed_paths
+                .into_iter()
+                .filter(|path| queued.contains(path)),
+        );
+        super::dependencies::clear_pending_paths(&index, &completed_queue)?;
+        self.finish_resolution_cache(&index, &symbol_cache)?;
 
         Ok(phase2_stats)
     }
@@ -816,6 +988,7 @@ impl Pipeline {
         force: bool,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
+        self.register_dependency_root(root);
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
 
@@ -847,6 +1020,15 @@ impl Pipeline {
         );
 
         if discover_result.is_empty() {
+            let phase2_stats = self.resolve_pending(
+                PendingResolution {
+                    embedding_pool,
+                    ..PendingResolution::default()
+                },
+                index,
+                semantic,
+                progress.is_some(),
+            )?;
             return Ok(IncrementalStats {
                 new_files: 0,
                 modified_files: 0,
@@ -856,7 +1038,7 @@ impl Pipeline {
                 deleted_symbols: 0,
                 index_stats: IndexStats::new(),
                 cleanup_stats: CleanupStats::default(),
-                phase2_stats: Phase2Stats::default(),
+                phase2_stats,
                 elapsed: start.elapsed(),
             });
         }
@@ -949,31 +1131,41 @@ impl Pipeline {
             m.log();
         }
 
-        // Run Phase 2 resolution with progress if Phase 1 had progress.
-        // Seed the cache from the persisted index: the run-scoped cache
-        // holds only this run's files, hiding unchanged files' symbols
-        // and re-export aliases from resolution.
-        let symbol_cache = Arc::new(SymbolLookupCache::for_pending_relationships(
-            &index,
-            &unresolved,
-        )?);
-        let phase2_stats = self.run_phase2_maybe_bar(
+        let mut pending = PendingResolution {
             unresolved,
             variable_bindings,
             this_barriers,
-            symbol_cache,
-            Arc::clone(&index),
-            show_progress,
-        )?;
-
-        // Replacements are committed and findable now, so the captured edges
-        // can be re-pointed at them.
-        if !captured_inbound.is_empty() {
-            cleanup_stage.rebind_inbound_edges(&captured_inbound)?;
+            captured_inbound,
+            ran: true,
+            embedding_pool,
+            ..PendingResolution::default()
+        };
+        pending
+            .changed_paths
+            .extend(discover_result.new_files.iter().cloned());
+        pending
+            .changed_paths
+            .extend(discover_result.modified_files.iter().cloned());
+        pending
+            .changed_paths
+            .extend(discover_result.deleted_files.iter().cloned());
+        for (old, new) in &discover_result.renamed_files {
+            pending.changed_paths.insert(old.clone());
+            pending.changed_paths.insert(new.clone());
         }
-
-        // Save embeddings
-        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+        pending
+            .processed_paths
+            .extend(discover_result.new_files.iter().cloned());
+        pending
+            .processed_paths
+            .extend(discover_result.modified_files.iter().cloned());
+        pending.processed_paths.extend(
+            discover_result
+                .renamed_files
+                .iter()
+                .map(|(_, new)| new.clone()),
+        );
+        let phase2_stats = self.resolve_pending(pending, index, semantic, show_progress)?;
 
         Ok(IncrementalStats {
             new_files: discover_result.new_files.len(),

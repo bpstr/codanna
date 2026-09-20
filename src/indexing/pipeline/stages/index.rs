@@ -212,6 +212,20 @@ impl IndexStage {
         });
         stats.symbols_found += symbols_in_batch;
 
+        // Export identity is required for correct resolution; a failed write
+        // must not register the source hash as successfully indexed.
+        for exports in batch.file_exports {
+            self.index.store_file_exports(&exports)?;
+            symbol_cache.register_file_exports(exports);
+        }
+
+        // Import paths are durable dependency evidence, including unresolved
+        // imports. A missing record would prevent future importer invalidation.
+        batch
+            .imports
+            .par_iter()
+            .try_for_each(|import| self.index.store_import(import))?;
+
         let failed = failed_files
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -236,17 +250,6 @@ impl IndexStage {
         let files_failed = failed.len() + registration_failures.load(Ordering::Relaxed);
         stats.files_indexed += files_in_batch - files_failed;
         stats.files_failed += files_failed;
-
-        // Write imports in parallel
-        batch.imports.par_iter().for_each(|import| {
-            if let Err(e) = self.index.store_import(import) {
-                tracing::warn!(
-                    target: "pipeline",
-                    "Failed to store import {}: {e}",
-                    import.path
-                );
-            }
-        });
 
         // Update progress AFTER all work is complete
         // This ensures 100% only shows when files are truly fully processed

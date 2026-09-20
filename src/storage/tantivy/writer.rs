@@ -250,6 +250,73 @@ impl DocumentIndex {
         Ok(())
     }
 
+    /// Invalidate derived output while keeping the declaration searchable.
+    pub(crate) fn delete_outgoing_relationships(&self, id: SymbolId) -> StorageResult<()> {
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+        writer.delete_term(Term::from_field_u64(
+            self.schema.from_symbol_id,
+            u64::from(id.value()),
+        ));
+        Ok(())
+    }
+
+    /// Keep unresolved dependency work durable across bounded indexing and
+    /// reopening. The key deliberately differs from file_path: replacing a
+    /// file's declarations must not clear its obligation before Phase 2 commits.
+    pub(crate) fn store_pending_resolution(&self, path: &std::path::Path) -> StorageResult<()> {
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+        let path = path.to_string_lossy();
+        let key = format!("pending_resolution:{path}");
+        writer.delete_term(Term::from_field_text(self.schema.meta_key, &key));
+        let mut doc = Document::new();
+        doc.add_text(self.schema.doc_type, "pending_resolution");
+        doc.add_text(self.schema.meta_key, key);
+        doc.add_text(self.schema.context, path.as_ref());
+        writer.add_document(doc)?;
+        Ok(())
+    }
+
+    pub(crate) fn clear_pending_resolution(&self, path: &std::path::Path) -> StorageResult<()> {
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+        writer.delete_term(Term::from_field_text(
+            self.schema.meta_key,
+            &format!("pending_resolution:{}", path.display()),
+        ));
+        Ok(())
+    }
+
+    /// Replace a derived outgoing relationship kind without disturbing
+    /// callers, definitions, or other relationships incident to the symbol.
+    pub(crate) fn delete_outgoing_relationships_of_kind(
+        &self,
+        id: SymbolId,
+        kind: crate::RelationKind,
+    ) -> StorageResult<()> {
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+        let query = BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(self.schema.from_symbol_id, u64::from(id.value())),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn tantivy::query::Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.relation_kind, &format!("{kind:?}")),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ]);
+        writer.delete_query(Box::new(query))?;
+        Ok(())
+    }
+
     /// Store a relationship between two symbols
     pub(crate) fn store_relationship(
         &self,
@@ -383,7 +450,28 @@ impl DocumentIndex {
         Ok(())
     }
 
-    /// Delete all import documents for a file
+    /// Persist a tagged export surface without changing the Tantivy schema.
+    /// Empty surfaces are stored too: absence of an export is meaningful.
+    pub fn store_file_exports(&self, exports: &crate::parsing::FileExports) -> StorageResult<()> {
+        let encoded = serde_json::to_string(exports)
+            .map_err(|error| StorageError::General(format!("Export encoding failed: {error}")))?;
+        let writer_lock = self
+            .writer
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+        let mut doc = Document::new();
+        doc.add_text(self.schema.doc_type, "exports");
+        doc.add_u64(
+            self.schema.import_file_id,
+            u64::from(exports.file_id.value()),
+        );
+        doc.add_text(self.schema.context, encoded);
+        writer.add_document(doc)?;
+        Ok(())
+    }
+
+    /// Delete all import and export documents for a file
     ///
     /// Used during file updates and deletions.
     pub fn delete_imports_for_file(&self, file_id: FileId) -> StorageResult<()> {
@@ -416,6 +504,23 @@ impl DocumentIndex {
         ]);
 
         writer.delete_query(Box::new(query))?;
+        let exports_query = BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.doc_type, "exports"),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(self.schema.import_file_id, u64::from(file_id.value())),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ]);
+        writer.delete_query(Box::new(exports_query))?;
         Ok(())
     }
 
