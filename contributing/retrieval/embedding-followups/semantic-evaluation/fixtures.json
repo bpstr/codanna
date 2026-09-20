@@ -1,0 +1,368 @@
+{
+  "schema_version": 1,
+  "name": "Semantic evaluation deterministic fixture checklist",
+  "expected_test_count": 36,
+  "status": "passed",
+  "scope": "Python evaluator contracts using fixed local data, mocked CLI responses, dummy model files, and bounded local Python child processes. No real model, provider transport, or Codanna inference is executed by this suite.",
+  "verification": {
+    "owner": "root",
+    "status": "passed",
+    "test_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "contributing/retrieval/embedding-followups/semantic-evaluation",
+      "-p",
+      "test_evaluate.py",
+      "-v"
+    ],
+    "check_command": [
+      "python3",
+      "contributing/retrieval/embedding-followups/semantic-evaluation/evaluate.py",
+      "check"
+    ],
+    "test_log": "contract-tests.txt",
+    "test_source_sha256": "ae524fe3c29ed41a391d4ebbcd1b17f481f6c6597777d37e391c962642430f15",
+    "evaluator_source_sha256": "e411e21ff19dd5b4fc06032b671b09f797b3357d4ddfe936ec1086eb86c8694b",
+    "verified_at": "2026-09-20T18:20:20Z",
+    "test_log_sha256": "ce31fa12db624305e9a4319ded2c2b727a185c6850a880f00bd68f6cc092c61a",
+    "passed": 36,
+    "failed": 0,
+    "independent_review": "Passed after enforcing live capture bounds, stable diagnostic counts, and invalid-provenance suppression."
+  },
+  "semantic_qualification": {
+    "status": "unrun",
+    "full_qualification": false,
+    "semantic_relevance_measured": false,
+    "status_source": "contributing/retrieval/embedding-followups/semantic-evaluation/status.json",
+    "note": "Passing these deterministic fixtures does not establish real-model relevance."
+  },
+  "fixtures": [
+    {
+      "id": "SE01",
+      "test": "test_evaluate.MetricTests.test_graded_ndcg_uses_exponential_gain_and_original_ranks",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Graded nDCG arithmetic",
+      "scenario": "A four-source ranking puts grades 2, 3, 0, and 1 at ranks 1 through 4.",
+      "oracle": "nDCG equals the explicit exponential-gain DCG divided by the ideal DCG; all grade-2/3 sources yield recall 1.",
+      "status": "passed"
+    },
+    {
+      "id": "SE02",
+      "test": "test_evaluate.MetricTests.test_duplicate_sources_cannot_inflate_gain_or_recall",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Repeated source budget",
+      "scenario": "Five chunks from one grade-3 source fill the result budget while another grade-3 source is sixth.",
+      "oracle": "Only the first source earns gain; source and grade-3 recall are 0.5, duplicate slots are 4, duplicate fraction is 0.8, and the sixth result receives no credit.",
+      "status": "passed"
+    },
+    {
+      "id": "SE03",
+      "test": "test_evaluate.MetricTests.test_duplicate_does_not_compress_later_relevant_rank",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Original ranks after duplicates",
+      "scenario": "Two chunks from an irrelevant source precede a directly relevant source.",
+      "oracle": "Reciprocal rank remains 1/3 and nDCG is 0.5; removing duplicate credit does not compress result ranks.",
+      "status": "passed"
+    },
+    {
+      "id": "SE04",
+      "test": "test_evaluate.MetricTests.test_grade_one_has_graded_gain_but_is_not_binary_relevance",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Partial relevance threshold",
+      "scenario": "Only a grade-1 source is returned when a grade-3 source also exists.",
+      "oracle": "The grade-1 source earns positive graded gain but binary Hit@5 and source recall remain zero.",
+      "status": "passed"
+    },
+    {
+      "id": "SE05",
+      "test": "test_evaluate.MetricTests.test_missing_results_score_zero_for_positive_query",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Empty positive retrieval",
+      "scenario": "A query has a grade-3 source but returns no rows.",
+      "oracle": "Source nDCG, reciprocal rank, and recall are zero.",
+      "status": "passed"
+    },
+    {
+      "id": "SE06",
+      "test": "test_evaluate.MetricTests.test_all_zero_judgments_are_not_positive_denominators",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "All-zero judgments",
+      "scenario": "A source graded zero is returned for a query with no positive grades.",
+      "oracle": "Source nDCG and recall are null, the returned grade-zero source is counted, and all_zero_judgments is true.",
+      "status": "passed"
+    },
+    {
+      "id": "SE07",
+      "test": "test_evaluate.MetricTests.test_unjudged_source_is_an_error",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Unjudged source rejection",
+      "scenario": "A result references a source absent from the query's judgments.",
+      "oracle": "Scoring raises ValueError rather than assigning an implicit zero grade.",
+      "status": "passed"
+    },
+    {
+      "id": "SE08",
+      "test": "test_evaluate.MetricTests.test_failed_queries_remain_in_aggregate_denominators",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Failed-query denominator",
+      "scenario": "One positive query succeeds and one positive query carries an error with empty results.",
+      "oracle": "Mean source recall is 0.5, the denominator remains 2, and the error count is 1.",
+      "status": "passed"
+    },
+    {
+      "id": "SE09",
+      "test": "test_evaluate.ContractTests.test_frozen_dataset_and_unrun_status",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Prepared unrun state",
+      "scenario": "The fixed corpus manifest is validated and a disposable experiment is prepared.",
+      "oracle": "Manifest validation succeeds; the prepared experiment is unrun with full_qualification and semantic_relevance_measured false. The separate check command verifies the frozen status hashes.",
+      "status": "passed"
+    },
+    {
+      "id": "SE10",
+      "test": "test_evaluate.ContractTests.test_preparation_keeps_labels_and_outputs_outside_indexed_docs",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Index and label separation",
+      "scenario": "Preparation creates a workspace, query manifest, and local-model settings.",
+      "oracle": "Only docs is a collection path; workspace inventory equals source inventory; queries.json is absent from sources; semantic settings contain no remote-prefixed key.",
+      "status": "passed"
+    },
+    {
+      "id": "SE11",
+      "test": "test_evaluate.ContractTests.test_full_query_leakage_and_unknown_corpus_files_are_rejected",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Query leakage and extra files",
+      "scenario": "A complete query is appended to a source, then an answers.json file is placed in the corpus root.",
+      "oracle": "Validation rejects literal query leakage and rejects a file outside the fixed docs/*.md source set.",
+      "status": "passed"
+    },
+    {
+      "id": "SE12",
+      "test": "test_evaluate.ContractTests.test_missing_duplicate_and_invalid_judgments_are_rejected",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Judgment completeness and types",
+      "scenario": "A judgment is removed, duplicated, assigned boolean grade True, or given an empty rationale.",
+      "oracle": "Each mutation raises ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE13",
+      "test": "test_evaluate.ContractTests.test_envelope_ties_preserve_cli_order",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Equal-score order",
+      "scenario": "Two sources with equal cosine scores arrive in a chosen CLI order.",
+      "oracle": "Normalization preserves that source order.",
+      "status": "passed"
+    },
+    {
+      "id": "SE14",
+      "test": "test_evaluate.ContractTests.test_empty_result_is_distinct_from_protocol_failure",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Empty result versus error",
+      "scenario": "A matching NOT_FOUND envelope is followed by an INDEX_ERROR envelope.",
+      "oracle": "NOT_FOUND normalizes to an empty list; the protocol error raises ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE15",
+      "test": "test_evaluate.ContractTests.test_malformed_envelopes_and_nonfinite_cosines_are_rejected",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Envelope and cosine validation",
+      "scenario": "Envelope shapes are null, list, or null metadata; scores include NaN, infinities, boolean, string, and out-of-range numeric values.",
+      "oracle": "All malformed envelopes and invalid cosine values raise ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE16",
+      "test": "test_evaluate.ContractTests.test_stale_hash_foreign_path_and_symlink_are_rejected",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Source identity and containment",
+      "scenario": "A response points outside the workspace, follows an outside-target symlink, or references a source whose bytes changed.",
+      "oracle": "Every response is rejected with ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE17",
+      "test": "test_evaluate.ContractTests.test_bad_utf8_span_duplicate_chunks_and_foreign_collections_are_rejected",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Coordinates and response scope",
+      "scenario": "Responses contain an out-of-bounds range, repeated chunk identity, foreign collection, different query, more than five rows, or a byte range splitting an accented character.",
+      "oracle": "The structural mutations raise ValueError; the split UTF-8 range raises UnicodeDecodeError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE18",
+      "test": "test_evaluate.ContractTests.test_diagnostics_require_complete_vectors_and_actual_local_identity",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Required diagnostic identity",
+      "scenario": "Diagnostics have unembedded chunks, zero live vectors, absent identity or generation, a remote backend identity, or a non-object shape.",
+      "oracle": "Each invalid diagnostic raises ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE19",
+      "test": "test_evaluate.ContractTests.test_environment_scrubs_credentials_and_targets_private_cache",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Isolated collection environment",
+      "scenario": "Inherited environment contains synthetic credentials, provider/config overrides, a proxy, and a hostile HF endpoint.",
+      "oracle": "The returned environment omits the checked credential/override/proxy keys, points HF_HOME to the private model cache, and overrides HF_ENDPOINT with codanna-offline://cache.",
+      "status": "passed"
+    },
+    {
+      "id": "SE20",
+      "test": "test_evaluate.ContractTests.test_collection_requires_explicit_opt_in_before_any_process",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Manual opt-in boundary",
+      "scenario": "Collection is requested without allow_local_model while subprocess.Popen is patched to forbid processes.",
+      "oracle": "Collection raises the explicit opt-in error before any subprocess call.",
+      "status": "passed"
+    },
+    {
+      "id": "SE21",
+      "test": "test_evaluate.ContractTests.test_live_stdout_and_stderr_limits_stop_local_fixture_processes",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Live output bounds",
+      "scenario": "Small local Python processes write excessive stdout or stderr and then would sleep; the per-stream budget is reduced to 4096 bytes.",
+      "oracle": "Each process stops with the matching output-limit error and nonzero return code; the captured stream is exactly 4096 bytes and collection ends before its five-second timeout.",
+      "status": "passed"
+    },
+    {
+      "id": "SE22",
+      "test": "test_evaluate.ContractTests.test_timeout_stops_local_fixture_process_and_retains_bounded_output",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Process timeout",
+      "scenario": "A local Python fixture would sleep for 30 seconds but has a 0.1-second capture timeout.",
+      "oracle": "Capture raises a timeout error, records error=timeout, and retains a nonzero process return code.",
+      "status": "passed"
+    },
+    {
+      "id": "SE23",
+      "test": "test_evaluate.ContractTests.test_imported_stdout_and_stderr_are_bounded_before_hashing",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Imported output bounds",
+      "scenario": "Imported stdout or stderr is 129 bytes against a patched 128-byte limit, with matching recorded hashes.",
+      "oracle": "captured_bytes rejects each oversized stream with its specific budget error.",
+      "status": "passed"
+    },
+    {
+      "id": "SE24",
+      "test": "test_evaluate.ContractTests.test_cache_preflight_rejects_missing_assets_and_nonexact_snapshot_ref",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Cache preflight rejection",
+      "scenario": "A dummy model cache has a refs/main value with a newline, then a missing config.json; process launch is forbidden.",
+      "oracle": "Collection rejects the nonexact snapshot ref and the missing required file before any subprocess call.",
+      "status": "passed"
+    },
+    {
+      "id": "SE25",
+      "test": "test_evaluate.ContractTests.test_both_supported_models_require_exact_cached_assets",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Supported cache layouts",
+      "scenario": "Dummy caches are prepared for AllMiniLML6V2 and MultilingualE5Small.",
+      "oracle": "Each inventory contains exactly six selected files, including the model's expected weight path.",
+      "status": "passed"
+    },
+    {
+      "id": "SE26",
+      "test": "test_evaluate.ContractTests.test_manual_collection_uses_mocked_transport_and_only_selected_snapshot",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Mocked collection workflow",
+      "scenario": "A fake command transport returns deterministic CLI records; the input cache also contains an unrelated model file and real process launch is forbidden.",
+      "oracle": "Collection completes through 14 mocked commands, copies exactly the six selected cache files, and produces a complete fixture measurement while full_qualification remains false.",
+      "status": "passed"
+    },
+    {
+      "id": "SE27",
+      "test": "test_evaluate.ContractTests.test_score_uses_fixture_json_only_and_never_claims_full_qualification",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Model-free captured scoring",
+      "scenario": "A complete synthetic capture is scored with process launch forbidden.",
+      "oracle": "Scoring reads files only, returns a complete measurement for ten fixture queries, keeps full_qualification false, and records raw-cosine comparison as unsupported_by_public_cli.",
+      "status": "passed"
+    },
+    {
+      "id": "SE28",
+      "test": "test_evaluate.ContractTests.test_missing_query_is_an_error_and_stays_in_denominator",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Missing captured query",
+      "scenario": "One response is removed from an otherwise complete ten-query synthetic capture.",
+      "oracle": "The report is incomplete, semantic_relevance_measured is false, the recall denominator remains 10, and mean recall is 0.9.",
+      "status": "passed"
+    },
+    {
+      "id": "SE29",
+      "test": "test_evaluate.ContractTests.test_changed_raw_response_is_incomplete_but_changed_generation_is_invalid",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Query error versus global drift",
+      "scenario": "A query output is changed without updating its hash; then final diagnostic generation is changed with refreshed capture hashes.",
+      "oracle": "The stale query response yields an incomplete report; the changed generation raises ValueError and invalidates global provenance.",
+      "status": "passed"
+    },
+    {
+      "id": "SE30",
+      "test": "test_evaluate.ContractTests.test_stable_generation_with_changed_vector_counts_invalidates_capture",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Stable generation with count drift",
+      "scenario": "Final chunk, live-vector, and physical-vector counts rise from 28 to 29 while generation stays constant.",
+      "oracle": "Scoring raises a counts-changed ValueError.",
+      "status": "passed"
+    },
+    {
+      "id": "SE31",
+      "test": "test_evaluate.ContractTests.test_invalid_global_model_identity_writes_no_aggregate",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Invalid model provenance",
+      "scenario": "Both diagnostics are changed from local to remote backend identity and their raw hashes are refreshed.",
+      "oracle": "The score command exits 2 and writes invalid_capture, summary=null, and semantic_relevance_measured=false.",
+      "status": "passed"
+    },
+    {
+      "id": "SE32",
+      "test": "test_evaluate.ContractTests.test_query_failure_without_final_stats_keeps_incomplete_denominators",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Stopped collection denominator",
+      "scenario": "A synthetic query failure removes the final response and final diagnostics but retains valid initial diagnostic provenance.",
+      "oracle": "The report is incomplete; source-recall denominator remains 10 and mean recall is 0.9.",
+      "status": "passed"
+    },
+    {
+      "id": "SE33",
+      "test": "test_evaluate.ContractTests.test_missing_version_or_changed_command_is_incomplete",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Recorded command mismatch",
+      "scenario": "The captured version command's binary argument is changed.",
+      "oracle": "Scoring returns incomplete. This body tests an argument mismatch; it does not delete the version record.",
+      "status": "passed"
+    },
+    {
+      "id": "SE34",
+      "test": "test_evaluate.ContractTests.test_stale_manifest_or_model_bytes_is_invalid",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Changed manifest or model bytes",
+      "scenario": "Selected dummy model bytes are changed, then the query manifest bytes are changed.",
+      "oracle": "Scoring rejects the stale model artifact first and the stale query hash after the manifest mutation.",
+      "status": "passed"
+    },
+    {
+      "id": "SE35",
+      "test": "test_evaluate.ContractTests.test_invalid_score_writes_explicit_unqualified_report",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Malformed capture report",
+      "scenario": "capture.json contains a list instead of an object.",
+      "oracle": "The score command exits 2 and writes invalid_capture with full_qualification=false and summary=null.",
+      "status": "passed"
+    },
+    {
+      "id": "SE36",
+      "test": "test_evaluate.ContractTests.test_strict_json_rejects_nonfinite_and_duplicate_keys",
+      "source": "contributing/retrieval/embedding-followups/semantic-evaluation/test_evaluate.py",
+      "title": "Strict JSON parsing",
+      "scenario": "JSON contains NaN, Infinity, exponent overflow to infinity, or duplicate object keys.",
+      "oracle": "strict_json raises ValueError for each input.",
+      "status": "passed"
+    }
+  ]
+}

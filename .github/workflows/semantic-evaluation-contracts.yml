@@ -1,0 +1,22 @@
+name: Semantic evaluation contracts
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'contributing/retrieval/embedding-followups/semantic-evaluation/**'
+      - 'contributing/retrieval/embedding-followups/SEMANTIC-EVALUATION.md'
+      - '.github/workflows/semantic-evaluation-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  model-free-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate fixed corpus and unrun status without models
+        run: env -i PATH="$PATH" python3 contributing/retrieval/embedding-followups/semantic-evaluation/evaluate.py check
+      - name: Test metrics and captured CLI contracts with synthetic fixtures
+        run: env -i PATH="$PATH" python3 -m unittest discover -s contributing/retrieval/embedding-followups/semantic-evaluation -p 'test_evaluate.py' -v
