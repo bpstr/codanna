@@ -13,6 +13,21 @@ sha256sum \
   tests/fixtures/calendar_graph_evidence/workspace/reference/calendar.ts \
   contributing/retrieval/calendar-graph-evidence/cases.json
 
+python3 - <<'PY'
+import hashlib
+import json
+import pathlib
+
+oracle = json.loads(pathlib.Path(
+    "contributing/retrieval/calendar-graph-evidence/cases.json"
+).read_text())
+for name, expected in oracle["files"].items():
+    actual = hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(f"Fixture digest mismatch: {name}: {actual} != {expected}")
+print("fixture_digests=verified", flush=True)
+PY
+
 build_events=$(mktemp)
 trap 'rm -f "$build_events"' EXIT
 # On compilation failure, stop before hashing or running any cached executable.
@@ -22,6 +37,7 @@ python3 - "$build_events" <<'PY'
 import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 
 executables = set()
@@ -33,12 +49,14 @@ for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
         executables.add(event["executable"])
 if len(executables) != 1:
     raise SystemExit("Expected exactly one current graph-contract executable")
-for name in sorted(executables):
-    digest = hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()
-    print(f"test_executable_sha256={digest}  {name}")
+executable = pathlib.Path(executables.pop()).resolve(strict=True)
+digest = hashlib.sha256()
+with executable.open("rb") as binary:
+    for block in iter(lambda: binary.read(1024 * 1024), b""):
+        digest.update(block)
+print(f"test_executable_sha256={digest.hexdigest()}  {executable}", flush=True)
+# Do not invoke Cargo again: build scripts may rebuild and invalidate the digest.
+status = subprocess.run([str(executable), "--nocapture"], check=False).returncode
+print(f"test_exit_status={status}", flush=True)
+raise SystemExit(status if status >= 0 else 128 - status)
 PY
-
-status=0
-cargo test --locked --test calendar_graph_evidence -- --nocapture || status=$?
-printf 'test_exit_status=%s\n' "$status"
-exit "$status"
