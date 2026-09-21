@@ -1,6 +1,6 @@
 //! Unified, bounded topic context across code, documents, and conversation recall.
 use crate::documents::SearchQuery as DocSearchQuery;
-use crate::mcp::requests::SearchContextRequest;
+use crate::mcp::requests::{SearchContextRequest, validate_context_limit};
 use crate::mcp::server::CodeIntelligenceServer;
 use rmcp::model::ErrorData as McpError;
 use rmcp::model::*;
@@ -26,10 +26,10 @@ impl CodeIntelligenceServer {
             ("document_limit", request.document_limit),
             ("conversation_limit", request.conversation_limit),
         ] {
-            if !(1..=10).contains(&limit) {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "{name} must be 1-10"
-                ))]));
+            if let Err(error) = validate_context_limit(name, limit) {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    error.message,
+                )]));
             }
         }
 
