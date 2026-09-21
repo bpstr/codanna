@@ -9,7 +9,7 @@ use codanna::parsing::LanguageParser;
 use codanna::parsing::typescript::TypeScriptParser;
 use codanna::{IndexPersistence, Range, RelationKind, Settings, Symbol};
 use rmcp::handler::server::wrapper::Parameters;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -225,15 +225,15 @@ async fn public_impact_reaches_arrow_consumers_without_reaching_reference_decoys
         index
             .get_impact_radius(actual.id, Some(1))
             .into_iter()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([page.id, panel.id])
+            .collect::<HashSet<_>>(),
+        HashSet::from([page.id, panel.id])
     );
     assert_eq!(
         index
             .get_impact_radius(actual.id, Some(2))
             .into_iter()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([page.id, panel.id, shell.id])
+            .collect::<HashSet<_>>(),
+        HashSet::from([page.id, panel.id, shell.id])
     );
     assert!(index.get_impact_radius(decoy.id, Some(3)).is_empty());
     let server = CodeIntelligenceServer::new(index);
