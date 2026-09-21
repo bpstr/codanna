@@ -101,7 +101,10 @@ fn assert_empty(result: &CallToolResult, operation: &str, target: &Symbol, depth
     let rendered = text(result);
     assert!(rendered.contains("indexed"), "{rendered}");
     assert!(rendered.contains("unknown"), "{rendered}");
-    assert!(!rendered.contains("doesn't call any functions"), "{rendered}");
+    assert!(
+        !rendered.contains("doesn't call any functions"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("No functions call "), "{rendered}");
     assert!(
         !rendered.contains("No symbols would be impacted"),
