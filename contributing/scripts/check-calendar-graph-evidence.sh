@@ -17,7 +17,7 @@ build_events=$(mktemp)
 trap 'rm -f "$build_events"' EXIT
 # On compilation failure, stop before hashing or running any cached executable.
 cargo test --locked --test calendar_graph_evidence --no-run \
-  --message-format=json > "$build_events"
+  --message-format=json-render-diagnostics > "$build_events"
 python3 - "$build_events" <<'PY'
 import hashlib
 import json

@@ -46,12 +46,16 @@ jobs:
         with:
           cache-on-failure: true
           cache-all-crates: true
+      - name: Archive tested sources
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/calendar-graph-source.tar.gz" HEAD
       - name: Run deterministic graph contracts and capture provenance
         run: bash contributing/scripts/check-calendar-graph-evidence.sh 2>&1 | tee "$RUNNER_TEMP/calendar-graph-evidence.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: calendar-graph-evidence
-          path: ${{ runner.temp }}/calendar-graph-evidence.log
+          path: |
+            ${{ runner.temp }}/calendar-graph-evidence.log
+            ${{ runner.temp }}/calendar-graph-source.tar.gz
           retention-days: 14
           if-no-files-found: error

@@ -260,7 +260,7 @@ async fn impact_budget_failure_is_not_rendered_as_an_empty_graph() {
     for id in 1..=1002 {
         let symbol = Symbol::new(
             SymbolId::new(id).unwrap(),
-            &format!("node{id}"),
+            format!("node{id}"),
             SymbolKind::Function,
             FileId::new(1).unwrap(),
             Range::new(id - 1, 0, id - 1, 10),
