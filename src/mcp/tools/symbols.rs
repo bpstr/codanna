@@ -329,7 +329,8 @@ impl CodeIntelligenceServer {
                 .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
 
             if all_called_with_metadata.is_empty() {
-                let mut output = format!("No resolved indexed Calls edges found from {identifier}.");
+                let mut output =
+                    format!("No resolved indexed Calls edges found from {identifier}.");
                 // Add guidance for no results
                 if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "get_calls", 0) {
                     output.push_str("\n\n---\nGuidance: ");
@@ -383,7 +384,13 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(graph_evidence_result(result, "get_calls", &symbol, result_count, 1))
+            Ok(graph_evidence_result(
+                result,
+                "get_calls",
+                &symbol,
+                result_count,
+                1,
+            ))
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -493,7 +500,13 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(graph_evidence_result(result, "find_callers", &symbol, result_count, 1))
+            Ok(graph_evidence_result(
+                result,
+                "find_callers",
+                &symbol,
+                result_count,
+                1,
+            ))
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
