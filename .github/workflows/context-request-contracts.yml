@@ -1,0 +1,53 @@
+name: Context request contracts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/mcp/requests.rs'
+      - 'src/mcp/tools/context.rs'
+      - 'tests/context_limit_diagnostics.rs'
+      - '.github/workflows/context-request-contracts.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: context-request-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+      - name: Run field, schema, and direct-handler contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/mcp/requests.rs src/mcp/tools/context.rs tests/context_limit_diagnostics.rs
+            cargo test --locked --test context_limit_diagnostics -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/context-request-contracts.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: context-request-contracts
+          path: ${{ runner.temp }}/context-request-contracts.log
+          retention-days: 14
+          if-no-files-found: error
