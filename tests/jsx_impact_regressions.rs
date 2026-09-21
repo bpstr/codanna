@@ -34,7 +34,10 @@ fn parser_witness(code: &str, expected: &[(&str, &str, &str)]) {
         .collect();
     actual.sort();
     expected.sort();
-    assert_eq!(actual, expected, "owner, target, count, and range must agree");
+    assert_eq!(
+        actual, expected,
+        "owner, target, count, and range must agree"
+    );
 }
 
 #[test]
@@ -140,7 +143,10 @@ fn aliased_barrel_components_reach_the_correct_persisted_uses_graph() {
     let (_temp, index) = fixture(&[
         ("provider.tsx", PROVIDER),
         ("reference.tsx", PROVIDER),
-        ("barrel.ts", "export { Calendar as PublicCalendar } from './provider';\n"),
+        (
+            "barrel.ts",
+            "export { Calendar as PublicCalendar } from './provider';\n",
+        ),
         ("view.tsx", NAMED_VIEW),
     ]);
     assert_uses(&index, "view.tsx", "Page", &[("provider.tsx", "Calendar")]);
@@ -152,7 +158,11 @@ fn aliased_barrel_components_reach_the_correct_persisted_uses_graph() {
         .get_relationships_from(page.id, RelationKind::Uses)
         .unwrap();
     assert_eq!(edges.len(), 1);
-    let metadata = edges[0].2.metadata.as_ref().expect("persist JSX source location");
+    let metadata = edges[0]
+        .2
+        .metadata
+        .as_ref()
+        .expect("persist JSX source location");
     assert_eq!(metadata.line, Some(1));
     assert_eq!(metadata.column, Some(26));
     assert!(
@@ -166,8 +176,14 @@ fn namespace_exports_do_not_bind_to_a_local_or_reference_namesake() {
     let (_temp, index) = fixture(&[
         ("provider.tsx", PROVIDER),
         ("reference.tsx", PROVIDER),
-        ("barrel.ts", "export { Calendar as PublicCalendar } from './provider';\n"),
-        ("view.tsx", "import * as ui from './barrel';\nimport * as UI from './barrel';\nfunction PublicCalendar() { return null; }\nexport function Lower() { return <ui.PublicCalendar />; }\nexport function Upper() { return <UI.PublicCalendar />; }\nexport function Missing() { return <UI.Calendar />; }\n"),
+        (
+            "barrel.ts",
+            "export { Calendar as PublicCalendar } from './provider';\n",
+        ),
+        (
+            "view.tsx",
+            "import * as ui from './barrel';\nimport * as UI from './barrel';\nfunction PublicCalendar() { return null; }\nexport function Lower() { return <ui.PublicCalendar />; }\nexport function Upper() { return <UI.PublicCalendar />; }\nexport function Missing() { return <UI.Calendar />; }\n",
+        ),
     ]);
     for owner in ["Lower", "Upper"] {
         assert_uses(&index, "view.tsx", owner, &[("provider.tsx", "Calendar")]);
@@ -179,7 +195,10 @@ fn namespace_exports_do_not_bind_to_a_local_or_reference_namesake() {
 fn shadowed_and_external_namespace_roots_never_guess_a_local_component() {
     let (_temp, index) = fixture(&[
         ("provider.tsx", PROVIDER),
-        ("view.tsx", "import * as ui from './provider';\nimport * as external from 'unindexed-library';\nfunction Calendar() { return null; }\nexport function Parameter(ui) { return <ui.Calendar />; }\nexport function Local(other) { const ui = other; return <ui.Calendar local />; }\nexport function External() { return <external.Calendar />; }\n"),
+        (
+            "view.tsx",
+            "import * as ui from './provider';\nimport * as external from 'unindexed-library';\nfunction Calendar() { return null; }\nexport function Parameter(ui) { return <ui.Calendar />; }\nexport function Local(other) { const ui = other; return <ui.Calendar local />; }\nexport function External() { return <external.Calendar />; }\n",
+        ),
     ]);
     for owner in ["Parameter", "Local", "External"] {
         assert_uses(&index, "view.tsx", owner, &[]);
@@ -191,7 +210,10 @@ async fn public_impact_reaches_arrow_consumers_without_reaching_reference_decoys
     let (_temp, index) = fixture(&[
         ("provider.tsx", PROVIDER),
         ("reference.tsx", PROVIDER),
-        ("barrel.ts", "export { Calendar as PublicCalendar } from './provider';\n"),
+        (
+            "barrel.ts",
+            "export { Calendar as PublicCalendar } from './provider';\n",
+        ),
         ("view.tsx", NAMED_VIEW),
     ]);
     let actual = target(&index, "provider.tsx", "Calendar");
@@ -200,11 +222,17 @@ async fn public_impact_reaches_arrow_consumers_without_reaching_reference_decoys
     let panel = target(&index, "view.tsx", "Panel");
     let shell = target(&index, "view.tsx", "Shell");
     assert_eq!(
-        index.get_impact_radius(actual.id, Some(1)).into_iter().collect::<BTreeSet<_>>(),
+        index
+            .get_impact_radius(actual.id, Some(1))
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         BTreeSet::from([page.id, panel.id])
     );
     assert_eq!(
-        index.get_impact_radius(actual.id, Some(2)).into_iter().collect::<BTreeSet<_>>(),
+        index
+            .get_impact_radius(actual.id, Some(2))
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         BTreeSet::from([page.id, panel.id, shell.id])
     );
     assert!(index.get_impact_radius(decoy.id, Some(3)).is_empty());
@@ -230,7 +258,10 @@ fn namespace_uses_survive_reopen_import_edit_deletion_and_recreation() {
     let (temp, mut index) = fixture(&[
         ("provider.tsx", PROVIDER),
         ("replacement.tsx", PROVIDER),
-        ("view.tsx", "import * as ui from './provider';\nexport const Page = () => <ui.Calendar />;\n"),
+        (
+            "view.tsx",
+            "import * as ui from './provider';\nexport const Page = () => <ui.Calendar />;\n",
+        ),
     ]);
     assert_uses(&index, "view.tsx", "Page", &[("provider.tsx", "Calendar")]);
     let settings = Arc::clone(index.settings());
@@ -241,14 +272,28 @@ fn namespace_uses_survive_reopen_import_edit_deletion_and_recreation() {
     assert_uses(&index, "view.tsx", "Page", &[("provider.tsx", "Calendar")]);
     let root = temp.path().join("src");
     let view = root.join("view.tsx");
-    std::fs::write(&view, "import * as ui from './replacement';\nexport const Page = () => <ui.Calendar />;\n").unwrap();
+    std::fs::write(
+        &view,
+        "import * as ui from './replacement';\nexport const Page = () => <ui.Calendar />;\n",
+    )
+    .unwrap();
     index.index_file(&view).unwrap();
-    assert_uses(&index, "view.tsx", "Page", &[("replacement.tsx", "Calendar")]);
+    assert_uses(
+        &index,
+        "view.tsx",
+        "Page",
+        &[("replacement.tsx", "Calendar")],
+    );
     let replacement = root.join("replacement.tsx");
     std::fs::remove_file(&replacement).unwrap();
     index.remove_file(&replacement).unwrap();
     assert_uses(&index, "view.tsx", "Page", &[]);
     std::fs::write(&replacement, PROVIDER).unwrap();
     index.index_file(&replacement).unwrap();
-    assert_uses(&index, "view.tsx", "Page", &[("replacement.tsx", "Calendar")]);
+    assert_uses(
+        &index,
+        "view.tsx",
+        "Page",
+        &[("replacement.tsx", "Calendar")],
+    );
 }
