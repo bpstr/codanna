@@ -4,18 +4,20 @@ Status: investigation recorded; remediation proposed, not implemented. Reviewed 
 
 ## Evidence and limits
 
-This packet combines the two user-supplied request captures, Assign REVIEW-0020, the completed Codex task **Investigate Codanna calendar results**, and source inspection in this checkout. The related REVIEW-0016 supplies historical index-lifecycle context. No Assign implementation, index, configuration, or transcript store was changed. No tests, builds, embedding queries, model evaluations, or provider calls were run for this packet. MCP symbol discovery and source reads supported the investigation; they are not a reproduction of the Assign failures.
+This packet combines the two user-supplied request captures, Assign REVIEW-0020, the completed Codex task **Investigate Codanna calendar results**, the user-directed ASB-1 task transcript, and source inspection in this checkout. The related REVIEW-0016 supplies historical index-lifecycle context. No Assign implementation, index, configuration, or transcript store was changed. No tests, builds, embedding queries, model evaluations, or provider calls were run for this packet. MCP symbol discovery and source reads supported the investigation; they are not a reproduction of the Assign failures.
 
 The destination is a public Codanna repository. This packet retains compact tooling evidence and finding summaries, not the private conversation, application source, or full internal report. Source attachment hashes identify what was reviewed without introducing local filesystem dependencies:
 
 | Source | Identity | Interpretation |
 | --- | --- | --- |
-| S1: integration-binding context capture | SHA-256 `0d77103d44bdc4f7715ee22afc44b4d9595f2d71e737ed4172e6a685284c96cd` | Rejected context limit, then noisy search output. Original arguments and rejected value absent. |
+| S1: integration-binding context capture | SHA-256 `0d77103d44bdc4f7715ee22afc44b4d9595f2d71e737ed4172e6a685284c96cd` | Rejected context limit, then noisy search output. Original paste omits arguments; S7 recovers the rejected conversation_limit value. |
 | S2: calendar feature capture | SHA-256 `64d96893e9eb86f917bd7362b347d021e2ebdeaff158a43add15fe4dd54c2330` | Broad symbol results, exact CalendarPage miss, repeated workspace metadata. |
 | S3: REVIEW-0020, dated 2026-09-21 | SHA-256 `add34bfe1233436a3d53d3eca3d7c9949de5ed202d83fb47948f241c6b338f68` | Ten request families, report-local exact excerpts, source cross-checks, and reported fixture tests. |
 | S4: Investigate Codanna calendar results | Completed task read through Codex task history on 2026-09-22 | Confirms every recorded Codanna call explicitly supplied the Assign `project_path`. Several examples in S3 omit that selector for brevity. |
 | S5: REVIEW-0016, dated 2026-09-20 | Historical review of Codanna rc1 `fc7d934` | Scope cleanup, force-rebuild and long-lived-reader findings; not proof those defects remain in current main. |
-| S6: user follow-up, 2026-09-22 | Exact reported text: `Accessibility action requires an element index or point` | User confirms repeated occurrences inside a Codanna tool result; exact tool, arguments, timestamps and count not yet supplied. |
+| S6: user follow-up, 2026-09-22 | Exact reported text: `Accessibility action requires an element index or point` | Initially reported as appearing inside Codanna output; user then directed investigation to ASB-1, possibly find_symbol. Attribution corrected by S7 below. |
+
+S7: the authorized **Fix ASB-1 git integration** task was read on 2026-09-22. Its raw completed-tool events supplied server/tool identity, arguments and result envelopes omitted from the desktop summary. Only relevant tooling evidence is retained below; the private transcript remains outside this repository.
 
 S3 inspected dirty Assign repositories. Its source revisions include architecture `aceb19ee2fb315f59ec190437d65359f3a5a7b0a`, Web `a4c4bc0bb027dbb79855ec26b66742e4a8a91914`, and Core `a0185f9b6bf94ea5d6d00b2ab62082eb651be04c`, each plus uncommitted changes. Its shortened per-file hashes are provenance clues, not independently reproducible full digests. The exact running Codanna binary hash and index generation were not captured. Historical numeric symbol IDs must be resolved again against each tested generation.
 
@@ -25,7 +27,7 @@ This table is a normalized summary, not a verbatim transcript or a new test run.
 
 | Case | Tool and query/target | Observed result | Disposition |
 | --- | --- | --- | --- |
-| S1-A | search_context, rejected request | `failed to deserialize parameters: context limit must be between 1 and 10` | Valid bounded-input rejection; missing arguments prevent identifying the offending field/value. |
+| S1-A | search_context, rejected request | `failed to deserialize parameters: context limit must be between 1 and 10` | Valid bounded-input rejection. S7 confirms conversation_limit: 0; retry with 1 succeeded. |
 | S1-B | search_context: `integration binding creation subscription github development activity create default incoming subscription webhook eligible targets task development activity local development server fixtures Reboot FRS-1` | Code ranks 1–2: `development`, score 296.29; subsequent generic `subscription` symbols around 244–246. Documents mix current integration architecture, legacy briefs, and other integrations. | Weak code relevance; mixed document relevance. No justified implementation oracle yet for this integration query. |
 | S2 | search_symbols: `calendar feature`, limit 20 | `calendarModule` 121.38; `featureContent` 80.22; Assign and two reference `Calendar` functions 5.12; further partial matches. | Generic partial matches dominate. |
 | T1 | get_index_info | 119,630 symbols, 3,812 files, 55,623 relationships; 2,122 AllMiniLML6V2 embeddings, 384 dimensions; updated 21 hours earlier; `semantic-manual`. | Correct workspace/status. Counts are historical, not current measurements. |
@@ -52,12 +54,26 @@ S3 reports four deterministic Web test files, 18 passing tests, 4.48 seconds. Th
 | C05 | P2 / semantic indexing | Sparse/manual semantic state limits discovery. Raw embeddings / total symbols is approximately 1.77%, but that is not coverage of eligible symbols. | Counts reported; eligibility, unique embedded IDs, model input policy and generation alignment remain unmeasured. Do not promise a model swap will fix it. |
 | C06 | P2 / scope and ranking | Active, legacy, and reference subtrees intentionally share the Assign index. Generic Calendar names span them. | Confirmed paths/configuration and S5 policy. This is within-workspace scope, not observed cross-workspace leakage. |
 | C07 | P2 / MCP output | Text results coexist with `result: null`; document previews expose ANSI escapes; multi-source failures are embedded in prose. | Wrapper/text behavior source-confirmed; escape sequences visible in S1. Improve machine-readable completeness and transport rendering. |
-| C08 | P2 / MCP validation | Context-limit error omits which limit failed. Limits are currently constrained to 1–10 in both schema and deserialization. | Source-confirmed. Invalid-input UX task, not evidence the bounds are wrong or missing. |
+| C08 | P2 / MCP validation | Context-limit error omits which limit failed. S7 identifies conversation_limit: 0 as the rejected argument; retry with 1 succeeded. Limits are constrained to 1–10 in both schema and deserialization. | Source-confirmed. Invalid-input UX task, not evidence the bounds are wrong or missing. |
 | C09 | P3 / recall | Conversation recall was unavailable without an explicit transcript index. | Expected optional capability. No automatic private-history discovery/import proposed. Reading S4 via the desktop task tool is separate from Codanna recall. |
 | A01 | P1 / Assign Core + Web contract owners | S3 reports Web/API/docs promise Workspace-default Account inheritance while Core lacks persistence/effective-value resolution. | Accepted in originating report; static dirty-tree evidence, not reverified here. Separate product backlog, not a Codanna implementation task. |
 | H01 | P1 triage / persistence | S5 reports document force rebuild appended stale chunks; code force rebuild retained stale semantic auxiliaries. | Historical. Reconcile with current transactional storage and lifecycle regressions before reopening or closing. |
 | H02 | P2 triage / readers + Go graph | S5 reports stale long-lived reader after replacement and no reverse consumers for interface-mediated CreateTask. | Historical. Keep distinct from current router cache and JSX issues; reproduce against current main first. |
-| U01 | P2 triage / tool-client integration, owner unconfirmed | S6 reports repeated accessibility-action target errors displayed inside a Codanna tool result. Exact-message search found no match in the inspected Codanna checkout before this addition; the reviewed calendar task history also contained no match. | User-reported, not reproduced. The reported placement is Codanna output; the emitting component remains unknown. Trace Codanna, MCP transport and client rendering before attribution. UI-action argument validation is only a wording-based hypothesis. Track separately from context-limit errors and workspace routing. |
+| U01 | P2 external follow-up / browser-action caller | S7 binds two exact accessibility errors to cua_repl.js browser scroll actions with malformed target arguments; a third corrected call succeeded. | Attribution resolved: these captured occurrences are not Codanna/find_symbol failures. Initial S6 placement report is superseded by recorded tool identity. Optional browser-caller hardening remains separate from Codanna remediation. |
+
+### ASB-1 error attribution: exact tool-event evidence
+
+The completed tool events identify **cua_repl.js**, plugin **unified-computer-use**, in-app browser backend. Both failing actions were titled “Inspect linked development card” and returned exactly `Accessibility action requires an element index or point` with `isError: true`.
+
+| UTC on 2026-09-21 | Recorded action | Result |
+| --- | --- | --- |
+| 22:02:11.727 | `await tab.scroll({ deltaY: 800 })` | Failed: no target supplied in the expected argument position. |
+| 22:02:18.994 | `await tab.scroll({ ref: 162, deltaY: 900 })` | Same error: the combined object was not accepted as a target. |
+| 22:02:24.972 | `await tab.scroll(162, { deltaY: 900 })` | Completed, `isError: false`; target supplied separately. |
+
+These are two failures, not four: the transcript records each tool event again as model-visible output. All ten find_symbol completed events in the inspected snapshot have `isError: false`, including CreateBinding, CreateSubscription, eligibleWebhookTargets and normalizeGitHubWebhook. That does not qualify their relevance or guarantee no failures in other tasks; it establishes the origin of these two reported occurrences. No browser action was replayed for this investigation.
+
+The same transcript also resolves S1: at 21:36:12.734 UTC, Codanna search_context returned the context-limit error for code_limit 10, document_limit 10, **conversation_limit 0**. The following request changed only conversation_limit to 1 and completed. Both requests explicitly selected the Assign project path. This was caller/schema mismatch, not failed workspace selection. Supporting an explicit way to omit optional recall can be considered separately; zero is not currently valid.
 
 ### What each request does about workspace selection
 
@@ -97,12 +113,12 @@ S3 distinguishes implemented Account calendar-presentation preferences from a pl
 
 ## Remaining unknowns
 
-- Original invalid S1 arguments; exact Codanna executable/index generation for S1–S4.
+- Exact Codanna executable/index generation for S1–S4. S1 arguments are now recovered in S7.
 - Scoring contributions and candidate truncation responsible for each broad-query miss.
 - The first failing JSX/member-call stage in a fresh, persisted, and incrementally updated index.
 - Eligible semantic denominator and whether missed definitions had vectors at query time.
 - Which historical force-rebuild, reader and interface-call findings still reproduce on current main.
-- The exact Codanna tool and serialized arguments for S6, the layer that inserted the error into the displayed result, and whether repetitions are independent calls or unchanged retries. The retrieved calendar task history lists no browser/computer-use calls; it does not explain errors from other tasks or client-side actions.
+- Whether any additional accessibility errors exist outside the inspected ASB-1 snapshot. S7 resolves the two matching occurrences; it provides no evidence that Codanna inserted either message.
 
 These unknowns are explicit tasks in the plan; this packet closes none of the implementation findings.
 
