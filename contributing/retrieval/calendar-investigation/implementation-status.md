@@ -10,7 +10,7 @@ or deployed by this checkpoint.
 | Slice | Pull request / branch | Checkpoint |
 | --- | --- | --- |
 | T01 graph-contract corpus and T02 MCP wording/metadata | [#44](https://github.com/bpstr/codanna/pull/44), `fix/calendar-graph-evidence` | Implemented; six focused tests pass at `4795f45ff7aad053b34e4d5eb1a60c0e5e5b0ba7`. |
-| T09 field-specific context-limit diagnostics | [#45](https://github.com/bpstr/codanna/pull/45), `fix/context-limit-diagnostics` | Implemented; Quick Check passes at `ae44c713c1dc5c7f877237c3652d88e74cf4fb74`. Focused runtime test result not yet observed in this checkpoint. |
+| T09 field-specific context-limit diagnostics | [#45](https://github.com/bpstr/codanna/pull/45), `fix/context-limit-diagnostics` | Implemented; five focused tests and Quick Check pass at `ae44c713c1dc5c7f877237c3652d88e74cf4fb74`. |
 | Fixture review and next investigations | [fixture follow-ups](fixture-followups.md) | Source findings and proposed regression matrix recorded; not runtime reproductions of JSX or ranking failures. |
 
 Important graph commits: `b307280` freezes the synthetic corpus; `b546153` adds
@@ -51,8 +51,29 @@ source coverage remain unknown; the binary hash does not make them known.
 [Hardening](https://github.com/bpstr/codanna/actions/runs/35664941687), and
 [Review security regressions](https://github.com/bpstr/codanna/actions/runs/35664941640)
 passed on that head. The [full suite](https://github.com/bpstr/codanna/actions/runs/35664941675)
-was still running when this checkpoint was recorded. Do not infer an all-green
-merge gate from the focused pass.
+had passed formatting, strict Clippy, no-default-features compilation, and
+default-feature tests; all-feature tests were still running at the final check.
+Do not infer an all-green merge gate from the focused pass.
+
+## Executed request-validation evidence
+
+The [focused context run](https://github.com/bpstr/codanna/actions/runs/35665415312)
+tested head `ae44c713c1dc5c7f877237c3652d88e74cf4fb74` at merge checkout
+`d6b7f34668d6cd8c25d4bd0f69af5f9567ef8fba`, Rust 1.98.1, Linux x86-64.
+The downloaded log reports **5 passed, 0 failed, 0 ignored** in 0.22 seconds.
+This is test execution duration, not a production request benchmark.
+
+| Source | SHA-256 |
+| --- | --- |
+| `src/mcp/requests.rs` | `62321e058d33ba8dc1fc0186edcd10709160c59c49db2f5f877de9fab9c0a628` |
+| `src/mcp/tools/context.rs` | `07bd868fe3125b80cfc0332d1dfc9621df769bd46d91ca11631fe3f8cc331086` |
+| `tests/context_limit_diagnostics.rs` | `b27df063ca2e113dc9523247dffe1b67543237c94d2b98ad5460b70b3cf8941b` |
+
+The tests verify schema/runtime boundaries, default preservation, round trips,
+field-specific range/type errors, the original `conversation_limit: 0` request,
+and direct-handler rejection before retrieval. The existing 1–10 limits are
+unchanged. [Quick Check](https://github.com/bpstr/codanna/actions/runs/35665415255)
+also passed. No full-suite result is claimed for this branch in this checkpoint.
 
 ## What remains open
 
@@ -77,3 +98,18 @@ Require every case ID to execute exactly once, reject unknown expectation types,
 and compare exact target identities and forbidden edges. Preserve frozen inputs
 while recording runs in a separate results file. These are proposed follow-ups,
 not capabilities already provided by the six passing tests.
+
+Additional controls grounded in current primary documentation:
+
+- [React memo](https://react.dev/reference/react/memo): add a memo-wrapped exported
+  component beside a direct export. Separate the wrapper's returned component,
+  the underlying function reference, and the parent's JSX use; do not invent an
+  immediate call to the underlying component from its registration argument.
+- [TypeScript module resolution](https://www.typescriptlang.org/docs/handbook/modules/reference.html):
+  test configured path aliases and type-only exports with paired value imports.
+  `paths` does not rewrite emitted imports; an index resolver's success does not
+  establish that the application's runtime/bundler resolves the same path.
+- [MCP tool results](https://modelcontextprotocol.io/specification/2026-07-28/server/tools):
+  pin the negotiated protocol when testing structured content, output schemas,
+  text compatibility, and tool errors. Verify both successful and empty payloads;
+  metadata alone is not equivalent to complete machine-readable result rows.
