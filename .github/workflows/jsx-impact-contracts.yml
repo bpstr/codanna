@@ -1,0 +1,53 @@
+name: JSX impact contracts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/parsing/**'
+      - 'src/indexing/**'
+      - 'tests/jsx_impact_regressions.rs'
+      - '.github/workflows/jsx-impact-contracts.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jsx-impact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: jsx-impact
+          cache-on-failure: true
+          cache-all-crates: true
+      - name: Run deterministic JSX contracts
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum tests/jsx_impact_regressions.rs src/parsing/typescript/parser.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs
+            cargo test --locked --test jsx_impact_regressions -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/jsx-impact.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jsx-impact-contracts
+          path: ${{ runner.temp }}/jsx-impact.log
+          retention-days: 14
+          if-no-files-found: error
