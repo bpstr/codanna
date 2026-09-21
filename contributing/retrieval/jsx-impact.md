@@ -67,7 +67,7 @@ cargo test --locked --test web_export_regressions --test callback_references --t
 ./contributing/scripts/full-test.sh
 ```
 
-## Recorded initial boundary repair
+## Recorded boundary repair
 
 [Run 35667134005](https://github.com/bpstr/codanna/actions/runs/35667134005)
 first executed the corrected nine-test harness at
@@ -79,12 +79,30 @@ The neighboring export, callback-reference, and index-lifecycle targets produced
 23, 5, and 6 passing tests respectively. Their test counts do not qualify the
 entire repository or model relevance.
 
-The separate [column-ownership run 35667592843](https://github.com/bpstr/codanna/actions/runs/35667592843)
-records the additional six-test baseline and candidate for collector commit
-`f6e6458eac631e2ce2e4590561ec72da1968fae5`. Consult the run's
-`jsx-column-evidence` artifact and the PR's verified checkpoint for its outcome;
-it is not part of the earlier nine-test result. Earlier fixture compilation and
-formatting failures are harness failures, not behavioral baseline evidence.
+## Recorded source-column repair
+
+[Run 35667592843](https://github.com/bpstr/codanna/actions/runs/35667592843)
+executed the six additional tests at `1f31c7adb80f39bc5400554edb678457c4e03d7e`:
+**1 passed, 5 failed**. The name-only fallback control passed; the disjoint,
+nested, coincident-start, boundary-column, and real same-line TSX witnesses failed.
+Collector commit `f6e6458eac631e2ce2e4590561ec72da1968fae5` then produced:
+
+| Executed target | Passed | Failed |
+| --- | ---: | ---: |
+| JSX boundary/impact regressions | 9 | 0 |
+| Source-column regressions | 6 | 0 |
+| Existing collector unit tests | 11 | 0 |
+
+The unchanged column-test SHA-256 is
+`a30dbe2df896b8027f773eb24382806473ad3038011b5caa44ac259075ab7dec`;
+the candidate collector source SHA-256 is
+`1bc9b71abfcf91b941fcb99419d85a7606f4692c8cec4c96341dfda396ea415a`.
+The `jsx-column-evidence` artifact retains baseline/candidate logs and tested
+source. These results are actual GitHub CI executions on Linux with Rust stable;
+no local Rust execution or exact binary hash is claimed. Earlier fixture
+compilation and formatting failures are harness failures, not behavioral baseline
+evidence. Full-suite completion is tracked separately in the PR and is not
+inferred from these focused passes.
 
 The temporary branch-only patch-application workflow is removed after publishing
 the source commits. The retained `JSX impact contracts` workflow is read-only
