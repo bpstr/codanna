@@ -45,7 +45,12 @@ impl Endpoint {
                 }
             }
         });
-        Self { url, inputs, stop, thread: Some(thread) }
+        Self {
+            url,
+            inputs,
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn take_inputs(&self) -> Vec<String> {
@@ -58,14 +63,20 @@ impl Drop for Endpoint {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
             let result = thread.join();
-            if !std::thread::panicking() { result.unwrap(); }
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
         }
     }
 }
 
 fn respond(mut stream: TcpStream, dimensions: usize, recorded: &Mutex<Vec<String>>) {
-    stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-    stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
     let mut bytes = Vec::new();
     let (header_end, length) = loop {
         let mut chunk = [0_u8; 4096];
@@ -77,21 +88,35 @@ fn respond(mut stream: TcpStream, dimensions: usize, recorded: &Mutex<Vec<String
             let headers = String::from_utf8_lossy(&bytes[..end]);
             assert!(headers.starts_with("POST /v1/embeddings "), "{headers}");
             assert!(!headers.to_ascii_lowercase().contains("authorization:"));
-            let length = headers.lines().find_map(|line| {
-                line.to_ascii_lowercase().strip_prefix("content-length:")
-                    .map(|value| value.trim().parse::<usize>().unwrap())
-            }).unwrap();
-            if bytes.len() >= end + 4 + length { break (end + 4, length); }
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            if bytes.len() >= end + 4 + length {
+                break (end + 4, length);
+            }
         }
     };
     let request: Value = serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
-    let inputs: Vec<_> = request["input"].as_array().unwrap().iter()
-        .map(|input| input.as_str().unwrap().to_owned()).collect();
-    let data: Vec<_> = inputs.iter().enumerate().map(|(index, input)| {
-        let mut vector = vec![0.0_f32; dimensions];
-        vector[usize::from(input.contains("beta"))] = 1.0;
-        json!({"index": index, "embedding": vector})
-    }).collect();
+    let inputs: Vec<_> = request["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|input| input.as_str().unwrap().to_owned())
+        .collect();
+    let data: Vec<_> = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            let mut vector = vec![0.0_f32; dimensions];
+            vector[usize::from(input.contains("beta"))] = 1.0;
+            json!({"index": index, "embedding": vector})
+        })
+        .collect();
     recorded.lock().unwrap().extend(inputs);
     let body = json!({"data": data}).to_string();
     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
@@ -113,7 +138,9 @@ impl Workspace {
         workspace
     }
 
-    fn root(&self) -> &Path { self.temp.path() }
+    fn root(&self) -> &Path {
+        self.temp.path()
+    }
 
     fn source(&self, text: &str) {
         std::fs::write(self.root().join("src/lib.rs"), text).unwrap();
@@ -123,7 +150,9 @@ impl Workspace {
         let source = self.root().join("src").canonicalize().unwrap();
         let config = format!(
             "index_path = \".codanna/index\"\n[indexing]\nindexed_paths = [{}]\n[semantic_search]\nenabled = true\nmodel = \"invalid-local-fixture-model\"\nremote_url = {:?}\nremote_model = {:?}\nremote_dim = {dimension}\n{extra}\n",
-            serde_json::to_string(&source.to_string_lossy()).unwrap(), endpoint.url, model,
+            serde_json::to_string(&source.to_string_lossy()).unwrap(),
+            endpoint.url,
+            model,
         );
         std::fs::write(self.root().join(".codanna/settings.toml"), config).unwrap();
     }
@@ -131,32 +160,72 @@ impl Workspace {
     fn rebuild(&self) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_codanna"));
         command.env_clear().env("HOME", self.root().join(".home"));
-        for name in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "SYSTEMROOT", "WINDIR"] {
-            if let Some(value) = std::env::var_os(name) { command.env(name, value); }
+        for name in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
         }
-        let output = command.current_dir(self.root())
-            .args(["--config", ".codanna/settings.toml", "index", "src", "--force", "--no-progress"])
-            .output().unwrap();
-        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        let output = command
+            .current_dir(self.root())
+            .args([
+                "--config",
+                ".codanna/settings.toml",
+                "index",
+                "src",
+                "--force",
+                "--no-progress",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn assert_current_vectors(&self, names: &[&str], dimension: usize) -> Vec<SymbolId> {
         let index_path = self.root().join(".codanna/index");
-        let mut settings = Settings { index_path: index_path.clone(), workspace_root: Some(self.root().to_path_buf()), ..Default::default() };
+        let mut settings = Settings {
+            index_path: index_path.clone(),
+            workspace_root: Some(self.root().to_path_buf()),
+            ..Default::default()
+        };
         settings.semantic_search.enabled = false;
-        let index: IndexFacade = IndexPersistence::new(index_path.clone()).load_facade_lite(Arc::new(settings)).unwrap();
-        let ids: Vec<_> = names.iter().map(|name| {
-            let symbols = index.find_symbols_by_name(name, None);
-            assert_eq!(symbols.len(), 1, "{name}");
-            symbols[0].id
-        }).collect();
+        let index: IndexFacade = IndexPersistence::new(index_path.clone())
+            .load_facade_lite(Arc::new(settings))
+            .unwrap();
+        let ids: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let symbols = index.find_symbols_by_name(name, None);
+                assert_eq!(symbols.len(), 1, "{name}");
+                symbols[0].id
+            })
+            .collect();
         let vectors = SimpleSemanticSearch::load_remote(&index_path.join("semantic")).unwrap();
         assert_eq!(vectors.embedding_count(), ids.len());
-        let mut query = vec![0.0; dimension]; query[0] = 1.0;
-        let found = vectors.search_with_embedding_and_language(&query, 100, None).unwrap();
-        assert_eq!(found.iter().map(|(id, _)| *id).collect::<HashSet<_>>(), ids.iter().copied().collect());
+        let mut query = vec![0.0; dimension];
+        query[0] = 1.0;
+        let found = vectors
+            .search_with_embedding_and_language(&query, 100, None)
+            .unwrap();
+        assert_eq!(
+            found.iter().map(|(id, _)| *id).collect::<HashSet<_>>(),
+            ids.iter().copied().collect()
+        );
         if names.len() == 2 {
-            assert_eq!(found[0].0, ids[0], "cached vector must map to current owner, not a reused numeric ID");
+            assert_eq!(
+                found[0].0, ids[0],
+                "cached vector must map to current owner, not a reused numeric ID"
+            );
             assert_eq!(found[0].1, 1.0);
         }
         ids
@@ -165,10 +234,27 @@ impl Workspace {
 
 fn assert_inputs(endpoint: &Endpoint, documents: usize) -> Vec<String> {
     let inputs = endpoint.take_inputs();
-    let docs: Vec<_> = inputs.iter().filter(|input| input.as_str() != "probe").cloned().collect();
-    println!("provider_inputs={} probe_inputs={} document_inputs={}: {docs:?}", inputs.len(), inputs.len() - docs.len(), docs.len());
-    assert_eq!(docs.len(), documents, "unexpected repeated embedding inputs: {inputs:?}");
-    assert_eq!(inputs.len() - docs.len(), 1, "one initialization probe remains, not a zero-token claim");
+    let docs: Vec<_> = inputs
+        .iter()
+        .filter(|input| input.as_str() != "probe")
+        .cloned()
+        .collect();
+    println!(
+        "provider_inputs={} probe_inputs={} document_inputs={}: {docs:?}",
+        inputs.len(),
+        inputs.len() - docs.len(),
+        docs.len()
+    );
+    assert_eq!(
+        docs.len(),
+        documents,
+        "unexpected repeated embedding inputs: {inputs:?}"
+    );
+    assert_eq!(
+        inputs.len() - docs.len(),
+        1,
+        "one initialization probe remains, not a zero-token claim"
+    );
     docs
 }
 
@@ -179,7 +265,10 @@ fn force_rebuild_reuses_exact_inputs_and_remaps_new_symbol_ids() {
     workspace.rebuild();
     assert_inputs(&endpoint, 2);
     let old = workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], 2);
-    workspace.source(&format!("pub fn inserted_without_docs() {{}}\n{}", SOURCE.replace("{ 1 }", "{ 2 }")));
+    workspace.source(&format!(
+        "pub fn inserted_without_docs() {{}}\n{}",
+        SOURCE.replace("{ 1 }", "{ 2 }")
+    ));
     workspace.rebuild();
     assert_inputs(&endpoint, 0);
     let new = workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], 2);
@@ -190,14 +279,18 @@ fn force_rebuild_reuses_exact_inputs_and_remaps_new_symbol_ids() {
 fn changed_input_embeds_only_the_miss_and_deleted_symbols_do_not_return() {
     let endpoint = Endpoint::start(2);
     let workspace = Workspace::new(&endpoint);
-    workspace.rebuild(); assert_inputs(&endpoint, 2);
+    workspace.rebuild();
+    assert_inputs(&endpoint, 2);
     workspace.source(&SOURCE.replace("alpha calendar", "alpha changed calendar"));
     workspace.rebuild();
     let inputs = assert_inputs(&endpoint, 1);
     assert!(inputs[0].contains("alpha changed calendar"));
     workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], 2);
-    workspace.source("/// alpha changed calendar preference owner.\npub fn calendar_owner() -> u8 { 1 }\n");
-    workspace.rebuild(); assert_inputs(&endpoint, 0);
+    workspace.source(
+        "/// alpha changed calendar preference owner.\npub fn calendar_owner() -> u8 { 1 }\n",
+    );
+    workspace.rebuild();
+    assert_inputs(&endpoint, 0);
     workspace.assert_current_vectors(&["calendar_owner"], 2);
 }
 
@@ -206,11 +299,18 @@ fn missing_and_corrupt_cache_are_misses_not_stale_vector_reuse() {
     for corrupt in [false, true] {
         let endpoint = Endpoint::start(2);
         let workspace = Workspace::new(&endpoint);
-        workspace.rebuild(); assert_inputs(&endpoint, 2);
-        let cache = workspace.root().join(".codanna/index/semantic/embedding-cache.json");
-        if corrupt { std::fs::write(cache, "{invalid cache").unwrap(); }
-        else { std::fs::remove_file(cache).unwrap(); }
-        workspace.rebuild(); assert_inputs(&endpoint, 2);
+        workspace.rebuild();
+        assert_inputs(&endpoint, 2);
+        let cache = workspace
+            .root()
+            .join(".codanna/index/semantic/embedding-cache.json");
+        if corrupt {
+            std::fs::write(cache, "{invalid cache").unwrap();
+        } else {
+            std::fs::remove_file(cache).unwrap();
+        }
+        workspace.rebuild();
+        assert_inputs(&endpoint, 2);
         workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], 2);
     }
 }
@@ -224,9 +324,11 @@ fn model_revision_and_input_policy_changes_cannot_reuse_cached_vectors() {
     ] {
         let endpoint = Endpoint::start(2);
         let workspace = Workspace::new(&endpoint);
-        workspace.rebuild(); assert_inputs(&endpoint, 2);
+        workspace.rebuild();
+        assert_inputs(&endpoint, 2);
         workspace.configure(&endpoint, model, 2, extra);
-        workspace.rebuild(); assert_inputs(&endpoint, 2);
+        workspace.rebuild();
+        assert_inputs(&endpoint, 2);
         workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], 2);
     }
 }
@@ -237,9 +339,11 @@ fn endpoint_or_dimension_changes_cannot_reuse_cached_vectors() {
         let first = Endpoint::start(2);
         let second = Endpoint::start(dimension);
         let workspace = Workspace::new(&first);
-        workspace.rebuild(); assert_inputs(&first, 2);
+        workspace.rebuild();
+        assert_inputs(&first, 2);
         workspace.configure(&second, "fixture-model", dimension, "");
-        workspace.rebuild(); assert_inputs(&second, 2);
+        workspace.rebuild();
+        assert_inputs(&second, 2);
         assert!(first.take_inputs().is_empty());
         workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], dimension);
     }
