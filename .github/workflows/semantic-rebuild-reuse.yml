@@ -39,7 +39,8 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version
-            sha256sum src/semantic/simple.rs src/indexing/facade.rs tests/semantic_rebuild_reuse.rs
+            sha256sum src/semantic/simple.rs src/semantic/rebuild_cache.rs src/indexing/facade.rs tests/semantic_rebuild_reuse.rs
+            cargo test --locked --lib semantic::simple::rebuild_cache
             cargo test --locked --test semantic_rebuild_reuse -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/semantic-rebuild-reuse.log"
       - uses: actions/upload-artifact@v4
