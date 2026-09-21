@@ -40,7 +40,10 @@ fn deserialize_depth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::E
     Ok(value)
 }
 
-pub(crate) fn validate_context_limit(field: &str, value: u32) -> Result<(), rmcp::model::ErrorData> {
+pub(crate) fn validate_context_limit(
+    field: &str,
+    value: u32,
+) -> Result<(), rmcp::model::ErrorData> {
     if (1..=MAX_CONTEXT_LIMIT).contains(&value) {
         return Ok(());
     }

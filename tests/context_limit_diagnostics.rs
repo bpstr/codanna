@@ -1,10 +1,10 @@
 //! Search-context limits identify caller mistakes without relaxing resource budgets.
 //! Request tests require no index or provider; direct calls fail before retrieval.
 
+use codanna::Settings;
 use codanna::indexing::facade::IndexFacade;
 use codanna::mcp::requests::{MAX_CONTEXT_LIMIT, SearchContextRequest};
 use codanna::mcp::server::CodeIntelligenceServer;
-use codanna::Settings;
 use rmcp::handler::server::wrapper::Parameters;
 use serde_json::{Value, json};
 use std::sync::Arc;
