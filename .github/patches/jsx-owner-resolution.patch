@@ -1,0 +1,293 @@
+--- a/src/parsing/typescript/parser.rs
++++ b/src/parsing/typescript/parser.rs
+@@ -2577,44 +2577,53 @@
+         }
+     }
+ 
+-    /// Track JSX component usage relationships
++    /// Extract component values, not intrinsic tags. A member expression is a
++    /// value even when its namespace or final property is lowercase.
++    fn jsx_component_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
++        let name = match node.kind() {
++            "jsx_element" => node
++                .child_by_field_name("open_tag")?
++                .child_by_field_name("name")?,
++            "jsx_self_closing_element" => node.child_by_field_name("name")?,
++            _ => return None,
++        };
++        let text = &code[name.byte_range()];
++        (name.kind() == "member_expression"
++            || text.chars().next().is_some_and(|c| c.is_uppercase()))
++        .then_some(text)
++    }
++
++    /// Track JSX component usage relationships during symbol extraction.
+     fn track_jsx_component_usage(&mut self, node: Node, code: &str) {
+-        let component_name = match node.kind() {
+-            "jsx_element" => {
+-                // For <Component>...</Component>, get name from opening element
+-                node.child_by_field_name("open_tag")
+-                    .and_then(|tag| tag.child_by_field_name("name"))
+-                    .map(|name| &code[name.byte_range()])
+-            }
+-            "jsx_self_closing_element" => {
+-                // For <Component />, get name directly
+-                node.child_by_field_name("name")
+-                    .map(|name| &code[name.byte_range()])
+-            }
+-            _ => None,
+-        };
+-
+-        tracing::debug!("[typescript] JSX component_name extracted: {component_name:?}");
+-
+-        if let Some(component_name) = component_name {
+-            // Filter out HTML elements (lowercase) - only track React components (uppercase)
+-            if component_name
+-                .chars()
+-                .next()
+-                .is_some_and(|c| c.is_uppercase())
+-            {
+-                // Track this as a component usage from current context
+-                if let Some(current_fn) = self.context.current_function() {
+-                    tracing::debug!(
+-                        "[typescript] tracking JSX usage: {current_fn} uses {component_name}"
+-                    );
+-                    self.component_usages
+-                        .push((current_fn.to_string(), component_name.to_string()));
+-                }
+-            } else {
+-                tracing::debug!("[typescript] skipping lowercase JSX element: {component_name}");
+-            }
+-        }
++        if let Some(component) = Self::jsx_component_name(node, code)
++            && let Some(owner) = self.context.current_function()
++        {
++            self.component_usages
++                .push((owner.to_owned(), component.to_owned()));
++        }
++    }
++
++    /// A locally rebound namespace is not the imported module. Object-member
++    /// inference is deliberately not guessed from a same-named global symbol.
++    fn jsx_namespace_is_rebound(mut node: Node, root: &str, code: &str) -> bool {
++        while let Some(parent) = node.parent() {
++            if parent.kind() == "statement_block" {
++                for declaration in parent.named_children(&mut parent.walk()) {
++                    if !matches!(declaration.kind(), "lexical_declaration" | "variable_declaration") {
++                        continue;
++                    }
++                    for binding in declaration.named_children(&mut declaration.walk()) {
++                        if binding.child_by_field_name("name").is_some_and(|name| {
++                            name.kind() == "identifier" && &code[name.byte_range()] == root
++                        }) {
++                            return true;
++                        }
++                    }
++                }
++            }
++            node = parent;
++        }
++        false
+     }
+ 
+     fn extract_function_name<'a>(node: &tree_sitter::Node, code: &'a str) -> Option<&'a str> {
+@@ -2653,68 +2662,53 @@
+         }
+     }
+ 
+-    /// Extract JSX component usages recursively
+-    /// Tracks function context and collects JSX component uses
++    /// Extract JSX Uses with the same named-arrow/wrapper owners as symbol
++    /// extraction. Anonymous callbacks retain the enclosing owner as before.
+     fn extract_jsx_uses_recursive<'a>(
++        &self,
+         node: &Node,
+         code: &'a str,
+         current_fn: Option<&'a str>,
+         uses: &mut Vec<(&'a str, &'a str, Range)>,
+-    ) -> Option<&'a str> {
+-        // Track current function context
+-        let func_context = if node.kind() == "function_declaration"
+-            || node.kind() == "generator_function_declaration"
+-            || node.kind() == "arrow_function"
++    ) {
++        let func_context = match node.kind() {
++            "arrow_function" => node
++                .parent()
++                .filter(|parent| parent.kind() == "variable_declarator")
++                .and_then(|parent| parent.child_by_field_name("name"))
++                .filter(|name| name.kind() == "identifier")
++                .map(|name| &code[name.byte_range()])
++                .or_else(|| self.wrapper_declarator_name(node, code))
++                .or(current_fn),
++            "function_declaration" | "generator_function_declaration" | "method_definition" => node
++                .child_by_field_name("name")
++                .map(|name| &code[name.byte_range()])
++                .or(current_fn),
++            _ => current_fn,
++        };
++
++        if let Some(component) = Self::jsx_component_name(*node, code)
++            && let Some(owner) = func_context
+         {
+-            if let Some(name_node) = node.child_by_field_name("name") {
+-                Some(&code[name_node.byte_range()])
+-            } else {
+-                current_fn
+-            }
+-        } else {
+-            current_fn
+-        };
+-
+-        // Extract JSX component usage
+-        if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {
+-            let component_name = match node.kind() {
+-                "jsx_element" => node
+-                    .child_by_field_name("open_tag")
+-                    .and_then(|tag| tag.child_by_field_name("name"))
+-                    .map(|name| &code[name.byte_range()]),
+-                "jsx_self_closing_element" => node
+-                    .child_by_field_name("name")
+-                    .map(|name| &code[name.byte_range()]),
+-                _ => None,
+-            };
+-
+-            if let Some(component_name) = component_name {
+-                // Only track uppercase components (React convention)
+-                if component_name
+-                    .chars()
+-                    .next()
+-                    .is_some_and(|c| c.is_uppercase())
+-                {
+-                    if let Some(fn_name) = func_context {
+-                        let range = Range {
+-                            start_line: node.start_position().row as u32,
+-                            start_column: node.start_position().column as u32,
+-                            end_line: node.end_position().row as u32,
+-                            end_column: node.end_position().column as u32,
+-                        };
+-                        uses.push((fn_name, component_name, range));
+-                    }
+-                }
+-            }
+-        }
+-
+-        // Recurse to children with current context
++            let root = component.split('.').next().unwrap_or(component);
++            let shadowed = crate::parsing::references::has_unresolved_binding(*node, root, code)
++                || (component.contains('.') && Self::jsx_namespace_is_rebound(*node, root, code));
++            if !shadowed {
++                let range = Range::new(
++                    node.start_position().row as u32,
++                    node.start_position().column as u32,
++                    node.end_position().row as u32,
++                    node.end_position().column as u32,
++                );
++                uses.push((owner, component, range));
++            }
++        }
++
+         for child in node.children(&mut node.walk()) {
+-            Self::extract_jsx_uses_recursive(&child, code, func_context, uses);
+-        }
+-
+-        func_context
+-    }
++            self.extract_jsx_uses_recursive(&child, code, func_context, uses);
++        }
++    }
++
+ }
+ 
+ impl NodeTracker for TypeScriptParser {
+@@ -2867,7 +2861,7 @@
+         self.extract_type_uses_recursive(&root, code, &mut uses);
+ 
+         // Extract JSX component usages during find_uses traversal
+-        Self::extract_jsx_uses_recursive(&root, code, None, &mut uses);
++        self.extract_jsx_uses_recursive(&root, code, None, &mut uses);
+ 
+         uses
+     }
+--- a/src/parsing/references.rs
++++ b/src/parsing/references.rs
+@@ -92,7 +92,7 @@
+     names.iter().any(|binding| binding == name)
+ }
+ 
+-fn has_unresolved_binding(mut node: Node<'_>, name: &str, code: &str) -> bool {
++pub(crate) fn has_unresolved_binding(mut node: Node<'_>, name: &str, code: &str) -> bool {
+     while let Some(parent) = node.parent() {
+         if callable(parent) {
+             let parameters = parent
+--- a/src/indexing/pipeline/stages/parse.rs
++++ b/src/indexing/pipeline/stages/parse.rs
+@@ -514,13 +514,19 @@
+ 
+     // Type usage - range is the usage site
+     for (context, used_type, usage_range) in parser.find_uses(content) {
+-        relationships.push(RawRelationship::new(
+-            context,
+-            usage_range, // from_range = usage context (triggers fallback)
+-            used_type,
+-            usage_range, // to_range = where type is used
+-            crate::RelationKind::Uses,
+-        ));
++        relationships.push(
++            RawRelationship::new(
++                context,
++                usage_range, // from_range = usage context (triggers fallback)
++                used_type,
++                usage_range, // to_range = where type/component is used
++                crate::RelationKind::Uses,
++            )
++            .with_metadata(
++                crate::relationship::RelationshipMetadata::new()
++                    .at_position(usage_range.start_line, usage_range.start_column),
++            ),
++        );
+     }
+ 
+     for reference in parser.find_references(content) {
+--- a/src/indexing/pipeline/stages/resolve.rs
++++ b/src/indexing/pipeline/stages/resolve.rs
+@@ -253,6 +253,39 @@
+             {
+                 return None;
+             }
++        }
++
++        // JSX and qualified type Uses name the namespace's export slot. The
++        // ordinary scope fallback can otherwise bind ui.Calendar to an unrelated
++        // local Calendar. Keep the import/barrel identity even on a missing slot.
++        if unresolved.kind == RelationKind::Uses
++            && matches!(caller.language_id.as_str(), "typescript" | "javascript")
++            && let Some((root, member)) = unresolved.to_name.split_once('.')
++            && let Some(binding) = context.scope.import_binding(root)
++        {
++            let slot = if binding.import.is_glob {
++                member.to_owned()
++            } else {
++                format!("{}.{}", binding.import.imported_name.as_deref().unwrap_or(root), member)
++            };
++            let extensions = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
++            use crate::parsing::ExportResolution;
++            let mut target = self.symbol_cache.resolve_export(
++                context.file_id, &binding.import.path, &slot, extensions,
++            );
++            if target == ExportResolution::Unknown
++                && let Some(enhanced) = context.imports.iter().find(|import| import.alias.as_deref() == Some(root))
++            {
++                target = self.symbol_cache.resolve_module_export(&enhanced.path, &slot, extensions);
++            }
++            // Uses also represents type evidence: type-only exports remain Uses,
++            // never Calls. Missing, ambiguous, external slots must fail closed.
++            if let ExportResolution::Found(to_id) | ExportResolution::TypeOnly(to_id) = target
++                && self.is_compatible(from_kind, to_id, unresolved.kind, caller.file_id, &caller.language_id)
++            {
++                return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
++            }
++            return None;
+         }
+ 
+         // Namespace receivers name module export slots, not class instances.
