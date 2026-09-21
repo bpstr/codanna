@@ -68,12 +68,23 @@ fn parameter_names(node: Node<'_>, code: &str, names: &mut Vec<String>) {
             }
         }
         "type_annotation" | "type_identifier" => {}
-        "required_parameter" | "optional_parameter" | "assignment_pattern" => {
+        "required_parameter"
+        | "optional_parameter"
+        | "assignment_pattern"
+        | "object_assignment_pattern" => {
+            // Default expressions are values, not declarations of the names
+            // appearing in them. Only the left-hand pattern binds a name.
             if let Some(pattern) = node
                 .child_by_field_name("pattern")
                 .or_else(|| node.child_by_field_name("left"))
                 .or_else(|| node.child_by_field_name("name"))
             {
+                parameter_names(pattern, code, names);
+            }
+        }
+        "pair_pattern" => {
+            // {key: local} binds local, including when key is computed.
+            if let Some(pattern) = node.child_by_field_name("value") {
                 parameter_names(pattern, code, names);
             }
         }
@@ -92,8 +103,40 @@ fn contains_binding(pattern: Node<'_>, name: &str, code: &str) -> bool {
     names.iter().any(|binding| binding == name)
 }
 
+/// Only inspect declared header bindings, never the iterable or initializer
+/// values. Called on ancestors so a sibling loop cannot shadow the reference.
+fn loop_binds_name(scope: Node<'_>, name: &str, code: &str) -> bool {
+    match scope.kind() {
+        // Tree-sitter uses this node for in, of, and await-of loops.
+        "for_in_statement" if scope.child_by_field_name("kind").is_some() => scope
+            .child_by_field_name("left")
+            .is_some_and(|pattern| contains_binding(pattern, name, code)),
+        "for_statement" => {
+            let Some(initializer) = scope.child_by_field_name("initializer") else {
+                return false;
+            };
+            if !matches!(
+                initializer.kind(),
+                "lexical_declaration" | "variable_declaration"
+            ) {
+                return false;
+            }
+            let mut cursor = initializer.walk();
+            initializer.named_children(&mut cursor).any(|binding| {
+                binding
+                    .child_by_field_name("name")
+                    .is_some_and(|pattern| contains_binding(pattern, name, code))
+            })
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn has_unresolved_binding(mut node: Node<'_>, name: &str, code: &str) -> bool {
     while let Some(parent) = node.parent() {
+        if loop_binds_name(parent, name, code) {
+            return true;
+        }
         if callable(parent) {
             let parameters = parent
                 .child_by_field_name("parameters")
@@ -153,7 +196,7 @@ pub fn argument_references(root: Node<'_>, code: &str) -> Vec<Reference> {
             && let Some(arguments) = node.child_by_field_name("arguments")
             && let Some((source_name, source_range)) = owner(node, code)
         {
-            let mut cursor = arguments.walk();
+            let mut cursor = node.walk();
             for argument in arguments.named_children(&mut cursor) {
                 if argument.kind() != "identifier" {
                     continue;
