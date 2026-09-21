@@ -84,7 +84,10 @@ fn shared_boundary_line_respects_start_and_end_columns() {
     let first = Range::new(0, 0, 3, 10);
     let second = Range::new(3, 20, 5, 30);
     let sites = [Range::new(3, 6, 3, 9), Range::new(3, 25, 3, 28)];
-    assert_eq!(collected_owners(&[first, second], &sites), vec![first, second]);
+    assert_eq!(
+        collected_owners(&[first, second], &sites),
+        vec![first, second]
+    );
 }
 
 #[test]
