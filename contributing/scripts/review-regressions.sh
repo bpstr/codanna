@@ -24,7 +24,7 @@ cargo test --locked --all-features --no-run
 status=0
 run_tests --lib hardening_review_ || status=1
 run_tests --lib hardening_final_ || status=1
-run_tests --test hardening_symbol_cache hardening_symbol_cache_ || status=1
+run_tests --test upstream_regressions hardening_symbol_cache_ || status=1
 for module in \
   'documents::' \
   'parsing::factory::' \
