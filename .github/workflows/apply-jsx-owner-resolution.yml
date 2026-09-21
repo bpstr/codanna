@@ -1,4 +1,4 @@
-# Temporary, branch-only patch application for PR #46. Remove after verification.
+# Temporary branch-only application of the reviewed column-ownership patch.
 name: Apply reviewed JSX repair
 
 on:
@@ -33,66 +33,49 @@ jobs:
           shared-key: jsx-impact
           cache-on-failure: true
           cache-all-crates: true
-      - name: Correct fixture ID comparison and record executable baseline
+      - name: Record the column-ownership baseline
         shell: bash
         env:
           CARGO_TERM_COLOR: never
         run: |
           set -euo pipefail
-          test "$(git hash-object src/parsing/typescript/parser.rs)" = 3ed7f95eda1ae0be65ce087db343b5475ac29465
+          test "$(git hash-object src/indexing/pipeline/stages/collect.rs)" = 526d8ddcebc3c9eb99525a2cd3e898e42960a29d
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tests/jsx_impact_regressions.rs')
-          text = path.read_text()
-          if 'use std::collections::BTreeSet;' in text:
-              assert text.count('collect::<BTreeSet<_>>()') == 2
-              assert text.count('BTreeSet::from([') == 2
-              text = text.replace('use std::collections::BTreeSet;', 'use std::collections::{BTreeSet, HashSet};')
-              text = text.replace('collect::<BTreeSet<_>>()', 'collect::<HashSet<_>>()')
-              text = text.replace('BTreeSet::from([', 'HashSet::from([')
-              path.write_text(text)
-          PY
-          rustfmt --edition 2024 tests/jsx_impact_regressions.rs
+          rustfmt --edition 2024 tests/jsx_owner_columns.rs
           git diff --check
-          git add tests/jsx_impact_regressions.rs
+          git add tests/jsx_owner_columns.rs
           if ! git diff --cached --quiet; then
-            git commit -m 'Compare opaque graph IDs without requiring ordering'
+            git commit -m 'Format source-column ownership fixtures'
             git push origin HEAD:refs/heads/fix/jsx-owner-resolution
           fi
           {
             git rev-parse HEAD
-            sha256sum tests/jsx_impact_regressions.rs src/parsing/typescript/parser.rs
-            cargo test --locked --test jsx_impact_regressions --no-run
-          } 2>&1 | tee "$RUNNER_TEMP/jsx-baseline-build.log"
+            sha256sum tests/jsx_owner_columns.rs src/indexing/pipeline/stages/collect.rs
+            cargo test --locked --test jsx_owner_columns --no-run
+          } 2>&1 | tee "$RUNNER_TEMP/jsx-columns-baseline-build.log"
           set +e
-          cargo test --locked --test jsx_impact_regressions -- --nocapture 2>&1 | tee "$RUNNER_TEMP/jsx-baseline.log"
+          cargo test --locked --test jsx_owner_columns -- --nocapture 2>&1 | tee "$RUNNER_TEMP/jsx-columns-baseline.log"
           status=${PIPESTATUS[0]}
           set -e
           test "$status" -ne 0
-          grep -q 'test result: FAILED' "$RUNNER_TEMP/jsx-baseline.log"
-      - name: Apply only the reviewed source patch and commit the repair
+          grep -q 'test result: FAILED' "$RUNNER_TEMP/jsx-columns-baseline.log"
+      - name: Apply the reviewed collector patch and commit
         shell: bash
         run: |
           set -euo pipefail
           patch=.github/patches/jsx-owner-resolution.patch
-          test "$(git hash-object "$patch")" = f54d9bf4d4db32b074c36fb4d9638c0e554f69df
-          test "$(git hash-object src/parsing/references.rs)" = 596bbe0cdb60fd19e564bab31422631c4ae81baf
-          test "$(git hash-object src/indexing/pipeline/stages/parse.rs)" = a160fc91662c563606e37f31e711c89cc73ab526
-          test "$(git hash-object src/indexing/pipeline/stages/resolve.rs)" = 2d100e58db8c38aaedef99af4f4b44314b39af9a
+          test "$(git hash-object "$patch")" = b799968c74a702a501d20e69ba811881b27712e8
           git diff --quiet
           git diff --cached --quiet
           git apply --check "$patch"
           git apply "$patch"
-          files=(src/parsing/typescript/parser.rs src/parsing/references.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs)
-          rustfmt --edition 2024 "${files[@]}"
+          rustfmt --edition 2024 src/indexing/pipeline/stages/collect.rs
           git diff --check
-          git add "${files[@]}"
-          git diff --cached --stat
-          git commit -m 'Preserve JSX owners and resolve namespace Uses through exports'
+          git add src/indexing/pipeline/stages/collect.rs
+          git commit -m 'Use source columns to reconnect same-named relationship owners'
           git push origin HEAD:refs/heads/fix/jsx-owner-resolution
-      - name: Verify the committed candidate and neighboring graph contracts
+      - name: Verify JSX and collector contracts
         shell: bash
         env:
           CARGO_TERM_COLOR: never
@@ -100,22 +83,22 @@ jobs:
           set -euo pipefail
           {
             git rev-parse HEAD
-            sha256sum tests/jsx_impact_regressions.rs src/parsing/typescript/parser.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs
-            cargo test --locked --test jsx_impact_regressions -- --nocapture
-            cargo test --locked --test web_export_regressions --test callback_references --test index_lifecycle_regressions
-          } 2>&1 | tee "$RUNNER_TEMP/jsx-candidate.log"
-      - name: Retain reviewed source and test evidence
+            sha256sum tests/jsx_owner_columns.rs src/indexing/pipeline/stages/collect.rs
+            cargo test --locked --test jsx_owner_columns --test jsx_impact_regressions -- --nocapture
+            cargo test --locked --lib indexing::pipeline::stages::collect::tests
+          } 2>&1 | tee "$RUNNER_TEMP/jsx-columns-candidate.log"
+      - name: Retain tested sources
         if: always()
         shell: bash
-        run: tar -czf "$RUNNER_TEMP/jsx-tested-source.tar.gz" src/parsing/typescript/parser.rs src/parsing/references.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs tests/jsx_impact_regressions.rs
+        run: tar -czf "$RUNNER_TEMP/jsx-columns-source.tar.gz" src/indexing/pipeline/stages/collect.rs tests/jsx_owner_columns.rs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: jsx-repair-evidence
+          name: jsx-column-evidence
           path: |
-            ${{ runner.temp }}/jsx-baseline-build.log
-            ${{ runner.temp }}/jsx-baseline.log
-            ${{ runner.temp }}/jsx-candidate.log
-            ${{ runner.temp }}/jsx-tested-source.tar.gz
+            ${{ runner.temp }}/jsx-columns-baseline-build.log
+            ${{ runner.temp }}/jsx-columns-baseline.log
+            ${{ runner.temp }}/jsx-columns-candidate.log
+            ${{ runner.temp }}/jsx-columns-source.tar.gz
           retention-days: 14
           if-no-files-found: error

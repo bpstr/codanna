@@ -7,6 +7,7 @@ on:
       - 'src/parsing/**'
       - 'src/indexing/**'
       - 'tests/jsx_impact_regressions.rs'
+      - 'tests/jsx_owner_columns.rs'
       - '.github/workflows/jsx-impact-contracts.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -41,8 +42,8 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version
-            sha256sum tests/jsx_impact_regressions.rs src/parsing/typescript/parser.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs
-            cargo test --locked --test jsx_impact_regressions -- --nocapture
+            sha256sum tests/jsx_impact_regressions.rs tests/jsx_owner_columns.rs src/parsing/typescript/parser.rs src/indexing/pipeline/stages/parse.rs src/indexing/pipeline/stages/resolve.rs src/indexing/pipeline/stages/collect.rs
+            cargo test --locked --test jsx_impact_regressions --test jsx_owner_columns -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/jsx-impact.log"
       - uses: actions/upload-artifact@v4
         if: always()
