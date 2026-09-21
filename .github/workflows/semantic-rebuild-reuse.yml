@@ -32,6 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-all-crates: true
       - name: Verify rebuild inputs with a loopback-only provider
         shell: bash
         run: |
@@ -40,6 +41,9 @@ jobs:
             git rev-parse HEAD
             rustc --version
             sha256sum src/semantic/simple.rs src/semantic/rebuild_cache.rs src/indexing/facade.rs tests/semantic_rebuild_reuse.rs
+            # Cached Rust link metadata may outlive the downloaded native archive.
+            # Re-run only this dependency's native build, not the entire workspace.
+            cargo clean --package ort-sys
             cargo test --locked --lib semantic::simple::rebuild_cache
             cargo test --locked --test semantic_rebuild_reuse -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/semantic-rebuild-reuse.log"
