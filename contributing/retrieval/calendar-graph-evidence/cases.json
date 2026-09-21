@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "PR #43 T01 graph-contract slice; not the complete retrieval/ranking baseline",
+  "source_revision": "ddb5ae61a72938d82cceaf42123dc7a88bfe3417",
+  "execution_status": "not_run",
+  "binary_sha256": null,
+  "index_generation": null,
+  "semantic_search": "disabled",
+  "corpus_root": "tests/fixtures/calendar_graph_evidence/workspace",
+  "files": {
+    "tests/fixtures/calendar_graph_evidence/workspace/active/calendar.ts": "499ff0070d8859027dd8c69e4ce2931eaf693f6964757e3a00672dc3de32707c",
+    "tests/fixtures/calendar_graph_evidence/workspace/reference/calendar.ts": "e2c31046a63f16a67b544b2469dc777fc95e94a9213fec5efe06b5c7858dca2f"
+  },
+  "selectors": {
+    "isolated": {"path": "active/calendar.ts", "name": "isolatedCalendarToken", "kind": "Function"},
+    "external": {"path": "active/calendar.ts", "name": "readBrowserPreference", "kind": "Function"},
+    "callee": {"path": "active/calendar.ts", "name": "calendarWeekStart", "kind": "Function"},
+    "caller": {"path": "active/calendar.ts", "name": "readCalendarWeekStart", "kind": "Function"},
+    "transitive": {"path": "active/calendar.ts", "name": "displayCalendarWeekStart", "kind": "Function"},
+    "reference": {"path": "reference/calendar.ts", "name": "isolatedCalendarToken", "kind": "Function"}
+  },
+  "cases": [
+    {"id": "isolated-calls", "tool": "get_calls", "target": "isolated", "expected": "empty_indexed_edges_not_source_absence"},
+    {"id": "external-calls", "tool": "get_calls", "target": "external", "expected": "empty_indexed_edges_not_source_absence"},
+    {"id": "isolated-callers", "tool": "find_callers", "target": "isolated", "expected": "empty_indexed_edges_not_source_absence"},
+    {"id": "isolated-impact", "tool": "analyze_impact", "target": "isolated", "arguments": {"max_depth": 3}, "expected": "empty_indexed_edges_not_source_absence"},
+    {"id": "local-calls", "tool": "get_calls", "target": "caller", "expected_targets": ["callee"]},
+    {"id": "local-callers", "tool": "find_callers", "target": "callee", "expected_targets": ["caller"]},
+    {"id": "depth-one", "tool": "analyze_impact", "target": "callee", "arguments": {"max_depth": 1}, "expected_targets": ["caller"], "forbidden_targets": ["transitive"]},
+    {"id": "depth-two", "tool": "analyze_impact", "target": "callee", "arguments": {"max_depth": 2}, "expected_targets": ["caller", "transitive"]},
+    {"id": "missing-symbol", "tool": "get_calls", "arguments": {"function_name": "missingCalendarImplementation"}, "expected": "symbol_not_found_not_empty"},
+    {"id": "ambiguous-symbol", "tool": "get_calls", "arguments": {"function_name": "isolatedCalendarToken"}, "expected": "ambiguous_not_empty"}
+  ]
+}
