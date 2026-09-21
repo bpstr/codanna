@@ -255,6 +255,57 @@ impl ResolveStage {
             }
         }
 
+        // JSX and qualified type Uses name the namespace's export slot. The
+        // ordinary scope fallback can otherwise bind ui.Calendar to an unrelated
+        // local Calendar. Keep the import/barrel identity even on a missing slot.
+        if unresolved.kind == RelationKind::Uses
+            && matches!(caller.language_id.as_str(), "typescript" | "javascript")
+            && let Some((root, member)) = unresolved.to_name.split_once('.')
+            && let Some(binding) = context.scope.import_binding(root)
+        {
+            let slot = if binding.import.is_glob {
+                member.to_owned()
+            } else {
+                format!(
+                    "{}.{}",
+                    binding.import.imported_name.as_deref().unwrap_or(root),
+                    member
+                )
+            };
+            let extensions = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+            use crate::parsing::ExportResolution;
+            let mut target = self.symbol_cache.resolve_export(
+                context.file_id,
+                &binding.import.path,
+                &slot,
+                extensions,
+            );
+            if target == ExportResolution::Unknown
+                && let Some(enhanced) = context
+                    .imports
+                    .iter()
+                    .find(|import| import.alias.as_deref() == Some(root))
+            {
+                target = self
+                    .symbol_cache
+                    .resolve_module_export(&enhanced.path, &slot, extensions);
+            }
+            // Uses also represents type evidence: type-only exports remain Uses,
+            // never Calls. Missing, ambiguous, external slots must fail closed.
+            if let ExportResolution::Found(to_id) | ExportResolution::TypeOnly(to_id) = target
+                && self.is_compatible(
+                    from_kind,
+                    to_id,
+                    unresolved.kind,
+                    caller.file_id,
+                    &caller.language_id,
+                )
+            {
+                return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
+            }
+            return None;
+        }
+
         // Namespace receivers name module export slots, not class instances.
         // Preserve the full import identity through aliases and barrel chains
         // before the ordinary member-resolution ladder considers class methods.

@@ -92,7 +92,7 @@ fn contains_binding(pattern: Node<'_>, name: &str, code: &str) -> bool {
     names.iter().any(|binding| binding == name)
 }
 
-fn has_unresolved_binding(mut node: Node<'_>, name: &str, code: &str) -> bool {
+pub(crate) fn has_unresolved_binding(mut node: Node<'_>, name: &str, code: &str) -> bool {
     while let Some(parent) = node.parent() {
         if callable(parent) {
             let parameters = parent

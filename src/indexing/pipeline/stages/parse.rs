@@ -514,13 +514,19 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
 
     // Type usage - range is the usage site
     for (context, used_type, usage_range) in parser.find_uses(content) {
-        relationships.push(RawRelationship::new(
-            context,
-            usage_range, // from_range = usage context (triggers fallback)
-            used_type,
-            usage_range, // to_range = where type is used
-            crate::RelationKind::Uses,
-        ));
+        relationships.push(
+            RawRelationship::new(
+                context,
+                usage_range, // from_range = usage context (triggers fallback)
+                used_type,
+                usage_range, // to_range = where type/component is used
+                crate::RelationKind::Uses,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(usage_range.start_line, usage_range.start_column),
+            ),
+        );
     }
 
     for reference in parser.find_references(content) {
