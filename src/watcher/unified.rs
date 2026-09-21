@@ -1068,6 +1068,30 @@ impl UnifiedWatcher {
         })?
     }
 
+    /// Finalize one code reindex without publishing semantic state for a cache hit.
+    ///
+    /// Filesystem backends can emit duplicate modification events. A cached
+    /// pipeline result means neither code nor embeddings changed, so semantic
+    /// persistence and client notifications must both remain untouched.
+    fn finalize_code_reindex(
+        result: crate::IndexingResult,
+        path: PathBuf,
+        created: bool,
+        persist_semantic: impl FnOnce() -> crate::IndexResult<()>,
+    ) -> crate::IndexResult<Option<FileChangeEvent>> {
+        match result {
+            crate::IndexingResult::Indexed(_) => {
+                persist_semantic()?;
+                Ok(Some(if created {
+                    FileChangeEvent::FileCreated { path }
+                } else {
+                    FileChangeEvent::FileReindexed { path }
+                }))
+            }
+            crate::IndexingResult::Cached(_) => Ok(None),
+        }
+    }
+
     /// Serialized code mutations and exclusive legacy document mutations run
     /// off Tokio. Configured collections queue for one scan per dispatch.
     /// Notifications follow publication, never precede it.
@@ -1086,14 +1110,8 @@ impl UnifiedWatcher {
                 };
                 crate::runtime::mutate(&self.facade, move |indexer| {
                     let result = indexer.index_file(&source_path)?;
-                    indexer.save_semantic_search(&semantic_path)?;
-                    Ok::<_, crate::IndexError>(match result {
-                        crate::IndexingResult::Indexed(_) => Some(if created {
-                            FileChangeEvent::FileCreated { path }
-                        } else {
-                            FileChangeEvent::FileReindexed { path }
-                        }),
-                        crate::IndexingResult::Cached(_) => None,
+                    Self::finalize_code_reindex(result, path, created, || {
+                        indexer.save_semantic_search(&semantic_path)
                     })
                 })
                 .await
@@ -1569,7 +1587,7 @@ mod tests {
     use crate::config::Settings;
     use crate::watcher::handlers::CodeFileHandler;
     use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
-    use std::path::Path;
+    use std::{cell::Cell, path::Path};
 
     async fn watcher_over(dir: &Path, root: &Path) -> UnifiedWatcher {
         let mut settings = Settings {
@@ -1590,6 +1608,115 @@ mod tests {
             .workspace_root(dir.to_path_buf())
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn cached_code_reindex_skips_semantic_persistence_and_notification() {
+        let path = PathBuf::from("src/lib.rs");
+        let saves = Cell::new(0);
+
+        let cached = UnifiedWatcher::finalize_code_reindex(
+            crate::IndexingResult::Cached(crate::FileId::new(1).unwrap()),
+            path.clone(),
+            false,
+            || {
+                saves.set(saves.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(cached.is_none());
+        assert_eq!(
+            saves.get(),
+            0,
+            "a cached filesystem observation must not persist semantic state"
+        );
+
+        let indexed = UnifiedWatcher::finalize_code_reindex(
+            crate::IndexingResult::Indexed(crate::FileId::new(1).unwrap()),
+            path.clone(),
+            false,
+            || {
+                saves.set(saves.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            indexed,
+            Some(FileChangeEvent::FileReindexed { path: event_path }) if event_path == path
+        ));
+        assert_eq!(
+            saves.get(),
+            1,
+            "a real code mutation must persist semantic state exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_code_observations_stay_quiet_but_real_edits_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("a.py");
+        std::fs::write(&source, "def alpha():\n    pass\n").unwrap();
+
+        let watcher = watcher_over(dir.path(), &root).await;
+        let mut events = watcher.broadcaster.subscribe();
+
+        watcher
+            .execute_action(
+                WatchAction::ReindexCode {
+                    path: source.clone(),
+                    created: true,
+                },
+                "code",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            FileChangeEvent::FileCreated { path } if path == source
+        ));
+
+        for _ in 0..2 {
+            watcher
+                .execute_action(
+                    WatchAction::ReindexCode {
+                        path: source.clone(),
+                        created: false,
+                    },
+                    "code",
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+        }
+
+        std::fs::write(&source, "def beta():\n    pass\n").unwrap();
+        watcher
+            .execute_action(
+                WatchAction::ReindexCode {
+                    path: source.clone(),
+                    created: false,
+                },
+                "code",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            FileChangeEvent::FileReindexed { path } if path == source
+        ));
+
+        let facade = watcher.facade.read().await;
+        assert!(facade.find_symbols_by_name("alpha", None).is_empty());
+        assert_eq!(facade.find_symbols_by_name("beta", None).len(), 1);
     }
 
     #[test]
