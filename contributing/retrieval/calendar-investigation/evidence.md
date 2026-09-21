@@ -15,6 +15,7 @@ The destination is a public Codanna repository. This packet retains compact tool
 | S3: REVIEW-0020, dated 2026-09-21 | SHA-256 `add34bfe1233436a3d53d3eca3d7c9949de5ed202d83fb47948f241c6b338f68` | Ten request families, report-local exact excerpts, source cross-checks, and reported fixture tests. |
 | S4: Investigate Codanna calendar results | Completed task read through Codex task history on 2026-09-22 | Confirms every recorded Codanna call explicitly supplied the Assign `project_path`. Several examples in S3 omit that selector for brevity. |
 | S5: REVIEW-0016, dated 2026-09-20 | Historical review of Codanna rc1 `fc7d934` | Scope cleanup, force-rebuild and long-lived-reader findings; not proof those defects remain in current main. |
+| S6: user follow-up, 2026-09-22 | Exact reported text: `Accessibility action requires an element index or point` | User confirms repeated occurrences inside a Codanna tool result; exact tool, arguments, timestamps and count not yet supplied. |
 
 S3 inspected dirty Assign repositories. Its source revisions include architecture `aceb19ee2fb315f59ec190437d65359f3a5a7b0a`, Web `a4c4bc0bb027dbb79855ec26b66742e4a8a91914`, and Core `a0185f9b6bf94ea5d6d00b2ab62082eb651be04c`, each plus uncommitted changes. Its shortened per-file hashes are provenance clues, not independently reproducible full digests. The exact running Codanna binary hash and index generation were not captured. Historical numeric symbol IDs must be resolved again against each tested generation.
 
@@ -56,6 +57,7 @@ S3 reports four deterministic Web test files, 18 passing tests, 4.48 seconds. Th
 | A01 | P1 / Assign Core + Web contract owners | S3 reports Web/API/docs promise Workspace-default Account inheritance while Core lacks persistence/effective-value resolution. | Accepted in originating report; static dirty-tree evidence, not reverified here. Separate product backlog, not a Codanna implementation task. |
 | H01 | P1 triage / persistence | S5 reports document force rebuild appended stale chunks; code force rebuild retained stale semantic auxiliaries. | Historical. Reconcile with current transactional storage and lifecycle regressions before reopening or closing. |
 | H02 | P2 triage / readers + Go graph | S5 reports stale long-lived reader after replacement and no reverse consumers for interface-mediated CreateTask. | Historical. Keep distinct from current router cache and JSX issues; reproduce against current main first. |
+| U01 | P2 triage / tool-client integration, owner unconfirmed | S6 reports repeated accessibility-action target errors displayed inside a Codanna tool result. Exact-message search found no match in the inspected Codanna checkout before this addition; the reviewed calendar task history also contained no match. | User-reported, not reproduced. The reported placement is Codanna output; the emitting component remains unknown. Trace Codanna, MCP transport and client rendering before attribution. UI-action argument validation is only a wording-based hypothesis. Track separately from context-limit errors and workspace routing. |
 
 ### What each request does about workspace selection
 
@@ -100,6 +102,7 @@ S3 distinguishes implemented Account calendar-presentation preferences from a pl
 - The first failing JSX/member-call stage in a fresh, persisted, and incrementally updated index.
 - Eligible semantic denominator and whether missed definitions had vectors at query time.
 - Which historical force-rebuild, reader and interface-call findings still reproduce on current main.
+- The exact Codanna tool and serialized arguments for S6, the layer that inserted the error into the displayed result, and whether repetitions are independent calls or unchanged retries. The retrieved calendar task history lists no browser/computer-use calls; it does not explain errors from other tasks or client-side actions.
 
 These unknowns are explicit tasks in the plan; this packet closes none of the implementation findings.
 

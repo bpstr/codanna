@@ -7,7 +7,7 @@ Status: proposed; documentation-only PR. Owner: Codanna maintainers. Updated 202
 1. Freeze reproducible evidence and preserve failing baselines (T01). Do not tune against a moving Assign index.
 2. Correct misleading empty-result contracts and isolate graph failures (T02–T04). These P1 correctness tasks precede interpreting a zero as safe change scope.
 3. Compare bounded lexical ranking variants (T05–T06), then improve result scope and semantic diagnostics (T07–T08). Accept changes only against an unchanged oracle and adversarial controls.
-4. Clarify validation, rendering, routing diagnostics, and historical lifecycle disposition (T09–T11).
+4. Clarify validation, rendering, routing diagnostics, and historical lifecycle disposition (T09–T11); attribute the separately reported accessibility-action error before choosing its repair owner (T14).
 5. Hand the separate product gap to Assign owners and publish final verification evidence (T12–T13).
 
 Tasks may be split into focused implementation PRs after this plan is approved for implementation. Owners name responsible areas, not assigned people. P1/P2/P3 describe impact; dependency order controls when work can be verified. Follow [the fork/upstream policy](../../../UPSTREAM.md): route generic parser fixes as possible upstream candidates, while workspace routing and fork-specific ranking remain downstream unless separately proposed. This plan targets the fork only.
@@ -90,6 +90,13 @@ Tasks may be split into focused implementation PRs after this plan is approved f
 
 - [ ] P2, maintainers/QA; depends on the implemented slices. Run the smallest relevant deterministic regression, then required repository gates for that implementation. Keep corpus/oracle hashes stable between before/after reports.
 - [ ] Completion: each finding links its implementation, exact-source test results, remaining limitations and state (accepted, implemented, verified, deployed where applicable). Doc-only intake validation is diff hygiene and link checks; it is not a Rust/retrieval pass. Check session disk usage and remove only inactive reproducible session artifacts.
+
+### T14 — Attribute repeated accessibility-action errors
+
+- [ ] P2 triage, tool-client integration owner pending; U01; independent of ranking changes. The user confirms the message appeared inside a Codanna tool result. Capture one complete failing request/response with exact Codanna tool name, sanitized arguments, timestamp and tool/runtime version; compare the raw MCP error/content envelope with what the client displayed. Include a preceding UI snapshot only if a UI action is actually implicated. Establish the actual occurrence count and whether the same request is retried unchanged.
+- [ ] Trace where `Accessibility action requires an element index or point` is emitted across Codanna, its MCP routing/transport and client result rendering. Establish whether the error originates in the backend or is inserted while handling/displaying its result. Determine whether the caller omitted the target, serialization lost it, the target was rejected, or another layer wrapped an unrelated failure. Check the declared schema and valid treatment of zero-valued indices/coordinates if supported; do not assume truthiness, stale targets, or a specific parameter spelling caused the error.
+- [ ] Completion: the emitting component and failed contract are identified from evidence, with a deterministic reproduction in its owning repository. For UI actions, valid observed targets pass and missing/invalid targets fail clearly; recovery refreshes the observation and supplies a verified target rather than repeating unchanged calls. Use mocked action transports, without clicking arbitrary UI to reproduce the error.
+- [ ] If Codanna is not the emitter, hand off the finding and retain the attribution evidence here. Do not change workspace selection, search ranking, or accessibility permissions to suppress an unrelated error. This intake records the report only; no implementation or external bug submission is authorized by this task.
 
 ## Ranking alternatives to compare
 
