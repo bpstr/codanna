@@ -231,6 +231,9 @@ impl IndexFacade {
         semantic.set_embedding_identity(
             backend.identity(self.settings.semantic_search.model_revision.as_deref()),
         )?;
+        // --force recreates symbol IDs, not embedding input meaning. Reuse only
+        // exact inputs scoped to this backend identity; never old ID mappings.
+        semantic.restore_rebuild_cache(&semantic_path);
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
         self.semantic_metadata_snapshot = self.get_semantic_metadata();

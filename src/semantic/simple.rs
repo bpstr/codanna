@@ -1,5 +1,8 @@
 //! Simple semantic search implementation for documentation comments
 
+#[path = "rebuild_cache.rs"]
+mod rebuild_cache;
+
 use crate::SymbolId;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::collections::{HashMap, HashSet};
@@ -679,6 +682,17 @@ impl SimpleSemanticSearch {
     ) -> Result<(), SemanticSearchError> {
         if !self.embeddings.is_empty() {
             return self.validate_embedding_identity(&identity);
+        }
+        // An empty vector generation can still hold compatible cached inputs
+        // (fresh rebuild or the last indexed file was removed). Revalidation
+        // must not discard those vectors before the first new file batch.
+        if self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.embedding_identity.as_deref())
+            == Some(identity.as_str())
+        {
+            return Ok(());
         }
         if let Some(metadata) = &mut self.metadata {
             metadata.embedding_identity = Some(identity.clone());

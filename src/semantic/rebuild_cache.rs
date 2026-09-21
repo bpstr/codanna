@@ -33,7 +33,9 @@ mod tests {
 
     fn prepared(path: &Path) -> SimpleSemanticSearch {
         let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
-        search.set_embedding_identity("backend@revision:policy".into()).unwrap();
+        search
+            .set_embedding_identity("backend@revision:policy".into())
+            .unwrap();
         let id = SymbolId::new(11).unwrap();
         search.store_embeddings_with_inputs(
             vec![(id, vec![1.0, 0.0], "rust".into())],
@@ -48,13 +50,21 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let old = prepared(temp.path());
         let mut fresh = SimpleSemanticSearch::new_empty(2, "fixture");
-        fresh.set_embedding_identity("backend@revision:policy".into()).unwrap();
+        fresh
+            .set_embedding_identity("backend@revision:policy".into())
+            .unwrap();
         fresh.restore_rebuild_cache(temp.path());
         assert_eq!(fresh.embedding_count(), 0);
         // The facade revalidates the same identity before the first file batch.
-        fresh.set_embedding_identity("backend@revision:policy".into()).unwrap();
+        fresh
+            .set_embedding_identity("backend@revision:policy".into())
+            .unwrap();
         let id = SymbolId::new(22).unwrap();
-        assert!(fresh.reuse_cached_embeddings(&[(id, "exact input", "typescript")]).is_empty());
+        assert!(
+            fresh
+                .reuse_cached_embeddings(&[(id, "exact input", "typescript")])
+                .is_empty()
+        );
         assert_eq!(fresh.embedding_count(), 1);
         assert!(!fresh.embeddings.contains_key(&SymbolId::new(11).unwrap()));
         assert_eq!(fresh.embeddings[&id].as_ref(), &[1.0, 0.0]);
@@ -68,19 +78,33 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut search = prepared(temp.path());
         search.clear();
-        search.set_embedding_identity("backend@revision:policy".into()).unwrap();
-        assert!(search.reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")]).is_empty());
+        search
+            .set_embedding_identity("backend@revision:policy".into())
+            .unwrap();
+        assert!(
+            search
+                .reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")])
+                .is_empty()
+        );
     }
 
     #[test]
     fn incompatible_identity_or_dimensions_must_not_restore_vectors() {
         let temp = tempfile::tempdir().unwrap();
         let _old = prepared(temp.path());
-        for (identity, dimension) in [("different-backend:policy", 2), ("backend@revision:policy", 3)] {
+        for (identity, dimension) in [
+            ("different-backend:policy", 2),
+            ("backend@revision:policy", 3),
+        ] {
             let mut fresh = SimpleSemanticSearch::new_empty(dimension, "fixture");
             fresh.set_embedding_identity(identity.into()).unwrap();
             fresh.restore_rebuild_cache(temp.path());
-            assert_eq!(fresh.reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")]).len(), 1);
+            assert_eq!(
+                fresh
+                    .reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")])
+                    .len(),
+                1
+            );
             assert_eq!(fresh.embedding_count(), 0);
         }
     }
@@ -91,7 +115,12 @@ mod tests {
         let _old = prepared(temp.path());
         let mut fresh = SimpleSemanticSearch::new_empty(2, "fixture");
         fresh.restore_rebuild_cache(temp.path());
-        assert_eq!(fresh.reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")]).len(), 1);
+        assert_eq!(
+            fresh
+                .reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")])
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -99,7 +128,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut search = prepared(temp.path());
         search.clear();
-        search.set_embedding_identity("another-backend:policy".into()).unwrap();
-        assert_eq!(search.reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")]).len(), 1);
+        search
+            .set_embedding_identity("another-backend:policy".into())
+            .unwrap();
+        assert_eq!(
+            search
+                .reuse_cached_embeddings(&[(SymbolId::new(22).unwrap(), "exact input", "rust")])
+                .len(),
+            1
+        );
     }
 }
