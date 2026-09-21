@@ -104,9 +104,7 @@ fn target(index: &IndexFacade, path: &str, name: &str) -> Symbol {
     let found: Vec<_> = index
         .find_symbols_by_name(name, Some("typescript"))
         .into_iter()
-        .filter(|symbol| {
-            Path::new(symbol.file_path.as_ref()).ends_with(Path::new(path))
-        })
+        .filter(|symbol| Path::new(symbol.file_path.as_ref()).ends_with(Path::new(path)))
         .collect();
     assert_eq!(found.len(), 1, "ambiguous {path}:{name}: {found:?}");
     found[0].clone()
@@ -119,9 +117,7 @@ fn uses(index: &IndexFacade, path: &str, owner: &str) -> BTreeSet<String> {
         .unwrap();
     edges
         .into_iter()
-        .map(|(symbol, _)| {
-            format!("{}:{}", symbol.file_path.as_ref(), symbol.name)
-        })
+        .map(|(symbol, _)| format!("{}:{}", symbol.file_path.as_ref(), symbol.name))
         .collect()
 }
 
@@ -151,12 +147,18 @@ fn aliased_barrel_components_reach_the_correct_persisted_uses_graph() {
     assert_uses(&index, "view.tsx", "Panel", &[("provider.tsx", "Calendar")]);
     assert_uses(&index, "view.tsx", "Shell", &[("view.tsx", "Panel")]);
     let page = target(&index, "view.tsx", "Page");
-    let edges = index.document_index().get_relationships_from(page.id, RelationKind::Uses).unwrap();
+    let edges = index
+        .document_index()
+        .get_relationships_from(page.id, RelationKind::Uses)
+        .unwrap();
     assert_eq!(edges.len(), 1);
     let metadata = edges[0].2.metadata.as_ref().expect("persist JSX source location");
     assert_eq!(metadata.line, Some(1));
     assert_eq!(metadata.column, Some(26));
-    assert!(index.get_called_functions(page.id).is_empty(), "rendering is not a Calls edge");
+    assert!(
+        index.get_called_functions(page.id).is_empty(),
+        "rendering is not a Calls edge"
+    );
 }
 
 #[test]
@@ -197,18 +199,29 @@ async fn public_impact_reaches_arrow_consumers_without_reaching_reference_decoys
     let page = target(&index, "view.tsx", "Page");
     let panel = target(&index, "view.tsx", "Panel");
     let shell = target(&index, "view.tsx", "Shell");
-    assert_eq!(index.get_impact_radius(actual.id, Some(1)).into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([page.id, panel.id]));
-    assert_eq!(index.get_impact_radius(actual.id, Some(2)).into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([page.id, panel.id, shell.id]));
+    assert_eq!(
+        index.get_impact_radius(actual.id, Some(1)).into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([page.id, panel.id])
+    );
+    assert_eq!(
+        index.get_impact_radius(actual.id, Some(2)).into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([page.id, panel.id, shell.id])
+    );
     assert!(index.get_impact_radius(decoy.id, Some(3)).is_empty());
     let server = CodeIntelligenceServer::new(index);
-    let response = server.analyze_impact(Parameters(AnalyzeImpactRequest {
-        symbol_name: None,
-        symbol_id: Some(actual.id.value()),
-        max_depth: 2,
-    })).await.unwrap();
+    let response = server
+        .analyze_impact(Parameters(AnalyzeImpactRequest {
+            symbol_name: None,
+            symbol_id: Some(actual.id.value()),
+            max_depth: 2,
+        }))
+        .await
+        .unwrap();
     assert_ne!(response.is_error, Some(true));
     let rendered = serde_json::to_string(&response).unwrap();
-    for owner in ["Page", "Panel", "Shell"] { assert!(rendered.contains(owner), "{rendered}"); }
+    for owner in ["Page", "Panel", "Shell"] {
+        assert!(rendered.contains(owner), "{rendered}");
+    }
     assert!(!rendered.contains("reference.tsx"), "{rendered}");
 }
 
@@ -220,7 +233,7 @@ fn namespace_uses_survive_reopen_import_edit_deletion_and_recreation() {
         ("view.tsx", "import * as ui from './provider';\nexport const Page = () => <ui.Calendar />;\n"),
     ]);
     assert_uses(&index, "view.tsx", "Page", &[("provider.tsx", "Calendar")]);
-    let settings = Arc::new(index.settings().clone());
+    let settings = Arc::clone(index.settings());
     let persistence = IndexPersistence::new(settings.index_path.clone());
     persistence.save_facade(&index).unwrap();
     drop(index);
