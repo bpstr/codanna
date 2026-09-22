@@ -37,9 +37,17 @@ impl CodeIntelligenceServer {
         output.push_str("## Code\n");
         let code_query = query.to_owned();
         let code_limit = request.code_limit as usize;
+        let code_path_prefix = request.code_path_prefix.clone();
         let code = crate::runtime::read(&self.facade, move |indexer| {
             let mut output = String::new();
-            match indexer.search(&code_query, code_limit, None, None, None) {
+            match indexer.search_scoped(
+                &code_query,
+                code_limit,
+                None,
+                None,
+                None,
+                code_path_prefix.as_deref(),
+            ) {
                 Ok(results) if results.is_empty() => {
                     output.push_str("No matching code symbols.\n\n")
                 }
