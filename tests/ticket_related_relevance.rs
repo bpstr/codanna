@@ -67,7 +67,11 @@ async fn stable_pair(server: &CodeIntelligenceServer, value: &Value) -> (Value, 
             related["status"].as_str(),
             Some("not_run_generation_mismatch" | "discarded_generation_changed")
         ) {
-            assert_eq!(related["items"], json!([]), "changed generations must not leak related identities");
+            assert_eq!(
+                related["items"],
+                json!([]),
+                "changed generations must not leak related identities"
+            );
             println!(
                 "ticket_related_generation_retry={}",
                 json!({"query":value["query"], "attempt":attempt + 1, "related":related})
