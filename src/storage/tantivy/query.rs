@@ -79,7 +79,7 @@ fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
 
     terms
         .iter()
-        .filter(|term| searchable.contains(term.as_str()))
+        .filter(|term| searchable.contains(&term[..]))
         .count()
 }
 
