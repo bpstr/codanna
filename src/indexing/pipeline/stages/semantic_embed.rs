@@ -135,13 +135,56 @@ impl SemanticEmbedStage {
     /// Process a batch of embedding candidates.
     pub(crate) fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
         let accelerated = crate::memory::accelerated_embeddings_requested();
-        let mut stored = 0;
+        // Pin only existing body-input hits before any admission can evict them.
+        let body_hits = self.body_cache_hits(batch)?;
+
+        // Probe the whole collector batch before admitting any newly generated
+        // vector into the bounded cache. Otherwise early misses can evict later
+        // compatible hits before those hits are looked up (the production
+        // collector batch is 5,000 symbols, larger than the default cache).
+        let items: Vec<_> = batch
+            .candidates
+            .iter()
+            .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
+            .collect();
+        let missing = {
+            let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+                path: std::path::PathBuf::new(),
+                reason: "Failed to lock semantic search".to_string(),
+            })?;
+            semantic.reuse_cached_embeddings(&items)
+        };
+        let mut stored = items.len() - missing.len();
+
+        // Collapse exact duplicate misses before provider/local-model inference.
+        // Preserve first-seen order so request ordering stays deterministic.
+        let mut group_indexes: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        let mut groups: Vec<(&str, Vec<(crate::SymbolId, &str)>)> = Vec::new();
+        for &(id, text, language) in &missing {
+            if let Some(&index) = group_indexes.get(text) {
+                groups[index].1.push((id, language));
+            } else {
+                let index = groups.len();
+                group_indexes.insert(text, index);
+                groups.push((text, vec![(id, language)]));
+            }
+        }
+        let unique_missing: Vec<_> = groups
+            .iter()
+            .map(|(text, targets)| (targets[0].0, *text, targets[0].1))
+            .collect();
+        let group_by_representative: std::collections::HashMap<_, _> = unique_missing
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _, _))| (*id, index))
+            .collect();
         let mut offset = 0;
 
         // Persist each bounded inference result before producing the next one.
-        // Previously a 5,000-symbol pipeline batch could retain every output
-        // vector plus all native inference temporaries at the same time.
-        while offset < batch.candidates.len() {
+        // This retains the memory bound while cache lookup remains snapshot-like
+        // for the entire collector batch.
+        while offset < unique_missing.len() {
             let memory = crate::memory::MemoryBudget::current();
             if memory.under_pressure() {
                 return Err(PipelineError::Parse {
@@ -155,28 +198,12 @@ impl SemanticEmbedStage {
                 });
             }
             let batch_size = memory.embedding_batch_size(64, accelerated);
-            let end = (offset + batch_size).min(batch.candidates.len());
-            let items: Vec<_> = batch.candidates[offset..end]
-                .iter()
-                .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
-                .collect();
-
-            let missing = {
-                let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
-                    path: std::path::PathBuf::new(),
-                    reason: "Failed to lock semantic search".to_string(),
-                })?;
-                semantic.reuse_cached_embeddings(&items)
-            };
-            stored += items.len() - missing.len();
-            if missing.is_empty() {
-                offset = end;
-                continue;
-            }
+            let end = (offset + batch_size).min(unique_missing.len());
+            let inference = &unique_missing[offset..end];
 
             let embeddings =
                 self.pool
-                    .embed_parallel(&missing)
+                    .embed_parallel(inference)
                     .map_err(|e| PipelineError::Parse {
                         path: std::path::PathBuf::new(),
                         reason: format!("Embedding generation failed: {e}"),
@@ -187,16 +214,58 @@ impl SemanticEmbedStage {
                     path: std::path::PathBuf::new(),
                     reason: "Failed to lock semantic search".to_string(),
                 })?;
-                stored += semantic.store_embeddings_with_inputs(embeddings, &missing);
+                for (id, embedding, _) in embeddings {
+                    let Some(&group_index) = group_by_representative.get(&id) else {
+                        continue;
+                    };
+                    let (input, targets) = &groups[group_index];
+                    stored += semantic.store_shared_embedding(input, embedding, targets);
+                }
             }
             offset = end;
         }
 
         for (id, source, language) in &batch.body_candidates {
-            self.process_symbol_source(*id, source, language)?;
+            self.process_symbol_source(*id, source, language, &body_hits)?;
             stored += 1;
         }
         Ok(stored)
+    }
+
+    /// Retain Arc references to matching cache entries, not all prepared source
+    /// strings. At most the bounded cache's resident vectors are pinned until
+    /// this collector batch ends; new vectors still enter the normal live cache.
+    fn body_cache_hits(
+        &self,
+        batch: &EmbeddingBatch,
+    ) -> PipelineResult<std::collections::HashMap<String, Arc<[f32]>>> {
+        let mut hits = std::collections::HashMap::new();
+        for (_, source, _) in &batch.body_candidates {
+            if crate::memory::MemoryBudget::current().under_pressure() {
+                return Err(PipelineError::Parse {
+                    path: Default::default(),
+                    reason: "body cache lookup stopped before memory pressure".into(),
+                });
+            }
+            let inputs =
+                source
+                    .inputs(self.pool.input_budget())
+                    .map_err(|reason| PipelineError::Parse {
+                        path: Default::default(),
+                        reason,
+                    })?;
+            let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+                path: Default::default(),
+                reason: "Failed to lock semantic search".into(),
+            })?;
+            for input in inputs {
+                if let Some(vector) = semantic.cached_symbol_input(&input.text) {
+                    hits.entry(crate::calculate_hash(&input.text))
+                        .or_insert(vector);
+                }
+            }
+        }
+        Ok(hits)
     }
 
     fn process_symbol_source(
@@ -204,6 +273,7 @@ impl SemanticEmbedStage {
         parent: crate::SymbolId,
         source: &crate::symbol_representation::SymbolSource,
         language: &str,
+        body_hits: &std::collections::HashMap<String, Arc<[f32]>>,
     ) -> PipelineResult<()> {
         let failure = |reason: String| PipelineError::Parse {
             path: Default::default(),
@@ -217,14 +287,23 @@ impl SemanticEmbedStage {
                 .map_err(|_| failure("Failed to lock semantic search".into()))?;
             inputs
                 .iter()
-                .map(|input| semantic.cached_symbol_input(&input.text))
+                .map(|input| {
+                    semantic
+                        .cached_symbol_input(&input.text)
+                        .or_else(|| body_hits.get(&crate::calculate_hash(&input.text)).cloned())
+                })
                 .collect()
         };
         // Correlation IDs are request-local ordinals, never persisted symbol IDs.
         let missing: Vec<_> = inputs
             .iter()
             .enumerate()
-            .filter(|(index, _)| vectors[*index].is_none())
+            .filter(|(index, input)| {
+                vectors[*index].is_none()
+                    && !inputs[..*index]
+                        .iter()
+                        .any(|earlier| earlier.text == input.text)
+            })
             .map(|(index, input)| {
                 (
                     crate::SymbolId::new(index as u32 + 1).expect("bounded segment ordinal"),
@@ -254,7 +333,12 @@ impl SemanticEmbedStage {
                         "unexpected or duplicate symbol segment embedding ordinal".into(),
                     ));
                 }
-                vectors[index] = Some(Arc::from(vector));
+                let shared: Arc<[f32]> = Arc::from(vector);
+                for (slot, input) in inputs.iter().enumerate() {
+                    if input.text == inputs[index].text && vectors[slot].is_none() {
+                        vectors[slot] = Some(Arc::clone(&shared));
+                    }
+                }
             }
         }
         let segments: Result<Vec<_>, _> = vectors

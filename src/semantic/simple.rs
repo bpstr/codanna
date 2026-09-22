@@ -1,5 +1,8 @@
 //! Simple semantic search implementation for documentation comments
 
+#[path = "rebuild_cache.rs"]
+mod rebuild_cache;
+
 use crate::SymbolId;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::collections::{HashMap, HashSet};
@@ -345,6 +348,7 @@ impl SimpleSemanticSearch {
     }
 
     /// Store generated vectors and remember the exact inputs that produced them.
+    #[cfg(test)]
     pub(crate) fn store_embeddings_with_inputs(
         &mut self,
         items: Vec<(SymbolId, Vec<f32>, String)>,
@@ -376,6 +380,35 @@ impl SimpleSemanticSearch {
             );
         }
         count
+    }
+
+    /// Store one generated vector for every symbol with the same exact input.
+    ///
+    /// The embedding backend should see a content input once per collector batch;
+    /// symbol/language fan-out happens here using shared Arc storage.
+    pub(crate) fn store_shared_embedding(
+        &mut self,
+        input: &str,
+        embedding: Vec<f32>,
+        targets: &[(SymbolId, &str)],
+    ) -> usize {
+        if embedding.len() != self.dimensions || !embedding.iter().all(|value| value.is_finite()) {
+            tracing::warn!(
+                target: "semantic",
+                "shared embedding dropped due to dimension or finite-value mismatch \
+                 (index={}, received={})",
+                self.dimensions,
+                embedding.len()
+            );
+            return 0;
+        }
+
+        let embedding: Arc<[f32]> = Arc::from(embedding);
+        self.embedding_cache.insert(input, Arc::clone(&embedding));
+        for &(id, language) in targets {
+            self.insert_embedding(id, Arc::clone(&embedding), Some(language.to_string()));
+        }
+        targets.len()
     }
 
     pub(crate) fn cached_symbol_input(&mut self, input: &str) -> Option<Arc<[f32]>> {
@@ -770,6 +803,17 @@ impl SimpleSemanticSearch {
     ) -> Result<(), SemanticSearchError> {
         if !self.embeddings.is_empty() {
             return self.validate_embedding_identity(&identity);
+        }
+        // An empty vector generation can still hold compatible cached inputs
+        // (fresh rebuild or the last indexed file was removed). Revalidation
+        // must not discard those vectors before the first new file batch.
+        if self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.embedding_identity.as_deref())
+            == Some(identity.as_str())
+        {
+            return Ok(());
         }
         if let Some(metadata) = &mut self.metadata {
             metadata.embedding_identity = Some(identity.clone());

@@ -1,0 +1,55 @@
+name: Semantic rebuild reuse
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/semantic/**'
+      - 'src/embedding_cache.rs'
+      - 'src/indexing/**'
+      - 'src/main.rs'
+      - 'src/storage/persistence.rs'
+      - 'tests/semantic_rebuild_reuse.rs'
+      - '.github/workflows/semantic-rebuild-reuse.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: semantic-rebuild-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+      - name: Verify rebuild inputs with a loopback-only provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/semantic/simple.rs src/semantic/rebuild_cache.rs src/indexing/facade.rs tests/semantic_rebuild_reuse.rs
+            # Cached Rust link metadata may outlive the downloaded native archive.
+            # Re-run only this dependency's native build, not the entire workspace.
+            cargo clean --package ort-sys
+            cargo test --locked --lib semantic::simple::rebuild_cache
+            cargo test --locked --test semantic_rebuild_reuse -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/semantic-rebuild-reuse.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semantic-rebuild-reuse
+          path: ${{ runner.temp }}/semantic-rebuild-reuse.log
+          retention-days: 14
