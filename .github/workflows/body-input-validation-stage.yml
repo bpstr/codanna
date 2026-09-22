@@ -1,0 +1,98 @@
+name: Body input validation staging
+on:
+  pull_request:
+    branches: [feature/symbol-body-representation]
+permissions:
+  contents: read
+concurrency:
+  group: body-input-validation-stage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.event.pull_request.head.repo.full_name == 'bpstr/codanna' && github.event.pull_request.head.ref == 'fix/body-representation-validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Apply the two source-reviewed compilation fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          changes = [
+              ('src/semantic/journal.rs', 'b8728d37e9ba5d72ac15caf3dd8d1432a3aa0caa',
+               'format!("{:x}", writer.digest.finalize())', 'hex::encode(writer.digest.finalize())'),
+              ('src/indexing/facade_retrieval_tests.rs', '3afd890b6dbb86ec911a4d3ea2ffa6f1c0d3a5c8',
+               'CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest,',
+               'CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchRequest,'),
+          ]
+          for name, sha, old, new in changes:
+              actual = subprocess.check_output(['git','hash-object',name], text=True).strip()
+              assert actual == sha, (name, actual, sha)
+              path = pathlib.Path(name)
+              text = path.read_text()
+              assert text.count(old) == 1, name
+              path.write_text(text.replace(old, new))
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Verify source capture and existing persistence contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum tests/repository_body_inputs.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --test repository_body_inputs -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
+            cargo test --locked --lib semantic::journal::tests -- --nocapture
+            cargo test --locked --lib semantic_coverage -- --nocapture
+            cargo test --locked --lib unavailable_semantic_query -- --nocapture
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/body-input-validation.log"
+      - name: Publish tested immutable blobs without updating any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          names = ['src/semantic/journal.rs', 'src/indexing/facade_retrieval_tests.rs', 'tests/repository_body_inputs.rs']
+          manifest = {'staged_head': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(), 'files': {}}
+          for name in names:
+              data = pathlib.Path(name).read_bytes()
+              request = urllib.request.Request('https://api.github.com/repos/bpstr/codanna/git/blobs',
+                  data=json.dumps({'content':data.decode(), 'encoding':'utf-8'}).encode(),
+                  headers={'Authorization':'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type':'application/json'}, method='POST')
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  sha = json.load(response)['sha']
+              assert sha == hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              manifest['files'][name] = {'blob_sha':sha, 'sha256':hashlib.sha256(data).hexdigest()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'body-input-blobs.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: body-input-validation
+          path: |
+            ${{ runner.temp }}/body-input-validation.log
+            ${{ runner.temp }}/body-input-blobs.json
+          retention-days: 14
+          if-no-files-found: error
