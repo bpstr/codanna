@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "source_revision": "ddb5ae61a72938d82cceaf42123dc7a88bfe3417",
+  "judgment_method": "Hand-curated implementation-owner labels after source inspection. Not independent human annotation, a production Assign benchmark, or a tuning holdout.",
+  "purpose": "Measure operational questions and paraphrases on unmodified production source, including undocumented owners. Do not rewrite source comments to match queries or lower gates to hide misses.",
+  "files": {
+    "src/indexing/pipeline/stages/read.rs": "fa0efc51a8d9f4c392f71e5d3f6179c582d0f9ebe4ec6c889647673ae312a5f0",
+    "src/indexing/pipeline/stages/discover.rs": "9bc6c630f0ab2ef7173649f2d1d80a91648341d24df7615ad96988df4e8c7192",
+    "src/mcp/tools/recall.rs": "4dd3b7a6b64cd3ee57988f42b6b48fb6745a25b8caaa5bdc4d15df7cd06b8202",
+    "src/embedding_cache.rs": "9513e9ccac957f56ab98846261aaca58ffff023bbada8009fb4407d0895e496a",
+    "src/memory.rs": "12c0ce5ac004ed7235e7d311f222eec572b378ee15ef7329945ce53438f17c1b"
+  },
+  "tasks": [
+    {"id": "growing-file", "path": "src/indexing/pipeline/stages/read.rs", "name": "read_file", "reason": "Checks regular-file status and bounds both metadata size and bytes actually read.", "queries": ["limit the bytes read from a growing source file", "stop a giant generated artifact from exhausting memory"]},
+    {"id": "modification-time", "path": "src/indexing/pipeline/stages/discover.rs", "name": "is_modified", "reason": "Uses precise past mtimes for skipping and hashes uncertain timestamps.", "queries": ["detect same second source edits using nanosecond modification times", "notice two saves before the wall clock advances"]},
+    {"id": "rename-ambiguity", "path": "src/indexing/pipeline/stages/discover.rs", "name": "pair_relocations", "reason": "Pairs only one deleted and one new path per content hash.", "queries": ["pair a rename only when one old file and one new file share content", "do not confuse copied twins with a moved implementation"]},
+    {"id": "partial-walk", "path": "src/indexing/pipeline/stages/discover.rs", "name": "collect_all_files", "reason": "Refuses to infer deletions from incomplete filesystem traversal.", "queries": ["reject incomplete directory discovery before deleting indexed files", "an unreadable folder must not erase previously known code"]},
+    {"id": "recall-identity", "path": "src/mcp/tools/recall.rs", "name": "scope_for_root", "reason": "Hashes the canonical native path so equal basenames do not share recall namespaces.", "queries": ["keep projects with the same basename in separate conversation namespaces", "two unrelated checkouts called app must not share chat history"]},
+    {"id": "recall-timeout", "path": "src/mcp/tools/recall.rs", "name": "capture", "reason": "Bounds process output, enforces timeout, kills and waits for a failed child.", "queries": ["kill a stalled conversation search subprocess after its deadline", "stop waiting when the local history reader hangs"]},
+    {"id": "foreign-recall", "path": "src/mcp/tools/recall.rs", "name": "render", "reason": "Verifies response workspace before rendering any recalled text.", "queries": ["reject a recall reply from a different workspace", "never show another project's private messages"]},
+    {"id": "cache-identity", "path": "src/embedding_cache.rs", "name": "load", "reason": "Validates cache format, preprocessing identity, model identity and dimensions.", "queries": ["reuse cached vectors only when model identity and dimensions agree", "discard yesterday's representations after switching the encoder"]},
+    {"id": "cache-atomic-save", "path": "src/embedding_cache.rs", "name": "save", "reason": "Writes a bounded temporary file, flushes and syncs before persistence.", "queries": ["save the embedding cache atomically within its file size budget", "a crash halfway through saving must leave the previous copy intact"]},
+    {"id": "adaptive-batch", "path": "src/memory.rs", "name": "embedding_batch_size", "reason": "Chooses bounded inference batches using headroom and accelerated-provider allowance.", "queries": ["shrink the inference batch when accelerated providers have little memory headroom", "send fewer inputs together when the GPU is nearly full"]}
+  ],
+  "identifier_controls": [
+    {"query": "pair_relocations", "path": "src/indexing/pipeline/stages/discover.rs", "name": "pair_relocations"},
+    {"query": "scope_for_root", "path": "src/mcp/tools/recall.rs", "name": "scope_for_root"},
+    {"query": "embedding_batch_size", "path": "src/memory.rs", "name": "embedding_batch_size"}
+  ],
+  "absent_control": "qzvnoexist75391"
+}
