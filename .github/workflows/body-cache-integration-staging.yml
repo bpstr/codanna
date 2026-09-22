@@ -39,7 +39,7 @@ jobs:
           git commit -m 'Combine pinned body planner and cache reuse for verification'
       - name: Refresh native linker artifacts
         run: cargo clean -p ort-sys
-      - name: Record pressure baseline without hiding compilation failures
+      - name: Record original planner and runtime mismatch
         shell: bash
         run: |
           set -euo pipefail
@@ -53,6 +53,22 @@ jobs:
           test "$status" -ne 0
           grep -q 'test result: FAILED' "$RUNNER_TEMP/body-cache-baseline.log"
           grep -q 'body_cache_pressure_preserves_late_hits_and_continues_learning.*FAILED' "$RUNNER_TEMP/body-cache-baseline.log"
+      - name: Align configuration roots and measure admission separately
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 contributing/scripts/align-body-cache-context.py
+          cargo fmt --all
+          sha256sum -c "$RUNNER_TEMP/body-cache-fixture.sha256"
+          cargo test --locked --test semantic_rebuild_reuse --no-run
+          set +e
+          cargo test --locked --test semantic_rebuild_reuse body_rebuild_cache -- --nocapture > "$RUNNER_TEMP/body-cache-aligned-baseline.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/body-cache-aligned-baseline.log"
+          test "$status" -ne 0
+          grep -q 'test result: FAILED' "$RUNNER_TEMP/body-cache-aligned-baseline.log"
+          grep -q 'body_cache_pressure_preserves_late_hits_and_continues_learning.*FAILED' "$RUNNER_TEMP/body-cache-aligned-baseline.log"
       - name: Apply reviewed bounded body-cache repair
         shell: bash
         run: |
@@ -67,11 +83,12 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version --verbose
-            sha256sum src/indexing/pipeline/stages/semantic_embed.rs src/semantic/simple.rs src/indexing/facade.rs tests/support/body_rebuild_cache_cases.rs
+            sha256sum src/config/mod.rs src/indexing/pipeline/stages/semantic_embed.rs src/semantic/simple.rs src/indexing/facade.rs tests/support/body_rebuild_cache_cases.rs
             cargo test --locked --test semantic_rebuild_reuse --test index_plan_cli --test body_index_plan_cli -- --nocapture
             cargo test --locked --lib rebuild_plan::tests -- --nocapture
             cargo test --locked --lib symbol_representation -- --nocapture
             cargo test --locked --lib rebuild_cache -- --nocapture
+            cargo test --locked --lib config::tests -- --nocapture
             cargo fmt --all -- --check
             cargo clippy --locked --all-targets --all-features -- -D warnings
           } 2>&1 | tee "$RUNNER_TEMP/body-cache-candidate.log"
@@ -111,6 +128,7 @@ jobs:
           name: body-cache-integration
           path: |
             ${{ runner.temp }}/body-cache-baseline.log
+            ${{ runner.temp }}/body-cache-aligned-baseline.log
             ${{ runner.temp }}/body-cache-candidate.log
             ${{ runner.temp }}/body-cache-fixture.sha256
             ${{ runner.temp }}/body-cache-blobs.json
