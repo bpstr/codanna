@@ -1,92 +1,77 @@
 # Bounded related implementation evidence
 
-Follow-up to #58/#59 task-relevance findings, stacked on #56. The original
-20 questions and ten implementation-owner judgments remain unchanged.
-No paid embedding, production corpus rebuild, generated synonyms, or changed
-source annotations are introduced by this feature or its tests.
+`search_ticket_context` accepts `include_related_code`, a strict boolean that
+defaults to false. It does not change direct code candidates, rank-fusion scores,
+ordering or requested code limits. Related results are separate evidence, not
+upgraded relevance scores or proof of implementation ownership.
 
 ## Contract
 
-`search_ticket_context` gains `include_related_code`, a strict boolean defaulting
-to false. It does not change direct code candidates, rank-fusion scores, ordering,
-or requested code limits. Related results are separate evidence, not upgraded
-relevance scores or newly invented direct matches.
-
-An opted-in request examines outgoing indexed `Calls` from at most three distinct
+An opted-in request examines outgoing indexed Calls from at most three distinct
 returned direct matches, with a hard 32-edge budget per seed and six returned
-related symbols. It traverses one hop only, deduplicates target IDs, excludes
-already-returned direct IDs, and records seed rank/identity plus call-site
-coordinates when available. A relation demonstrates an indexed call, not
-ownership, semantic relevance, source completeness, or current source freshness.
+related symbols. It traverses one hop, deduplicates target IDs, excludes direct
+IDs and records seed rank/identity plus available call-site coordinates. It does
+not recursively follow calls or award extra relevance votes for duplicate edges.
 
-Scope must never silently broaden. Until graph filtering shares the verified
-subtree machinery, a request with `code_path_prefix` reports
-`not_run_scoped_graph_unsupported`. No graph queries run for that case. Disabled
-requests retain the previous response shape and perform no graph work.
+The #62 integration supports `code_path_prefix` for related results through the
+same registered-file scope machinery as lexical search. Seeds and targets must
+belong to the requested workspace subtree on the pinned graph snapshot. External
+checkouts, missing file registrations and prefix/file-name neighbors cannot
+silently broaden scope. Explicit `.` means the configured workspace. Budgets
+are checked before filtering and are not relaxed to refill excluded results.
 
-A single pinned GraphView supplies relationship reads and symbol hydration.
-Reader generation observations bind the expansion to the direct-query generation;
-changes discard related results. Unhydrated endpoints, unavailable storage,
-budget exhaustion, and legitimate empty neighborhoods are distinct outcomes.
-Warnings and retained evidence are bounded. This expansion initializes no
-model/provider; existing document search keeps its own configured backend policy.
+Pinned relationship reads, file-scope resolution and hydration use one GraphView.
+Reader-generation observations bind expansion to direct retrieval; invalidation
+discards related results. Unhydrated endpoints, scope exclusions, missing seeds,
+unavailable storage, budget exhaustion and legitimate empty neighborhoods remain
+distinguishable. Warnings and retained evidence are bounded.
+
+The graph option initializes no model/provider; existing document search keeps
+its own configured backend policy. It does not opt into semantic code search.
 
 ## Use
 
-MCP arguments:
-
 ```json
 {
-  "query": "kill a stalled conversation search subprocess after its deadline",
+  "query": "conversation timeout",
   "code_limit": 5,
+  "code_path_prefix": "src",
   "include_related_code": true
 }
 ```
 
-Direct CLI invocation against an already indexed workspace:
-
 ```bash
-codanna mcp search_ticket_context --args '{"query":"kill a stalled conversation search subprocess after its deadline","code_limit":5,"include_related_code":true}' --json
+codanna mcp search_ticket_context --args '{"query":"conversation timeout","code_limit":5,"code_path_prefix":"src","include_related_code":true}' --json
 ```
 
-No reindex is needed to enable this query-time option. Existing indexed edge
-coverage determines what can be returned. It cannot reconstruct missing Calls
-or recover a query with no direct seeds by inventing a connection.
+Omit `code_path_prefix` for unscoped discovery. No reindex is needed to enable
+this query-time option, but existing indexed edge coverage determines what can
+be returned. It cannot invent missing Calls or expand a query with no direct
+seeds. Scope is a retrieval constraint, not an authorization boundary.
 
-The normal `code.items` remain unchanged. Opted-in structured output additionally
-contains `code.related_code`, with a status, bounded per-seed probe outcomes,
-related items and `via` provenance. Text renders the same related identities and
-available call-site evidence in a separate section. Related rows deliberately
-have no `fusion_score` or confidence field. Their order follows direct seed rank
-and deterministic source location, not a new semantic relevance score.
+The normal `code.items` remain unchanged. Opted-in structured output adds
+`code.related_code`: status, per-seed probes, related items and `via` provenance.
+Scoped output also includes `path_prefix` and `excluded_by_scope` counts. Text
+renders the same scope, identities and available call-site evidence. Related
+rows deliberately have no fusion/confidence score; ordering follows direct
+seed rank and deterministic source location.
 
-## Executed verification
+## Verification
 
-The staged run executed 38 selected tests, including the seven new library
-contracts, two actual CLI tests and one 20-query handler measurement. It then
-passed formatting and strict all-target/all-feature Clippy. Exact-source hashes
-and before/after metric interpretation are in
+The original #61 baseline and its 38-test staged verification are retained in
 [ticket-related-implementations-results.md](ticket-related-implementations-results.md).
-The final committed tree uses those tested blobs; the retained workflow reruns
-it without a patch or write permission.
+Those results use the older lexical base and originally disabled scoped graph
+expansion. They must not be read as current combined-build metrics.
 
-- [x] Exact local Calls with source/target identity and call-site evidence.
-- [x] Duplicate edges, multiple seeds, direct-result exclusion and cycles.
-- [x] Empty, missing seed, dangling target and exhausted edge budget states.
-- [x] Disabled/scoped requests short-circuit; pre-expansion generation mismatch has no related rows.
-- [x] Strict boolean schema, default compatibility and unchanged direct results.
-- [x] CLI/MCP success, error and unsupported-scope contracts.
-- [x] Frozen task corpus reports direct Hit@5 separately from direct-or-related recall.
-- [ ] Deterministic concurrent replacement during this collector's full traversal.
-- [ ] Scoped graph expansion sharing the verified workspace snapshot filter.
-- [ ] Combined #57/#59 and all-branch release qualification.
+Current integration and scoped before/after evidence are recorded in
+[scoped-ticket-relevance.md](scoped-ticket-relevance.md). The actual combined
+build retrieves the owner directly in 8/20 questions, and somewhere among five
+direct plus up to six related results in 10/20. All direct arrays stay unchanged
+by opt-in. Paraphrase performance remains 1/10. The expanded surface is not
+improved Hit@5 and does not meet the original 90% quality target.
 
-The original 90% retrieval quality target remains open. On this recorded base,
-direct Hit@5 remains 6/20; finding the owner in up to five direct plus six related
-results reaches 9/20. The three extra operational owners are `collect_all_files`,
-`capture` and `render`; paraphrase retrieval does not improve. This larger
-related-code surface is not renamed as a better Hit@5 result.
-
-This branch uses #56's recorded lexical baseline; it does not claim to contain
-all separately developed #59 ranking or #57 snapshot work. Results from those
-independent branches must not be added together as a combined-build metric.
+The scoped candidate passed 66 selected contracts, formatting and strict Clippy.
+Its five new public-handler cases improved from 1 passing / 4 failing to all
+five passing against unchanged fixture bytes. Final-head CI remains a separate
+record on #62. Independent labels, controlled latency/RSS and all-branch release
+qualification remain open; nothing here authorizes a production rebuild.

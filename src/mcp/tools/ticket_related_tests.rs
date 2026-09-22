@@ -157,12 +157,14 @@ fn ticket_related_over_budget_neighborhood_does_not_become_empty_success() {
 }
 
 #[test]
-fn ticket_related_rejects_scope_and_generation_mismatch_before_expansion() {
+fn ticket_related_rejects_unregistered_seeds_and_generation_mismatch_before_expansion() {
     let (_temp, index) = fixture(2, &[(1, 2)]);
     let generation = index.document_index().generation();
     let scoped = ticket_related::collect(&index, &[1], Some("."), Some(generation));
-    assert_eq!(scoped.status, "not_run_scoped_graph_unsupported");
-    assert!(scoped.probes.is_empty());
+    assert_eq!(scoped.status, "partial");
+    assert_eq!(scoped.probes[0].status, "seed_outside_scope");
+    assert!(scoped.probes[0].indexed_edges.is_none());
+    assert!(scoped.items.is_empty());
     let stale = ticket_related::collect(&index, &[1], None, Some(generation.saturating_add(1)));
     assert_eq!(stale.status, "not_run_generation_mismatch");
     assert!(stale.items.is_empty());

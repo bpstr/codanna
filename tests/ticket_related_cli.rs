@@ -98,14 +98,26 @@ fn ticket_related_cli_rejects_wrong_types_and_never_broadens_scope() {
     }
     let result = workspace.ticket(
         &json!({
-            "query":"conversation timeout", "include_related_code":true, "code_path_prefix":"src",
+            "query":"conversation timeout", "include_related_code":true, "code_path_prefix":"src", "code_limit":1,
         }),
         true,
     );
     assert!(result.status.success());
     let envelope: Value = serde_json::from_slice(&result.stdout).unwrap();
     let report = &envelope["data"]["code"]["related_code"];
-    assert_eq!(report["status"], "not_run_scoped_graph_unsupported");
-    assert_eq!(report["probes"], json!([]));
-    assert_eq!(report["items"], json!([]));
+    assert_eq!(report["status"], "completed_bounded");
+    assert_eq!(report["items"].as_array().unwrap().len(), 1);
+    assert_eq!(report["items"][0]["name"], "timeout_worker");
+    assert_eq!(report["path_prefix"], "src");
+    let text_result = workspace.ticket(
+        &json!({
+            "query":"conversation timeout", "include_related_code":true,
+            "code_path_prefix":"src/main.rs", "code_limit":1,
+        }),
+        false,
+    );
+    assert!(text_result.status.success());
+    let rendered = String::from_utf8_lossy(&text_result.stdout);
+    assert!(rendered.contains("Scope: src/main.rs"));
+    assert!(rendered.contains("timeout_worker"));
 }

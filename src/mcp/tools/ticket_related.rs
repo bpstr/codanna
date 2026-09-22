@@ -39,11 +39,14 @@ pub(super) struct Probe {
     pub status: &'static str,
     pub indexed_edges: Option<usize>,
     pub unhydrated_edges: usize,
+    pub excluded_by_scope: usize,
     pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RelatedCode {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
     pub status: &'static str,
     pub source_coverage: &'static str,
     pub freshness: &'static str,
@@ -74,6 +77,7 @@ fn text(value: &str, budget: usize) -> String {
 impl RelatedCode {
     pub(super) fn unavailable(status: &'static str) -> Self {
         Self {
+            path_prefix: None,
             status,
             source_coverage: "unknown",
             freshness: "unknown",
@@ -94,6 +98,11 @@ impl RelatedCode {
             "\n## Related implementations (indexed Calls, not relevance scores)\nStatus: {}\n",
             self.status
         );
+        if let Some(prefix) = &self.path_prefix {
+            output.push_str(&format!(
+                "Scope: {prefix}; targets require registered workspace file identity.\n"
+            ));
+        }
         for (rank, item) in self.items.iter().enumerate() {
             output.push_str(&format!(
                 "{}. {} ({}) at {}:{} [symbol_id:{}]\n",
@@ -121,6 +130,12 @@ impl RelatedCode {
             }
         }
         for probe in &self.probes {
+            if probe.excluded_by_scope > 0 {
+                output.push_str(&format!(
+                    "Seed {}: {} indexed edge(s) excluded by the requested file scope.\n",
+                    probe.seed_symbol_id, probe.excluded_by_scope
+                ));
+            }
             if let Some(warning) = &probe.warning {
                 output.push_str(&format!(
                     "Warning for seed {}: {warning}\n",
@@ -169,9 +184,6 @@ pub(super) fn collect(
     scope: Option<&str>,
     expected_generation: Option<u64>,
 ) -> RelatedCode {
-    if scope.is_some() {
-        return RelatedCode::unavailable("not_run_scoped_graph_unsupported");
-    }
     if direct_ids.len() > MAX_DIRECT {
         return RelatedCode::unavailable("not_run_seed_budget_exceeded");
     }
@@ -179,16 +191,17 @@ pub(super) fn collect(
         return RelatedCode::unavailable("not_run_no_direct_matches");
     }
     let storage = indexer.document_index();
-    let before = storage.generation();
+    let view = storage.graph_view();
+    let before = view.reader_generation();
     let mut result = RelatedCode::unavailable("completed_bounded");
+    result.path_prefix = scope.map(|prefix| text(prefix, 512));
     result.reader_generation_before = Some(before);
     if expected_generation != Some(before) {
         result.status = "not_run_generation_mismatch";
         result.reader_generation_after = Some(storage.generation());
         return result;
     }
-    // Both edge enumeration and all endpoint hydration use this pinned view.
-    let view = storage.graph_view();
+    // Scope resolution, edge enumeration and endpoint hydration share the pinned view.
     let excluded: BTreeSet<_> = direct_ids.iter().copied().collect();
     let mut seen_seeds = BTreeSet::new();
     let mut found: BTreeMap<u32, Item> = BTreeMap::new();
@@ -205,6 +218,7 @@ pub(super) fn collect(
             status: "completed_indexed_neighborhood",
             indexed_edges: None,
             unhydrated_edges: 0,
+            excluded_by_scope: 0,
             warning: None,
         };
         let Some(id) = SymbolId::new(seed_id) else {
@@ -218,6 +232,12 @@ pub(super) fn collect(
                 probe.status = "missing_seed";
                 return Ok::<(), crate::storage::StorageError>(());
             };
+            if let Some(prefix) = scope {
+                if view.symbols_scoped(&[id], prefix)?.is_empty() {
+                    probe.status = "seed_outside_scope";
+                    return Ok(());
+                }
+            }
             let mut edges =
                 view.relationships(&[id], false, &[RelationKind::Calls], Some(EDGES_PER_SEED))?;
             probe.indexed_edges = Some(edges.len());
@@ -242,11 +262,28 @@ pub(super) fn collect(
                 .into_iter()
                 .map(|symbol| (symbol.id.value(), symbol))
                 .collect();
+            let allowed = scope
+                .map(|prefix| {
+                    view.symbols_scoped(&target_ids, prefix).map(|symbols| {
+                        symbols
+                            .into_iter()
+                            .map(|symbol| symbol.id.value())
+                            .collect::<BTreeSet<_>>()
+                    })
+                })
+                .transpose()?;
             for (_, target_id, relationship) in edges {
                 let Some(target) = targets.get(&target_id.value()) else {
                     probe.unhydrated_edges += 1;
                     continue;
                 };
+                if allowed
+                    .as_ref()
+                    .is_some_and(|ids| !ids.contains(&target_id.value()))
+                {
+                    probe.excluded_by_scope += 1;
+                    continue;
+                }
                 if excluded.contains(&target_id.value()) {
                     continue;
                 }
@@ -319,7 +356,11 @@ pub(super) fn collect(
     {
         "partial"
     } else if result.items.is_empty() {
-        "empty_indexed_neighborhoods"
+        if scope.is_some() {
+            "empty_scoped_neighborhoods"
+        } else {
+            "empty_indexed_neighborhoods"
+        }
     } else {
         "completed_bounded"
     };
