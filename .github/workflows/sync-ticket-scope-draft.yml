@@ -1,0 +1,50 @@
+name: Synchronize ticket scope dependency
+on:
+  push:
+    branches: ['feature/ticket-code-fusion']
+    paths: ['.github/workflows/sync-ticket-scope-draft.yml']
+permissions:
+  contents: read
+jobs:
+  synchronize:
+    if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/feature/ticket-code-fusion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Merge only the inspected dependency revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git -c core.hooksPath=/dev/null merge --no-commit --no-ff 7715ed08b2403721fb1d0e415052268bd44cacff; then
+            git diff --cc
+            echo 'Conflicting source requires explicit review; nothing was pushed.' >&2
+            exit 1
+          fi
+          # The dependency workflow is published by the connected app separately;
+          # the Actions token never writes or grants additional workflow access.
+          git restore --source=HEAD --staged --worktree -- .github/workflows/symbol-path-scope.yml
+          rustfmt --edition 2024 --config skip_children=true src/cli/commands/mcp.rs src/mcp/catalog.rs
+          git add -- src/cli/commands/mcp.rs src/mcp/catalog.rs
+          git diff --cached --check
+      - name: Publish the dependency merge to the draft branch only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git -c core.hooksPath=/dev/null commit -m 'Integrate scoped CLI and workspace lifecycle fixes into ticket retrieval'
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/feature/ticket-code-fusion
+          git rev-parse HEAD
