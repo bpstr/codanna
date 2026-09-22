@@ -2,7 +2,7 @@
 use super::*;
 use crate::mcp::service::{FindSymbolTarget, page_symbols, try_resolve_find_symbol_target};
 use crate::mcp::{
-    CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest,
+    CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchRequest,
     SemanticSearchWithContextRequest,
 };
 use crate::{Range, ScopeContext};

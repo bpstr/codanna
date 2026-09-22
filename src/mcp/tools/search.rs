@@ -150,7 +150,7 @@ impl CodeIntelligenceServer {
                 .unwrap_or_else(|_| "unknown".to_string());
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
+                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
                     .display(),
                 symbol_count,
@@ -277,7 +277,7 @@ impl CodeIntelligenceServer {
             let vectors_exist = semantic_path.join("metadata.json").exists();
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
+                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
                     .display(),
                 indexer.has_semantic_search(),

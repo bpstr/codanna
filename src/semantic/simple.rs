@@ -505,8 +505,8 @@ impl SimpleSemanticSearch {
         let query_magnitude = vector_magnitude(query_embedding);
         let mut similarities: Vec<(SymbolId, f32)> = self
             .embeddings
-            .iter()
-            .filter_map(|(id, _)| {
+            .keys()
+            .filter_map(|id| {
                 let sim = self.score_symbol(*id, query_embedding, query_magnitude)?;
                 if sim >= threshold {
                     Some((*id, sim))
@@ -605,8 +605,8 @@ impl SimpleSemanticSearch {
         let query_magnitude = vector_magnitude(&query_embedding);
         let mut similarities: Vec<(SymbolId, f32)> = self
             .embeddings
-            .iter()
-            .filter_map(|(id, _)| {
+            .keys()
+            .filter_map(|id| {
                 self.score_symbol(*id, &query_embedding, query_magnitude)
                     .map(|score| (*id, score))
             })

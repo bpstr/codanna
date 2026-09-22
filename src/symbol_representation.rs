@@ -442,9 +442,11 @@ mod pipeline_contracts {
             let temp = tempfile::tempdir().unwrap();
             let path = temp.path().join("source.rs");
             let source = "/// API documentation\nfn documented() { emit(\"old.route\"); }\nfn undocumented() { emit(\"calendar.changed\"); }\n";
-            let mut settings = crate::Settings::default();
-            settings.workspace_root = Some(temp.path().to_path_buf());
-            settings.index_path = temp.path().join("index");
+            let mut settings = crate::Settings {
+                workspace_root: Some(temp.path().to_path_buf()),
+                index_path: temp.path().join("index"),
+                ..Default::default()
+            };
             settings.semantic_search.code_representation = policy;
             settings.semantic_search.enabled = true;
             let settings = Arc::new(settings);

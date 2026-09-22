@@ -340,7 +340,7 @@ pub(super) fn save(
                     written: 0,
                 };
                 serde_json::to_writer(&mut writer, &borrowed).map_err(error)?;
-                format!("{:x}", writer.digest.finalize())
+                hex::encode(writer.digest.finalize())
             };
             file.sync_all().map_err(error)?;
             Some(digest)
