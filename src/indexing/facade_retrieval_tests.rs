@@ -532,3 +532,54 @@ async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() 
     assert!(text.contains("No code or semantic index rebuild was attempted"));
     assert!(text.contains("search_symbols") && text.contains("search_context"));
 }
+
+#[test]
+fn symbol_representation_policy_mismatch_blocks_query_before_provider_initialization() {
+    for body_on_disk in [false, true] {
+        let (temp, mut facade) = fixture();
+        Arc::make_mut(&mut facade.settings)
+            .semantic_search
+            .code_representation = if body_on_disk {
+            crate::symbol_representation::CodeEmbeddingPolicy::DocComment
+        } else {
+            crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+        };
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let identity = if body_on_disk {
+            crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+                .bind_identity("{}".into())
+        } else {
+            "{}".into()
+        };
+        search.set_embedding_identity(identity).unwrap();
+        search.store_embeddings(vec![(
+            SymbolId::new(1).unwrap(),
+            vec![1.0, 0.0],
+            "rust".into(),
+        )]);
+        let path = temp.path().join("policy-fixture");
+        search.save(&path).unwrap();
+        assert!(facade.load_semantic_search(&path).is_err());
+        assert!(facade.is_semantic_incompatible());
+        assert!(facade.embedding_pool.get().is_none());
+        assert!(facade.prepare_semantic_query().is_err());
+        assert!(facade.embedding_pool.get().is_none());
+    }
+}
+
+#[test]
+fn symbol_representation_eligibility_reports_meaningful_undocumented_symbols() {
+    let (_temp, mut facade) = fixture();
+    Arc::make_mut(&mut facade.settings)
+        .semantic_search
+        .code_representation = crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1;
+    let function = named_symbol(1, "handler", SymbolKind::Function);
+    let local = named_symbol(2, "local", SymbolKind::Variable).with_doc("documented local");
+    let status = facade.semantic_coverage_status(&[function, local]);
+    assert_eq!(status.eligible_symbols, 1);
+    assert_eq!(
+        status.source_input_policy,
+        crate::symbol_representation::SOURCE_POLICY_ID
+    );
+    assert_eq!(status.freshness, "unknown");
+}
