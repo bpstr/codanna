@@ -1,9 +1,9 @@
 //! Public ticket handler controls for scoped one-hop evidence. No provider/model.
 use codanna::indexing::facade::IndexFacade;
-use codanna::indexing::pipeline::FileRegistration;
+use codanna::indexing::pipeline::{FileRegistration, ResolvedRelationship, stages::WriteStage};
 use codanna::mcp::CodeIntelligenceServer;
 use codanna::parsing::LanguageId;
-use codanna::{FileId, Range, RelationKind, Relationship, Settings, Symbol, SymbolId, SymbolKind};
+use codanna::{FileId, Range, RelationKind, Settings, Symbol, SymbolId, SymbolKind};
 use rmcp::handler::server::wrapper::Parameters;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -75,6 +75,7 @@ fn fixture(dense: bool) -> (tempfile::TempDir, CodeIntelligenceServer) {
     } else {
         (2..=9).collect()
     };
+    let mut writer = WriteStage::new(storage.clone());
     for id in edges {
         if dense {
             let symbol = Symbol::new(
@@ -86,15 +87,15 @@ fn fixture(dense: bool) -> (tempfile::TempDir, CodeIntelligenceServer) {
             );
             storage.index_symbol(&symbol, &paths[2]).unwrap();
         }
-        storage
-            .store_relationship(
+        writer
+            .write_one(ResolvedRelationship::new(
                 SymbolId::new(1).unwrap(),
                 SymbolId::new(id).unwrap(),
-                &Relationship::new(RelationKind::Calls),
-            )
+                RelationKind::Calls,
+            ))
             .unwrap();
     }
-    storage.commit_batch().unwrap();
+    writer.flush().unwrap();
     (temp, CodeIntelligenceServer::new(facade))
 }
 
