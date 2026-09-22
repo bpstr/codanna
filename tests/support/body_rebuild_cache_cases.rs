@@ -86,7 +86,8 @@ fn body_cache_planner_matches_cold_warm_edit_and_deleted_parent() {
     assert_eq!(cold["embedding_inputs"], 2);
     assert_eq!(cold["snapshot_miss_inputs"], 2);
     workspace.rebuild();
-    sent(&endpoint, 2);
+    let inputs = sent(&endpoint, 2);
+    assert!(inputs.iter().all(|input| !input.contains(workspace.root().to_str().unwrap())), "body inputs must not contain the machine-specific workspace root");
     let before_ids = current_ids(&workspace, &["alpha_owner", "helper"]);
 
     workspace.source(&format!("pub const SHIFT_ID: u8 = 0;\n{BODY_SOURCE}"));
@@ -137,18 +138,20 @@ fn body_cache_policy_switch_and_corruption_never_reuse_legacy_vectors() {
 fn body_cache_segmentation_matches_planner_and_survives_reopen() {
     let endpoint = Endpoint::start(2);
     let workspace = Workspace::new(&endpoint);
-    workspace.source(&format!("pub fn large_owner() {{ {} }}\n", "consume(); ".repeat(350)));
+    workspace.source(&format!("pub fn large_owner() {{ {} }}\n", "consume(); ".repeat(1400)));
     workspace.configure(&endpoint, "fixture-model", 2,
         "code_representation = \"symbol_body_v1\"\nmax_input_tokens = 2048");
     let before = plan(&workspace, &endpoint);
     let inputs = before["embedding_inputs"].as_u64().unwrap() as usize;
     let unique = before["unique_embedding_inputs"].as_u64().unwrap() as usize;
     assert!((2..=8).contains(&inputs));
+    assert!(unique < inputs, "fixture must contain identical prepared segments with different source ranges");
     workspace.rebuild();
     sent(&endpoint, unique);
     let vectors = SimpleSemanticSearch::load_remote(&workspace.root().join(".codanna/index/semantic")).unwrap();
     assert_eq!(vectors.embedding_count(), 1);
     assert_eq!(vectors.vector_count(), inputs);
+    println!("body_segments: parents=1 stored_segments={inputs} unique_inference_inputs={unique}");
     drop(vectors);
     assert_eq!(plan(&workspace, &endpoint)["snapshot_miss_inputs"], 0);
     workspace.rebuild();
@@ -158,25 +161,26 @@ fn body_cache_segmentation_matches_planner_and_survives_reopen() {
 
 #[test]
 fn body_cache_pressure_preserves_late_hits_and_continues_learning() {
-    // 16 MiB / (16,384 dimensions * 4 bytes + 256-byte allowance) = 255 entries.
-    // High-dimensional fixed vectors reproduce byte pressure with fewer parents.
-    const COUNT: usize = 320;
-    let endpoint = Endpoint::start(16_384);
+    // Use the semantic journal's supported maximum dimension, not the larger
+    // standalone accelerator limit. 16 MiB / (4096*4 + 256) = 1008 entries.
+    const COUNT: usize = 1280;
+    let endpoint = Endpoint::start(4096);
     let workspace = Workspace::new(&endpoint);
     let source = (0..COUNT).map(|i| format!("pub fn pressure_{i:04}() -> usize {{ {i} }}\n")).collect::<String>();
     workspace.source(&source);
-    workspace.configure(&endpoint, "fixture-model", 16_384, "code_representation = \"symbol_body_v1\"");
+    workspace.configure(&endpoint, "fixture-model", 4096, "code_representation = \"symbol_body_v1\"");
     workspace.rebuild();
     sent(&endpoint, COUNT);
     for round in 1..=2 {
         let predicted = plan(&workspace, &endpoint);
-        assert_eq!(predicted["snapshot_hit_inputs"], 255);
-        assert_eq!(predicted["snapshot_miss_inputs"], 65);
+        assert_eq!(predicted["embedding_candidates"], COUNT);
+        assert_eq!(predicted["snapshot_hit_inputs"], 1008);
+        assert_eq!(predicted["snapshot_miss_inputs"], 272);
         workspace.rebuild();
-        sent(&endpoint, 65);
+        sent(&endpoint, 272);
         let semantic = SimpleSemanticSearch::load_remote(&workspace.root().join(".codanna/index/semantic")).unwrap();
         assert_eq!(semantic.embedding_count(), COUNT);
         assert_eq!(semantic.vector_count(), COUNT);
-        println!("body_pressure_round={round} parents={COUNT} snapshot_hits=255 generated=65");
+        println!("body_pressure_round={round} parents={COUNT} snapshot_hits=1008 generated=272");
     }
 }
