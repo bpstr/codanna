@@ -10,6 +10,101 @@ use tantivy::{
 
 use super::{DocumentIndex, SearchResult};
 
+
+const DISCOVERY_CANDIDATE_MULTIPLIER: usize = 16;
+const DISCOVERY_CANDIDATE_FLOOR: usize = 64;
+const DISCOVERY_CANDIDATE_CAP: usize = 200;
+
+fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
+    if query.chars().any(|character| {
+        matches!(
+            character,
+            ':' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '~' | '*' | '?' | '\\' | '/'
+                | '^' | '+'
+        )
+    }) || query
+        .split_whitespace()
+        .any(|word| matches!(word, "AND" | "OR" | "NOT"))
+    {
+        return None;
+    }
+
+    const STOPWORDS: &[&str] = &[
+        "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to",
+        "was", "were", "what", "where", "which", "with",
+    ];
+
+    let mut terms = std::collections::BTreeSet::new();
+    for term in query
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .map(str::to_lowercase)
+        .filter(|term| term.len() >= 3)
+        .filter(|term| !STOPWORDS.contains(&term.as_str()))
+    {
+        terms.insert(term);
+        if terms.len() >= 32 {
+            break;
+        }
+    }
+
+    (terms.len() >= 2).then(|| terms.into_iter().collect())
+}
+
+fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
+    let mut searchable = result.name.to_lowercase();
+    for value in [
+        result.doc_comment.as_deref(),
+        result.signature.as_deref(),
+        result.context.as_deref(),
+        Some(result.module_path.as_str()),
+        Some(result.file_path.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        searchable.push(' ');
+        searchable.push_str(&value.to_lowercase());
+    }
+
+    terms
+        .iter()
+        .filter(|term| searchable.contains(term.as_str()))
+        .count()
+}
+
+pub(crate) fn discovery_term_coverage(
+    query: &str,
+    result: &SearchResult,
+) -> Option<(usize, usize)> {
+    let terms = simple_discovery_terms(query)?;
+    Some((result_term_coverage(result, &terms), terms.len()))
+}
+
+fn discovery_candidate_limit(limit: usize, enabled: bool) -> usize {
+    if !enabled {
+        return limit;
+    }
+    let expanded = limit
+        .saturating_mul(DISCOVERY_CANDIDATE_MULTIPLIER)
+        .max(DISCOVERY_CANDIDATE_FLOOR)
+        .min(DISCOVERY_CANDIDATE_CAP);
+    limit.max(expanded)
+}
+
+fn rerank_discovery_results(results: &mut Vec<SearchResult>, terms: &[String], limit: usize) {
+    results.sort_by(|left, right| {
+        result_term_coverage(right, terms)
+            .cmp(&result_term_coverage(left, terms))
+            .then_with(|| right.score.total_cmp(&left.score))
+            .then_with(|| left.file_path.cmp(&right.file_path))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.column.cmp(&right.column))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.symbol_id.value().cmp(&right.symbol_id.value()))
+    });
+    results.truncate(limit);
+}
+
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
 pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
     Some(match kind {
@@ -153,11 +248,15 @@ impl DocumentIndex {
         }
 
         let final_query = BooleanQuery::new(all_clauses);
+        let discovery_terms = simple_discovery_terms(query_str);
+        let candidate_limit = discovery_candidate_limit(limit, discovery_terms.is_some());
 
-        let top_docs =
-            searcher.search(&final_query, &TopDocs::with_limit(limit).order_by_score())?;
+        let top_docs = searcher.search(
+            &final_query,
+            &TopDocs::with_limit(candidate_limit).order_by_score(),
+        )?;
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
             let doc: Document = searcher.doc(doc_address)?;
 
@@ -251,6 +350,12 @@ impl DocumentIndex {
                 highlights: Vec::new(), // TODO: Implement highlighting
                 context,
             });
+        }
+
+        if let Some(terms) = discovery_terms {
+            rerank_discovery_results(&mut results, &terms, limit);
+        } else {
+            results.truncate(limit);
         }
 
         Ok(results)
