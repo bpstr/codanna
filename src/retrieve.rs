@@ -630,6 +630,23 @@ pub fn retrieve_search(
     format: OutputFormat,
     fields: Option<Vec<String>>,
 ) -> ExitCode {
+    retrieve_search_scoped(
+        indexer, query, limit, kind, module, language, None, format, fields,
+    )
+}
+
+/// Execute retrieve search with an optional workspace-relative path scope.
+pub fn retrieve_search_scoped(
+    indexer: &IndexFacade,
+    query: &str,
+    limit: usize,
+    kind: Option<&str>,
+    module: Option<&str>,
+    language: Option<&str>,
+    path_prefix: Option<&str>,
+    format: OutputFormat,
+    fields: Option<Vec<String>>,
+) -> ExitCode {
     use crate::symbol::context::ContextIncludes;
 
     // One kind vocabulary (SymbolKind::from_str) shared with the MCP and
@@ -642,7 +659,8 @@ pub fn retrieve_search(
         }
     });
 
-    let search_results = match indexer.search(query, limit, kind_filter, module, language) {
+    let search_results =
+        match indexer.search_scoped(query, limit, kind_filter, module, language, path_prefix) {
         Ok(results) => results,
         Err(error) => {
             let code = if matches!(&error, crate::IndexError::Storage(
