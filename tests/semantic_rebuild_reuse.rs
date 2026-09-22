@@ -348,3 +348,41 @@ fn endpoint_or_dimension_changes_cannot_reuse_cached_vectors() {
         workspace.assert_current_vectors(&["calendar_owner", "read_calendar"], dimension);
     }
 }
+
+
+fn pressure_source(count: usize) -> String {
+    let mut source = String::new();
+    for index in 0..count {
+        use std::fmt::Write as _;
+        writeln!(
+            &mut source,
+            "/// pressure embedding input {index:04}.\npub fn pressure_{index:04}() -> usize {{ {index} }}"
+        )
+        .unwrap();
+    }
+    source
+}
+
+#[test]
+fn large_force_rebuild_reuses_late_snapshot_hits_before_admitting_early_misses() {
+    const COUNT: usize = 4_500;
+    const CACHE_CAPACITY: usize = 4_096;
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.source(&pressure_source(COUNT));
+
+    workspace.rebuild();
+    assert_inputs(&endpoint, COUNT);
+
+    // The persisted cache holds the newest CACHE_CAPACITY inputs. On the next
+    // same-order rebuild, the first COUNT-CACHE_CAPACITY inputs are true misses.
+    // Miss admission must not evict the later compatible hits before lookup.
+    workspace.rebuild();
+    let documents = assert_inputs(&endpoint, COUNT - CACHE_CAPACITY);
+    assert!(
+        documents
+            .iter()
+            .all(|input| input.starts_with("pressure embedding input 0")),
+        "only the oldest uncached inputs should require embedding"
+    );
+}
