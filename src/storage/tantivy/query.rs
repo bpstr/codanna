@@ -210,8 +210,6 @@ impl DocumentIndex {
             };
             terms.push(Term::from_field_u64(self.schema.file_id, file_id));
         }
-        terms.sort_by(|left, right| left.serialized_value_bytes().cmp(right.serialized_value_bytes()));
-        terms.dedup();
         Ok(Some(terms))
     }
 
