@@ -18,6 +18,8 @@ use tantivy::{
 mod codec;
 mod graph;
 mod query;
+#[cfg(test)]
+mod ranking_diagnostics;
 mod schema;
 mod writer;
 
