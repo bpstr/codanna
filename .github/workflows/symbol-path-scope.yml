@@ -8,6 +8,7 @@ on:
       - 'src/indexing/pipeline/stages/discover.rs'
       - 'src/indexing/pipeline/stages/read.rs'
       - 'src/mcp/requests.rs'
+      - 'src/mcp/catalog.rs'
       - 'src/mcp/tools/search.rs'
       - 'src/mcp/tools/context.rs'
       - 'src/cli/args.rs'
@@ -15,6 +16,7 @@ on:
       - 'src/cli/commands/mcp.rs'
       - 'src/retrieve.rs'
       - 'tests/symbol_path_scope.rs'
+      - 'tests/symbol_scope_cli.rs'
       - '.github/workflows/symbol-path-scope.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -40,6 +42,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
       - name: Run subtree scope contracts
         shell: bash
         run: |
@@ -47,8 +51,8 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version
-            sha256sum src/storage/tantivy/query.rs src/indexing/pipeline/stages/discover.rs src/indexing/pipeline/stages/read.rs src/mcp/tools/context.rs tests/symbol_path_scope.rs
-            cargo test --locked --test symbol_path_scope -- --nocapture
+            sha256sum src/storage/tantivy/query.rs src/indexing/pipeline/stages/discover.rs src/indexing/pipeline/stages/read.rs src/mcp/tools/context.rs src/cli/commands/mcp.rs tests/symbol_path_scope.rs tests/symbol_scope_cli.rs
+            cargo test --locked --test symbol_path_scope --test symbol_scope_cli -- --nocapture
             cargo test --locked --lib indexing::pipeline::stages::read::tests -- --nocapture
             cargo test --locked --lib workspace_incremental_reads -- --nocapture
             cargo test --locked --lib run_incremental_ -- --nocapture
