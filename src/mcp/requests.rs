@@ -133,6 +133,9 @@ pub struct SearchSymbolsRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Limit symbol discovery to this workspace-relative path/subtree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -250,6 +253,9 @@ pub struct SearchContextRequest {
     /// Optional document collection filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Optional workspace-relative subtree applied to the code-symbol section only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_path_prefix: Option<String>,
 }
 
 fn default_depth() -> u32 {
