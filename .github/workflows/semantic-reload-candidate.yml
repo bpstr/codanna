@@ -1,0 +1,87 @@
+name: Semantic reload candidate
+on:
+  pull_request:
+    branches: [fix/code-embedding-dimensions]
+    paths:
+      - 'tests/semantic_reload_retention.rs'
+      - 'tests/support/retrieval_body_cases.rs'
+      - 'contributing/scripts/qualify-semantic-reload.py'
+      - '.github/workflows/semantic-reload-candidate.yml'
+permissions:
+  contents: write
+concurrency:
+  group: semantic-reload-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  candidate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify frozen failed-reload baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          cargo fmt --all
+          sha256sum tests/semantic_reload_retention.rs tests/support/retrieval_body_cases.rs > "$RUNNER_TEMP/reload-fixtures.sha256"
+          status=0
+          cargo test --locked --test semantic_reload_retention -- --nocapture > "$RUNNER_TEMP/reload-baseline.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/reload-baseline.log"
+          test "$status" -eq 101
+          grep -F '1 passed; 2 failed; 0 ignored' "$RUNNER_TEMP/reload-baseline.log"
+      - name: Apply pinned repair and verify unchanged fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 contributing/scripts/qualify-semantic-reload.py
+          cargo fmt --all
+          sha256sum -c "$RUNNER_TEMP/reload-fixtures.sha256"
+          {
+            git rev-parse HEAD
+            cargo test --locked --test semantic_reload_retention --test semantic_rebuild_reuse --test code_dimension_contract --test index_plan_cli --test body_index_plan_cli -- --nocapture
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/reload-candidate.log"
+      - name: Preserve tested source and immutable Git objects only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          paths = ['src/indexing/facade.rs', 'tests/semantic_reload_retention.rs', 'tests/support/retrieval_body_cases.rs']
+          changes = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
+          if set(changes) - set(paths):
+              raise SystemExit(f'Unexpected changed sources: {changes}')
+          rows = []
+          for name in paths:
+              data = pathlib.Path(name).read_bytes()
+              result = subprocess.run(['gh', 'api', '--method', 'POST', f'repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs', '--input', '-'], input=json.dumps({'encoding': 'utf-8', 'content': data.decode()}), text=True, capture_output=True, check=True)
+              sha = json.loads(result.stdout)['sha']
+              if sha != subprocess.check_output(['git', 'hash-object', name], text=True).strip():
+                  raise SystemExit('Published blob mismatch')
+              rows.append({'path': name, 'sha': sha, 'sha256': hashlib.sha256(data).hexdigest()})
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'reload-blobs.json').write_text(json.dumps(rows, indent=2))
+          PY
+          tar -czf "$RUNNER_TEMP/reload-tested-source.tar.gz" src/indexing/facade.rs tests/semantic_reload_retention.rs tests/support/retrieval_body_cases.rs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semantic-reload-candidate
+          path: ${{ runner.temp }}/reload-*
+          retention-days: 14
+          if-no-files-found: error
