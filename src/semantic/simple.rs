@@ -633,6 +633,14 @@ impl SimpleSemanticSearch {
         self.embeddings.len()
     }
 
+    /// Snapshot the symbol IDs that currently have semantic vectors.
+    ///
+    /// This is diagnostic metadata only; callers must not treat vector presence
+    /// as relevance or freshness evidence.
+    pub(crate) fn embedding_ids(&self) -> Vec<SymbolId> {
+        self.embeddings.keys().copied().collect()
+    }
+
     /// Clear all embeddings
     pub fn clear(&mut self) {
         for id in self.embeddings.keys().copied().collect::<Vec<_>>() {
