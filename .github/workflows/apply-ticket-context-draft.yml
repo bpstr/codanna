@@ -48,8 +48,8 @@ jobs:
               if actual != sha:
                   raise SystemExit(f'Refusing to overwrite a changed source: {path}: {actual} != {sha}')
           encoded = ''.join(pathlib.Path(f'contributing/retrieval/.ticket-context-patch-{i}.b64').read_text().strip() for i in (1, 2, 3))
-          # Correct two known duplicated characters in the transport text only.
-          # The exact reviewed decompressed patch must still match its SHA-256.
+          # Correct two known duplicated characters in transport; the exact
+          # reviewed decompressed patch must still match its SHA-256.
           encoded = encoded.replace('Y6MRGG1sW', 'Y6MRG1sW').replace('CHYeKKzp', 'CHYeKzp')
           if len(encoded) != 20288:
               raise SystemExit('Unexpected encoded patch length')
@@ -66,9 +66,13 @@ jobs:
           for path in expected:
               if path.endswith('.rs'):
                   subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true', path], check=True)
-          subprocess.run(['git', 'diff', '--check'], check=True)
-          subprocess.run(['git', 'add', '--', *expected], check=True)
-          subprocess.run(['git', 'rm', '--', '.github/workflows/apply-ticket-context-draft.yml', *[f'contributing/retrieval/.ticket-context-patch-{i}.b64' for i in (1, 2, 3)]], check=True)
+          # Actions contents:write cannot modify workflow files. The connected
+          # GitHub app will apply the reviewed CI edit and remove this temporary
+          # delivery workflow separately. Never widen token permissions here.
+          subprocess.run(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '--', '.github/workflows/ticket-code-fusion.yml'], check=True)
+          source_paths = [path for path in expected if not path.startswith('.github/')]
+          subprocess.run(['git', 'add', '--', *source_paths], check=True)
+          subprocess.run(['git', 'rm', '--', *[f'contributing/retrieval/.ticket-context-patch-{i}.b64' for i in (1, 2, 3)]], check=True)
           subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
           PY
       - name: Publish only to the existing draft branch
