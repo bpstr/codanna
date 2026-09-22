@@ -10,7 +10,6 @@ use tantivy::{
 
 use super::{DocumentIndex, SearchResult};
 
-
 const DISCOVERY_CANDIDATE_MULTIPLIER: usize = 16;
 const DISCOVERY_CANDIDATE_FLOOR: usize = 64;
 const DISCOVERY_CANDIDATE_CAP: usize = 200;
@@ -19,8 +18,20 @@ fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
     if query.chars().any(|character| {
         matches!(
             character,
-            ':' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '~' | '*' | '?' | '\\' | '/'
-                | '^' | '+'
+            ':' | '"'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '~'
+                | '*'
+                | '?'
+                | '\\'
+                | '/'
+                | '^'
+                | '+'
         )
     }) || query
         .split_whitespace()
@@ -30,8 +41,8 @@ fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
     }
 
     const STOPWORDS: &[&str] = &[
-        "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to",
-        "was", "were", "what", "where", "which", "with",
+        "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to", "was",
+        "were", "what", "where", "which", "with",
     ];
 
     let mut terms = std::collections::BTreeSet::new();

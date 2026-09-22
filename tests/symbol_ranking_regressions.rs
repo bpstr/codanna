@@ -1,10 +1,10 @@
 //! Runtime code-symbol discovery regressions selected by PR #51.
 //! Synthetic local sources only; semantic indexing stays disabled.
 
+use codanna::Settings;
 use codanna::indexing::facade::IndexFacade;
 use codanna::mcp::{CodeIntelligenceServer, SearchSymbolsRequest};
 use codanna::storage::SearchResult;
-use codanna::Settings;
 use rmcp::handler::server::wrapper::Parameters;
 use std::path::Path;
 use std::sync::Arc;
@@ -154,7 +154,10 @@ fn multi_concept_topic_owners_survive_generic_exact_name_crowding() {
         assert!(
             rank(&results, expected).is_some(),
             "{expected} missing from top five for {query}: {:?}",
-            results.iter().map(|hit| hit.name.as_str()).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|hit| hit.name.as_str())
+                .collect::<Vec<_>>()
         );
     }
 }
