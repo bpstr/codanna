@@ -39,54 +39,64 @@ impl CodeIntelligenceServer {
         let code_limit = request.code_limit as usize;
         let code_path_prefix = request.code_path_prefix.clone();
         let code = crate::runtime::read(&self.facade, move |indexer| {
-            let mut output = String::new();
-            match indexer.search_scoped(
+            let results = indexer.search_scoped(
                 &code_query,
                 code_limit,
                 None,
                 None,
                 None,
                 code_path_prefix.as_deref(),
-            ) {
-                Ok(results) if results.is_empty() => {
-                    output.push_str("No matching code symbols.\n\n")
-                }
-                Ok(results) => {
-                    for (i, result) in results.iter().enumerate() {
+            )?;
+            let mut output = String::new();
+            if results.is_empty() {
+                output.push_str("No matching code symbols.\n\n");
+            } else {
+                for (i, result) in results.iter().enumerate() {
+                    output.push_str(&format!(
+                        "{}. {} ({:?}) at {}:{} [score {:.2}; raw lexical candidate]\n",
+                        i + 1,
+                        result.name,
+                        result.kind,
+                        result.file_path,
+                        result.line,
+                        result.score
+                    ));
+                    if let Some((matched, total)) =
+                        crate::storage::tantivy::discovery_term_coverage(&code_query, result)
+                    {
                         output.push_str(&format!(
-                            "{}. {} ({:?}) at {}:{} [score {:.2}; raw lexical candidate]\n",
-                            i + 1,
-                            result.name,
-                            result.kind,
-                            result.file_path,
-                            result.line,
-                            result.score
+                            "   Distinct query-term coverage: {matched}/{total}\n"
                         ));
-                        if let Some((matched, total)) =
-                            crate::storage::tantivy::discovery_term_coverage(&code_query, result)
-                        {
-                            output.push_str(&format!(
-                                "   Distinct query-term coverage: {matched}/{total}\n"
-                            ));
-                        }
-                        if let Some(signature) = &result.signature {
-                            output.push_str(&format!("   Signature: {signature}\n"));
-                        }
-                        if let Some(doc) = &result.doc_comment {
-                            if let Some(first) = doc.lines().next() {
-                                output.push_str(&format!("   Doc: {first}\n"));
-                            }
+                    }
+                    if let Some(signature) = &result.signature {
+                        output.push_str(&format!("   Signature: {signature}\n"));
+                    }
+                    if let Some(doc) = &result.doc_comment {
+                        if let Some(first) = doc.lines().next() {
+                            output.push_str(&format!("   Doc: {first}\n"));
                         }
                     }
-                    output.push('\n');
                 }
-                Err(error) => output.push_str(&format!("Code search unavailable: {error}\n\n")),
+                output.push('\n');
             }
-            output
+            Ok::<_, crate::IndexError>(output)
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        output.push_str(&code);
+        match code {
+            Ok(code) => output.push_str(&code),
+            Err(crate::IndexError::Storage(crate::StorageError::InvalidFieldValue {
+                field,
+                reason,
+            })) if field == "path_prefix" => {
+                // Caller mistakes are not an unavailable source or successful
+                // empty search. Do not contact other sources after this error.
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "code_path_prefix: {reason}"
+                ))]));
+            }
+            Err(error) => output.push_str(&format!("Code search unavailable: {error}\n\n")),
+        }
 
         // Documents: query a snapshot. Indexing remains a separate writer operation.
         output.push_str("## Documents\n");
