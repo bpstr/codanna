@@ -265,9 +265,9 @@ fn scope_tracks_reindex_deletion_and_reopen_without_global_fallback() {
     let results = fixture.scoped(REFERENCE, 5);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].name, "replacementCalendar");
-    let settings = fixture.index.settings().clone();
+    let settings = Arc::clone(fixture.index.settings());
     drop(fixture.index);
-    let reopened = IndexFacade::new(Arc::new(settings)).unwrap();
+    let reopened = IndexFacade::new(settings).unwrap();
     let results = reopened
         .search_scoped("calendar settings", 5, None, None, None, Some(REFERENCE))
         .unwrap();
