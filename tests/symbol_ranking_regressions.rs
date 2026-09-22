@@ -222,7 +222,7 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
         .join("\n");
     assert!(text.contains("Found 5 result(s)"));
     assert!(text.contains("useAccountPresentation"));
-    assert!(text.contains("Lexical candidate score:"));
+    assert!(text.contains("Score:") && text.contains("raw lexical candidate score"));
     assert!(text.contains("Distinct query-term coverage: 2/2"));
 
     let explicit = server
