@@ -19,6 +19,7 @@ mod codec;
 mod graph;
 mod query;
 mod schema;
+mod scope;
 mod writer;
 
 pub use codec::VectorMetadata;
@@ -78,6 +79,10 @@ pub struct DocumentIndex {
     /// relativization applies at symbol materialization only. Ordered
     /// workspace_root first, then registered roots longest-first.
     strip_bases: Vec<PathBuf>,
+    /// Canonical configured workspace, distinct from external indexed roots.
+    workspace_root: Option<PathBuf>,
+    /// Bounded reader-generation-keyed inventory; not an authorization cache.
+    scope_inventory: RwLock<Option<std::sync::Arc<scope::ScopeInventory>>>,
 }
 
 impl std::fmt::Debug for DocumentIndex {
@@ -150,6 +155,11 @@ impl DocumentIndex {
             pending_symbol_counter: Mutex::new(None),
             pending_file_counter: Mutex::new(None),
             strip_bases: Self::collect_strip_bases(settings),
+            workspace_root: settings
+                .workspace_root
+                .as_ref()
+                .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone())),
+            scope_inventory: RwLock::new(None),
         })
     }
 

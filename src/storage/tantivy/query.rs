@@ -135,83 +135,6 @@ pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
 }
 
 impl DocumentIndex {
-    fn normalize_path_prefix(path_prefix: &str) -> StorageResult<String> {
-        let portable = path_prefix.trim().replace('\\', "/");
-        if portable.is_empty() {
-            return Err(StorageError::InvalidFieldValue {
-                field: "path_prefix".into(),
-                reason: "path prefix must be a non-empty workspace-relative path".into(),
-            });
-        }
-        if portable.starts_with('/') || portable.as_bytes().get(1).is_some_and(|byte| *byte == b':')
-        {
-            return Err(StorageError::InvalidFieldValue {
-                field: "path_prefix".into(),
-                reason: "path prefix must be workspace-relative".into(),
-            });
-        }
-
-        let mut parts = Vec::new();
-        for part in portable.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    return Err(StorageError::InvalidFieldValue {
-                        field: "path_prefix".into(),
-                        reason: "path prefix cannot escape the workspace with '..'".into(),
-                    });
-                }
-                _ => parts.push(part),
-            }
-        }
-        Ok(parts.join("/"))
-    }
-
-    /// Resolve a portable workspace-relative subtree to the current file IDs.
-    /// The returned terms are applied before TopDocs collection.
-    fn file_scope_terms(&self, path_prefix: &str) -> StorageResult<Option<Vec<Term>>> {
-        let prefix = Self::normalize_path_prefix(path_prefix)?;
-        if prefix.is_empty() {
-            return Ok(None);
-        }
-        let prefix_with_separator = format!("{prefix}/");
-        let searcher = self.reader.searcher();
-        let query = TermQuery::new(
-            Term::from_field_text(self.schema.doc_type, "file_info"),
-            IndexRecordOption::Basic,
-        );
-        let mut addresses: Vec<_> = searcher
-            .search(&query, &DocSetCollector)?
-            .into_iter()
-            .collect();
-        addresses.sort_unstable();
-
-        let mut terms = Vec::new();
-        for address in addresses {
-            let doc: Document = searcher.doc(address)?;
-            let Some(raw_path) = doc
-                .get_first(self.schema.file_path)
-                .and_then(|value| value.as_str())
-            else {
-                continue;
-            };
-            let portable_path = self
-                .to_portable_file_path(raw_path)
-                .unwrap_or_else(|| raw_path.replace('\\', "/"));
-            if portable_path != prefix && !portable_path.starts_with(&prefix_with_separator) {
-                continue;
-            }
-            let Some(file_id) = doc
-                .get_first(self.schema.file_id)
-                .and_then(|value| value.as_u64())
-            else {
-                continue;
-            };
-            terms.push(Term::from_field_u64(self.schema.file_id, file_id));
-        }
-        Ok(Some(terms))
-    }
-
     /// Search returning every match: count-first, then an exact-limit drain.
     ///
     /// Replaces fixed `with_limit(N)` bounds that silently truncated dense
@@ -355,12 +278,11 @@ impl DocumentIndex {
         }
 
         if let Some(path_prefix) = path_prefix {
-            if let Some(terms) = self.file_scope_terms(path_prefix)? {
-                if terms.is_empty() {
-                    return Ok(Vec::new());
-                }
-                all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
+            let terms = self.file_scope_terms(&searcher, path_prefix)?;
+            if terms.is_empty() {
+                return Ok(Vec::new());
             }
+            all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
         }
 
         let final_query = BooleanQuery::new(all_clauses);

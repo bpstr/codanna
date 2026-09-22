@@ -37,7 +37,9 @@ impl ScopeInventory {
         }
         // Exact-file matches and descendants are separate ranges. A lexical
         // neighbor such as Calendar.ts.backup sorts before Calendar.ts/.
-        let exact_start = self.entries.partition_point(|entry| entry.path.as_str() < prefix);
+        let exact_start = self
+            .entries
+            .partition_point(|entry| entry.path.as_str() < prefix);
         let descendants = format!("{prefix}/");
         let descendant_start = self
             .entries
@@ -62,7 +64,9 @@ fn normalize_prefix(prefix: &str) -> StorageResult<String> {
         reason: reason.into(),
     };
     if portable.is_empty() {
-        return Err(invalid("path prefix must be a non-empty workspace-relative path"));
+        return Err(invalid(
+            "path prefix must be a non-empty workspace-relative path",
+        ));
     }
     if portable.starts_with('/') || portable.as_bytes().get(1) == Some(&b':') {
         return Err(invalid("path prefix must be workspace-relative"));
@@ -127,22 +131,38 @@ impl DocumentIndex {
             else {
                 continue;
             };
-            let Some(file_id) = doc.get_first(self.schema.file_id).and_then(|value| value.as_u64()) else {
+            let Some(file_id) = doc
+                .get_first(self.schema.file_id)
+                .and_then(|value| value.as_u64())
+            else {
                 continue;
             };
             path_bytes = path_bytes.saturating_add(path.capacity());
             entries.push(ScopeEntry { path, file_id });
         }
-        entries.sort_by(|left, right| left.path.cmp(&right.path).then(left.file_id.cmp(&right.file_id)));
+        entries.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.file_id.cmp(&right.file_id))
+        });
         let logical_bytes = path_bytes.saturating_add(
-            entries.capacity().saturating_mul(std::mem::size_of::<ScopeEntry>()),
+            entries
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ScopeEntry>()),
         );
-        let inventory = Arc::new(ScopeInventory { generation, entries, logical_bytes });
+        let inventory = Arc::new(ScopeInventory {
+            generation,
+            entries,
+            logical_bytes,
+        });
         if inventory.cacheable() {
             if let Ok(mut cache) = self.scope_inventory.write() {
                 // A slow old reader may finish after a new one. It can use its
                 // local snapshot but must not replace a newer cached inventory.
-                if cache.as_ref().is_none_or(|item| item.generation <= generation) {
+                if cache
+                    .as_ref()
+                    .is_none_or(|item| item.generation <= generation)
+                {
                     *cache = Some(Arc::clone(&inventory));
                 }
             }
@@ -150,9 +170,15 @@ impl DocumentIndex {
         Ok(inventory)
     }
 
-    pub(super) fn file_scope_terms(&self, searcher: &Searcher, prefix: &str) -> StorageResult<Vec<Term>> {
+    pub(super) fn file_scope_terms(
+        &self,
+        searcher: &Searcher,
+        prefix: &str,
+    ) -> StorageResult<Vec<Term>> {
         let prefix = normalize_prefix(prefix)?;
-        Ok(self.scope_inventory_for(searcher)?.terms(&prefix, self.schema.file_id))
+        Ok(self
+            .scope_inventory_for(searcher)?
+            .terms(&prefix, self.schema.file_id))
     }
 }
 
@@ -164,10 +190,16 @@ mod tests {
     use crate::{FileId, Settings};
 
     fn register(index: &DocumentIndex, id: u32, path: &str) {
-        index.store_file_registration(&FileRegistration {
-            path: path.into(), file_id: FileId::new(id).unwrap(), content_hash: "fixture".into(),
-            language_id: LanguageId::new("rust"), timestamp: 0, mtime: 0,
-        }).unwrap();
+        index
+            .store_file_registration(&FileRegistration {
+                path: path.into(),
+                file_id: FileId::new(id).unwrap(),
+                content_hash: "fixture".into(),
+                language_id: LanguageId::new("rust"),
+                timestamp: 0,
+                mtime: 0,
+            })
+            .unwrap();
     }
 
     #[test]
@@ -183,11 +215,22 @@ mod tests {
         register(&index, 2, "src/new.rs");
         index.commit_batch().unwrap();
         let new = index.reader.searcher();
-        assert_ne!(old.generation().generation_id(), new.generation().generation_id());
+        assert_ne!(
+            old.generation().generation_id(),
+            new.generation().generation_id()
+        );
         assert_eq!(index.file_scope_terms(&new, "src").unwrap().len(), 2);
         assert_eq!(index.file_scope_terms(&old, "src").unwrap().len(), 1);
-        assert_eq!(index.scope_inventory.read().unwrap().as_ref().unwrap().generation,
-            new.generation().generation_id());
+        assert_eq!(
+            index
+                .scope_inventory
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .generation,
+            new.generation().generation_id()
+        );
     }
 
     #[test]
@@ -202,12 +245,21 @@ mod tests {
         let searcher = index.reader.searcher();
         let cold = index.scope_inventory_for(&searcher).unwrap();
         for group in 0..8 {
-            assert_eq!(index.file_scope_terms(&searcher, &format!("src/group{group}")).unwrap().len(), 256);
+            assert_eq!(
+                index
+                    .file_scope_terms(&searcher, &format!("src/group{group}"))
+                    .unwrap()
+                    .len(),
+                256
+            );
             let warm = index.scope_inventory_for(&searcher).unwrap();
             assert!(Arc::ptr_eq(&cold, &warm));
         }
-        println!("scope_inventory: files={} logical_bytes={} warm_queries=8 shared_inventory=true",
-            cold.entries.len(), cold.logical_bytes);
+        println!(
+            "scope_inventory: files={} logical_bytes={} warm_queries=8 shared_inventory=true",
+            cold.entries.len(),
+            cold.logical_bytes
+        );
     }
 
     #[test]
@@ -221,7 +273,10 @@ mod tests {
         }
         index.commit_batch().unwrap();
         let searcher = index.reader.searcher();
-        assert_eq!(index.file_scope_terms(&searcher, "src").unwrap().len(), 20_000);
+        assert_eq!(
+            index.file_scope_terms(&searcher, "src").unwrap().len(),
+            20_000
+        );
         assert!(index.scope_inventory.read().unwrap().is_none());
     }
 }
