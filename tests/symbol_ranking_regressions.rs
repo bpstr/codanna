@@ -222,6 +222,7 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
             kind: None,
             module: None,
             lang: Some("typescript".into()),
+            path_prefix: None,
         }))
         .await
         .unwrap();
@@ -245,6 +246,7 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
             kind: None,
             module: None,
             lang: Some("typescript".into()),
+            path_prefix: None,
         }))
         .await
         .unwrap();
