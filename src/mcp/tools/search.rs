@@ -125,7 +125,7 @@ impl CodeIntelligenceServer {
         crate::mcp::requests::validate_search_limit(limit)?;
         if let Err(error) = self.prepare_semantic_query().await {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {error}"
+                "Semantic search failed: {error}\nNo code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery."
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
@@ -259,7 +259,7 @@ impl CodeIntelligenceServer {
         crate::mcp::requests::validate_search_limit(limit)?;
         if let Err(error) = self.prepare_semantic_query().await {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {error}"
+                "Semantic search failed: {error}\nNo code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery."
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
