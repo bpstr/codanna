@@ -1,9 +1,9 @@
 //! Code-symbol ranking ablations for the calendar investigation.
 //! Synthetic local sources only; no semantic model or production index.
 
+use codanna::Settings;
 use codanna::indexing::facade::IndexFacade;
 use codanna::storage::SearchResult;
-use codanna::Settings;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -106,7 +106,9 @@ impl Fixture {
     }
 
     fn raw(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        self.index.search(query, limit, None, None, Some("typescript")).unwrap()
+        self.index
+            .search(query, limit, None, None, Some("typescript"))
+            .unwrap()
     }
 }
 
@@ -124,12 +126,14 @@ fn rank(results: &[SearchResult], expected: &str) -> Option<usize> {
 }
 
 fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
-    if query
-        .chars()
-        .any(|c| matches!(c, ':' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '~' | '*' | '?' | '\\' | '/'))
-        || query
-            .split_whitespace()
-            .any(|word| matches!(word, "AND" | "OR" | "NOT"))
+    if query.chars().any(|c| {
+        matches!(
+            c,
+            ':' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '~' | '*' | '?' | '\\' | '/'
+        )
+    }) || query
+        .split_whitespace()
+        .any(|word| matches!(word, "AND" | "OR" | "NOT"))
     {
         return None;
     }
@@ -187,13 +191,41 @@ struct Case {
 }
 
 const TOPIC_CASES: &[Case] = &[
-    Case { id: "calendar-settings", query: "calendar settings", expected: "useAccountPresentation" },
-    Case { id: "calendar-feature", query: "calendar feature", expected: "calendarModule" },
-    Case { id: "integration-binding", query: "integration binding creation subscription github development activity eligible webhook targets", expected: "createIntegrationBinding" },
-    Case { id: "account-inheritance", query: "backend resolves account first day of week inheritance from workspace default GET me", expected: "getCurrentAccount" },
-    Case { id: "workspace-preferences", query: "workspace default locale timezone calendar settings inheritance", expected: "resolveWorkspacePreferences" },
-    Case { id: "upload-policy", query: "attachment upload policy configured mebibyte limit", expected: "enforceUploadPolicy" },
-    Case { id: "retry-policy", query: "delivery retry acknowledgement loss duplicate processing backoff", expected: "retryDeliveryAfterAckLoss" },
+    Case {
+        id: "calendar-settings",
+        query: "calendar settings",
+        expected: "useAccountPresentation",
+    },
+    Case {
+        id: "calendar-feature",
+        query: "calendar feature",
+        expected: "calendarModule",
+    },
+    Case {
+        id: "integration-binding",
+        query: "integration binding creation subscription github development activity eligible webhook targets",
+        expected: "createIntegrationBinding",
+    },
+    Case {
+        id: "account-inheritance",
+        query: "backend resolves account first day of week inheritance from workspace default GET me",
+        expected: "getCurrentAccount",
+    },
+    Case {
+        id: "workspace-preferences",
+        query: "workspace default locale timezone calendar settings inheritance",
+        expected: "resolveWorkspacePreferences",
+    },
+    Case {
+        id: "upload-policy",
+        query: "attachment upload policy configured mebibyte limit",
+        expected: "enforceUploadPolicy",
+    },
+    Case {
+        id: "retry-policy",
+        query: "delivery retry acknowledgement loss duplicate processing backoff",
+        expected: "retryDeliveryAfterAckLoss",
+    },
 ];
 
 #[test]
@@ -223,7 +255,10 @@ fn current_top_k_loses_multi_concept_owners_that_exist_in_the_bounded_candidate_
     }
 
     println!("{}", serde_json::to_string_pretty(&rows).unwrap());
-    assert!(top5_misses >= 2, "fixture must reproduce noisy top-k discovery");
+    assert!(
+        top5_misses >= 2,
+        "fixture must reproduce noisy top-k discovery"
+    );
     assert!(
         recoverable >= 2,
         "fixture must distinguish rank loss from absent candidates"
@@ -276,8 +311,13 @@ fn identifier_single_term_absent_and_explicit_query_controls_are_preserved_by_th
         assert_eq!(raw.first().map(|hit| hit.name.as_str()), Some(query));
         let reranked = rerank_r1(query, raw.clone(), 5);
         assert_eq!(
-            reranked.iter().map(|hit| (&hit.name, hit.score)).collect::<Vec<_>>(),
-            raw.iter().map(|hit| (&hit.name, hit.score)).collect::<Vec<_>>()
+            reranked
+                .iter()
+                .map(|hit| (&hit.name, hit.score))
+                .collect::<Vec<_>>(),
+            raw.iter()
+                .map(|hit| (&hit.name, hit.score))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -289,8 +329,13 @@ fn identifier_single_term_absent_and_explicit_query_controls_are_preserved_by_th
         let raw = fixture.raw(query, 20);
         let reranked = rerank_r1(query, raw.clone(), 20);
         assert_eq!(
-            reranked.iter().map(|hit| (&hit.name, hit.score)).collect::<Vec<_>>(),
-            raw.iter().map(|hit| (&hit.name, hit.score)).collect::<Vec<_>>()
+            reranked
+                .iter()
+                .map(|hit| (&hit.name, hit.score))
+                .collect::<Vec<_>>(),
+            raw.iter()
+                .map(|hit| (&hit.name, hit.score))
+                .collect::<Vec<_>>()
         );
     }
 }
@@ -302,5 +347,8 @@ fn filters_apply_before_any_test_local_reranking() {
         .index
         .search("calendar settings", 40, None, None, Some("rust"))
         .unwrap();
-    assert!(hits.is_empty(), "language filter must not be filled after ranking");
+    assert!(
+        hits.is_empty(),
+        "language filter must not be filled after ranking"
+    );
 }
