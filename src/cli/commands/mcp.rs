@@ -648,7 +648,14 @@ pub async fn run(
                 .as_ref()
                 .and_then(|m| m.get("path_prefix"))
                 .and_then(|v| v.as_str());
-            match facade.search_scoped(q, limit as usize, kind_filter, module, language, path_prefix) {
+            match facade.search_scoped(
+                q,
+                limit as usize,
+                kind_filter,
+                module,
+                language,
+                path_prefix,
+            ) {
                 Ok(results) => Some(results),
                 Err(crate::IndexError::Storage(crate::StorageError::InvalidFieldValue {
                     field,
@@ -1303,12 +1310,10 @@ pub async fn run(
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 if call_result.is_error == Some(true) {
-                    let envelope: Envelope<()> = Envelope::error(
-                        crate::io::envelope::ResultCode::InvalidQuery,
-                        text,
-                    )
-                    .with_entity_type(EntityType::SearchResult)
-                    .with_query(query);
+                    let envelope: Envelope<()> =
+                        Envelope::error(crate::io::envelope::ResultCode::InvalidQuery, text)
+                            .with_entity_type(EntityType::SearchResult)
+                            .with_query(query);
                     emit_envelope_and_exit(envelope);
                 }
                 let envelope = Envelope::success(serde_json::json!({"text": text}))
