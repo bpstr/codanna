@@ -176,9 +176,21 @@ fn evaluate(fixture: &Fixture, cases: &[Case]) -> ((usize, f64), (usize, f64)) {
     for case in cases {
         let baseline = fixture.raw(case.query, 5);
         let reranked = r1(fixture.raw(case.query, 80), case.query, 5);
-        r0_hits += usize::from(reciprocal_rank(&baseline, case.name) > 0.0);
+        let r0_rank = baseline
+            .iter()
+            .position(|result| result.name == case.name)
+            .map(|rank| rank + 1);
+        let r1_rank = reranked
+            .iter()
+            .position(|result| result.name == case.name)
+            .map(|rank| rank + 1);
+        println!(
+            "case={} expected={} r0_rank={r0_rank:?} r1_rank={r1_rank:?}",
+            case.id, case.name
+        );
+        r0_hits += usize::from(r0_rank.is_some());
         r0_rr += reciprocal_rank(&baseline, case.name);
-        r1_hits += usize::from(reciprocal_rank(&reranked, case.name) > 0.0);
+        r1_hits += usize::from(r1_rank.is_some());
         r1_rr += reciprocal_rank(&reranked, case.name);
     }
     (
