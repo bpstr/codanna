@@ -313,9 +313,19 @@ fn evaluate(fixture: &Fixture, cases: &[Case]) -> ((usize, f64), (usize, f64)) {
             .iter()
             .position(|result| result.name == case.name)
             .map(|rank| rank + 1);
+        let candidate_rank_200 = fixture
+            .raw(case.query, 200)
+            .iter()
+            .position(|result| result.name == case.name)
+            .map(|rank| rank + 1);
         println!(
-            "case={} expected={} r0_rank={r0_rank:?} r1_rank={r1_rank:?}",
+            "case={} expected={} r0_rank={r0_rank:?} r1_rank={r1_rank:?} candidate_rank_200={candidate_rank_200:?}",
             case.id, case.name
+        );
+        assert!(
+            candidate_rank_200.is_some(),
+            "labeled owner {} is absent even from the bounded 200-candidate pool",
+            case.name
         );
         r0_hits += usize::from(r0_rank.is_some());
         r0_rr += reciprocal_rank(&baseline, case.name);
