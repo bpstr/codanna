@@ -392,7 +392,6 @@ fn large_force_rebuild_reuses_late_snapshot_hits_before_admitting_early_misses()
     assert_inputs(&endpoint, COUNT - CACHE_CAPACITY);
 }
 
-
 fn duplicate_pressure_source(count: usize) -> String {
     let mut source = String::new();
     for index in 0..count {
