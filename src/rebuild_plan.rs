@@ -299,7 +299,10 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         report.status = "partial";
         report.warnings.push("Generic grammar files were not parsed, even if cached, to prohibit implicit downloads; their embedding inputs are unknown, not zero.");
     }
-    if report.input_policy_rejections.is_some_and(|count| count > 0) {
+    if report
+        .input_policy_rejections
+        .is_some_and(|count| count > 0)
+    {
         report.status = if report.status == "partial" {
             "partial_blocked"
         } else {

@@ -323,7 +323,9 @@ fn tokenizer_encoding_failure_is_blocked_not_reported_as_a_token_count() {
     let tokenizer = tokenizers::Tokenizer::new(tokenizers::models::wordlevel::WordLevel::default());
     // Valid tokenizer JSON, but its unknown token is absent from the vocabulary.
     assert!(tokenizer.encode(INPUTS[0], true).is_err());
-    tokenizer.save(fixture.root().join("tokenizer.json"), false).unwrap();
+    tokenizer
+        .save(fixture.root().join("tokenizer.json"), false)
+        .unwrap();
     fixture.configure(true, Some(2), "tokenizer_path = \"tokenizer.json\"");
     let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(3));
@@ -336,7 +338,9 @@ fn tokenizer_encoding_failure_is_blocked_not_reported_as_a_token_count() {
 #[test]
 fn nonregular_optional_input_files_are_rejected_before_reading() {
     let fixture = Fixture::new();
-    let cache = fixture.root().join(".codanna/index/semantic/embedding-cache.json");
+    let cache = fixture
+        .root()
+        .join(".codanna/index/semantic/embedding-cache.json");
     std::fs::create_dir_all(&cache).unwrap();
     let output = fixture.run(&[]);
     assert!(!output.status.success());
