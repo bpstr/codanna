@@ -1,0 +1,59 @@
+name: Body-aware rebuild plan
+on:
+  pull_request:
+    branches: [fix/body-representation-validation]
+    paths:
+      - 'src/**'
+      - 'tests/index_plan_cli.rs'
+      - 'tests/body_index_plan_cli.rs'
+      - 'contributing/retrieval/body-aware-rebuild-plan*'
+      - '.github/workflows/body-aware-rebuild-plan.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: body-aware-plan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify offline planner contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/rebuild_plan.rs src/symbol_representation.rs tests/index_plan_cli.rs tests/body_index_plan_cli.rs
+            cargo test --locked --test index_plan_cli -- --nocapture
+            cargo test --locked --test body_index_plan_cli -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/body-aware-rebuild-plan.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: body-aware-rebuild-plan
+          path: ${{ runner.temp }}/body-aware-rebuild-plan.log
+          retention-days: 14
+          if-no-files-found: error
