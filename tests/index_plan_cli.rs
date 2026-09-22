@@ -95,7 +95,8 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Option<Vec<u8>>, Option<std::time::Sy
             result.insert(path.clone(), (None, metadata.modified().ok()));
             for entry in std::fs::read_dir(&path).unwrap() { pending.push(entry.unwrap().path()); }
         } else {
-            result.insert(path, (Some(std::fs::read(&path).unwrap()), metadata.modified().ok()));
+            let bytes = std::fs::read(&path).unwrap();
+            result.insert(path, (Some(bytes), metadata.modified().ok()));
         }
     }
     result
@@ -195,4 +196,44 @@ fn invalid_roots_and_settings_fail_without_a_successful_empty_report() {
     let output = fixture.run(&[]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn local_identity_stays_unknown_without_initializing_a_model() {
+    let fixture = Fixture::new();
+    let config = fixture.root().join(".codanna/settings.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        &format!("remote_url = {:?}\n", fixture.url), ""
+    );
+    std::fs::write(config, text).unwrap();
+    let report = fixture.plan(&[]);
+    assert_eq!(report["backend"], "local");
+    assert_eq!(report["cache_lookup"], "local_model_identity_not_loaded");
+    assert!(report["snapshot_hit_inputs"].is_null());
+    assert!(report["over_budget_inputs"].is_null());
+}
+
+#[test]
+fn generic_grammar_files_are_partial_not_silently_downloaded() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root().join("src/module.lua"), "function calendar() return 1 end\n").unwrap();
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "partial");
+    assert_eq!(report["files_discovered"], 2);
+    assert_eq!(report["files_parsed"], 1);
+    assert_eq!(report["files_requiring_generic_parser"], 1);
+}
+
+#[test]
+fn corrupt_index_documents_are_not_opened_by_source_planning() {
+    let fixture = Fixture::new();
+    fixture.seed(None);
+    let index = fixture.root().join(".codanna/index/tantivy");
+    std::fs::create_dir_all(&index).unwrap();
+    std::fs::write(index.join("meta.json"), "deliberately corrupt index").unwrap();
+    let report = fixture.plan(&[]);
+    assert_eq!(report["snapshot_hit_inputs"], 2);
+    assert_eq!(report["status"], "complete");
 }
