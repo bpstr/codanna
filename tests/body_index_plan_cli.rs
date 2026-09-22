@@ -24,7 +24,11 @@ impl Fixture {
         let endpoint = TcpListener::bind("127.0.0.1:0").unwrap();
         endpoint.set_nonblocking(true).unwrap();
         let url = format!("http://{}", endpoint.local_addr().unwrap());
-        let fixture = Self { temp, endpoint, url };
+        let fixture = Self {
+            temp,
+            endpoint,
+            url,
+        };
         for path in ["src", ".home", ".codanna"] {
             std::fs::create_dir_all(fixture.root().join(path)).unwrap();
         }
@@ -54,7 +58,13 @@ impl Fixture {
         let before = tree(self.root());
         let mut command = Command::new(env!("CARGO_BIN_EXE_codanna-index-plan"));
         command.env_clear().env("HOME", self.root().join(".home"));
-        for key in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "SYSTEMROOT", "WINDIR"] {
+        for key in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+        ] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }
@@ -65,10 +75,18 @@ impl Fixture {
             .output()
             .unwrap();
         assert_eq!(tree(self.root()), before, "planner wrote workspace data");
-        assert!(matches!(self.endpoint.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock), "planner contacted the provider");
+        assert!(
+            matches!(self.endpoint.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "planner contacted the provider"
+        );
         let report: Value = serde_json::from_slice(&output.stdout)
             .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)));
-        assert!(!output.stdout.windows(self.url.len()).any(|part| part == self.url.as_bytes()));
+        assert!(
+            !output
+                .stdout
+                .windows(self.url.len())
+                .any(|part| part == self.url.as_bytes())
+        );
         assert_eq!(report["provider_requests_made"], 0);
         assert!(report["exact_provider_tokens"].is_null());
         (output, report)
@@ -86,7 +104,10 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Option<Vec<u8>>, Option<std::time::Sy
                 pending.push(entry.unwrap().path());
             }
         } else {
-            result.insert(path.clone(), (Some(std::fs::read(path).unwrap()), metadata.modified().ok()));
+            result.insert(
+                path.clone(),
+                (Some(std::fs::read(path).unwrap()), metadata.modified().ok()),
+            );
         }
     }
     result
@@ -113,7 +134,9 @@ fn body_plan_does_not_accept_comment_only_cache_identity() {
     let identity = json!({"backend":"remote", "model":"offline-body-fixture", "endpoint_sha256":hash(&fixture.url), "model_revision":null, "input_policy":"complete-input-v2:utf8-byte-budget-proxy:8192"}).to_string();
     let cache = json!({"format_version":1, "preprocessing_version":2, "model_identity":identity, "dimension":2,
         "entries":[{"input_sha256":hash("alpha owner."),"embedding":[1.0,0.0]}, {"input_sha256":hash("beta consumer."),"embedding":[1.0,0.0]}]});
-    let path = fixture.root().join(".codanna/index/semantic/embedding-cache.json");
+    let path = fixture
+        .root()
+        .join(".codanna/index/semantic/embedding-cache.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, cache.to_string()).unwrap();
     let (output, report) = fixture.run();
@@ -125,14 +148,21 @@ fn body_plan_does_not_accept_comment_only_cache_identity() {
 #[test]
 fn body_plan_counts_segment_headers_separately_from_retained_source() {
     let fixture = Fixture::new();
-    std::fs::write(fixture.root().join("src/lib.rs"), format!("pub fn body_owner() {{ {} }}\n", "consume(); ".repeat(240))).unwrap();
+    std::fs::write(
+        fixture.root().join("src/lib.rs"),
+        format!("pub fn body_owner() {{ {} }}\n", "consume(); ".repeat(240)),
+    )
+    .unwrap();
     fixture.configure(true, "max_input_tokens = 2048", true);
     let (output, report) = fixture.run();
     assert!(output.status.success());
     assert_eq!(report["embedding_candidates"], 1);
     let inputs = report["embedding_inputs"].as_u64().unwrap();
     assert!((2..=8).contains(&inputs));
-    assert!(report["embedding_input_bytes"].as_u64().unwrap() > report["retained_representation_bytes"].as_u64().unwrap());
+    assert!(
+        report["embedding_input_bytes"].as_u64().unwrap()
+            > report["retained_representation_bytes"].as_u64().unwrap()
+    );
 }
 
 #[test]
@@ -145,7 +175,12 @@ fn body_plan_unknown_tokenizer_keeps_segment_cost_unknown() {
     assert_eq!(report["body_sources"], 3);
     assert_eq!(report["embedding_candidates"], 3);
     assert!(report["retained_representation_bytes"].as_u64().unwrap() > 0);
-    for field in ["embedding_inputs", "embedding_input_bytes", "unique_embedding_inputs", "snapshot_hit_inputs"] {
+    for field in [
+        "embedding_inputs",
+        "embedding_input_bytes",
+        "unique_embedding_inputs",
+        "snapshot_hit_inputs",
+    ] {
         assert!(report[field].is_null(), "{field} must be unknown");
     }
 }
