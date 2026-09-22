@@ -14,7 +14,7 @@ const INPUTS: [&str; 2] = [
 ];
 
 fn hash(input: &str) -> String {
-    format!("{:x}", Sha256::digest(input.as_bytes()))
+    hex::encode(Sha256::digest(input.as_bytes()))
 }
 
 struct Fixture {
