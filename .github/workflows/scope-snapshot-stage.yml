@@ -1,0 +1,129 @@
+name: Scope snapshot staging
+on:
+  pull_request:
+    branches: [fix/symbol-path-scope]
+    paths:
+      - '.github/workflows/scope-snapshot-stage.yml'
+      - 'src/storage/tantivy/scope.rs'
+      - 'tests/scoped_search_snapshots.rs'
+permissions:
+  contents: read
+concurrency:
+  group: scope-snapshot-stage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.event.pull_request.head.repo.full_name == 'bpstr/codanna' && github.event.pull_request.head.ref == 'fix/scoped-search-snapshots'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native build artifacts
+        run: cargo clean -p ort-sys
+      - name: Capture baseline on frozen external-root contracts
+        shell: bash
+        run: |
+          set -uo pipefail
+          git rev-parse HEAD | tee "$RUNNER_TEMP/scope-head.txt"
+          cargo test --locked --test scoped_search_snapshots -- --nocapture 2>&1 | tee "$RUNNER_TEMP/scope-baseline.log"
+          status=${PIPESTATUS[0]}
+          test "$status" -ne 0
+          grep -q '1 passed; 2 failed' "$RUNNER_TEMP/scope-baseline.log"
+      - name: Apply exact reviewed snapshot wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+          q = Path('src/storage/tantivy/query.rs')
+          assert blob(q.read_bytes()) == 'b3c6b07b8ef6b131be18c0b4189c22620cb31239'
+          text = q.read_text()
+          start = text.index('    fn normalize_path_prefix(')
+          end = text.index('    /// Search returning every match:', start)
+          text = text[:start] + text[end:]
+          start = text.index('        if let Some(path_prefix) = path_prefix {')
+          end = text.index('        let final_query', start)
+          text = text[:start] + '''        if let Some(path_prefix) = path_prefix {
+              let terms = self.file_scope_terms(&searcher, path_prefix)?;
+              if terms.is_empty() {
+                  return Ok(Vec::new());
+              }
+              all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
+          }
+
+          ''' + text[end:]
+          q.write_text(text)
+          m = Path('src/storage/tantivy/mod.rs')
+          assert blob(m.read_bytes()) == 'c1f476e10b26d8b751fa6e5b458114080201dc25'
+          text = m.read_text().replace('mod schema;\n', 'mod schema;\nmod scope;\n')
+          text = text.replace('    strip_bases: Vec<PathBuf>,\n', '''    strip_bases: Vec<PathBuf>,
+              /// Canonical configured workspace, distinct from external indexed roots.
+              workspace_root: Option<PathBuf>,
+              /// Bounded reader-generation-keyed inventory; not an authorization cache.
+              scope_inventory: RwLock<Option<std::sync::Arc<scope::ScopeInventory>>>,
+          ''')
+          text = text.replace('            strip_bases: Self::collect_strip_bases(settings),\n', '''            strip_bases: Self::collect_strip_bases(settings),
+                      workspace_root: settings.workspace_root.as_ref().map(|root| {
+                          root.canonicalize().unwrap_or_else(|_| root.clone())
+                      }),
+                      scope_inventory: RwLock::new(None),
+          ''')
+          m.write_text(text)
+          PY
+          rustfmt --edition 2024 --config skip_children=true src/storage/tantivy/query.rs src/storage/tantivy/mod.rs src/storage/tantivy/scope.rs tests/scoped_search_snapshots.rs
+          git diff --check
+      - name: Execute candidate and neighboring scope contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            sha256sum src/storage/tantivy/query.rs src/storage/tantivy/mod.rs src/storage/tantivy/scope.rs tests/scoped_search_snapshots.rs
+            cargo test --locked --test scoped_search_snapshots --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --lib storage::tantivy::scope::tests -- --nocapture
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/scope-candidate.log"
+      - name: Publish verified Git blobs without updating any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          paths = ['src/storage/tantivy/query.rs', 'src/storage/tantivy/mod.rs', 'src/storage/tantivy/scope.rs', 'tests/scoped_search_snapshots.rs']
+          manifest = {}
+          for name in paths:
+              data = pathlib.Path(name).read_bytes()
+              expected = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              request = urllib.request.Request('https://api.github.com/repos/bpstr/codanna/git/blobs', data=json.dumps({'encoding': 'base64', 'content': base64.b64encode(data).decode()}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json'}, method='POST')
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  actual = json.load(response)['sha']
+              assert actual == expected
+              manifest[name] = {'sha': actual, 'sha256': hashlib.sha256(data).hexdigest()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'scope-blobs.json').write_text(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scope-snapshot-evidence
+          path: |
+            ${{ runner.temp }}/scope-head.txt
+            ${{ runner.temp }}/scope-baseline.log
+            ${{ runner.temp }}/scope-candidate.log
+            ${{ runner.temp }}/scope-blobs.json
+          retention-days: 14
