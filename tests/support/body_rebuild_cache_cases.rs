@@ -138,7 +138,9 @@ fn body_cache_policy_switch_and_corruption_never_reuse_legacy_vectors() {
 fn body_cache_segmentation_matches_planner_and_survives_reopen() {
     let endpoint = Endpoint::start(2);
     let workspace = Workspace::new(&endpoint);
-    workspace.source(&format!("pub fn large_owner() {{ {} }}\n", "consume(); ".repeat(1400)));
+    // Homogeneous literal bytes guarantee equal interior segments regardless of
+    // the header's length or split boundary alignment. They keep distinct ranges.
+    workspace.source(&format!("pub fn large_owner() {{ let payload = \"{}\"; consume(payload); }}\n", "a".repeat(12000)));
     workspace.configure(&endpoint, "fixture-model", 2,
         "code_representation = \"symbol_body_v1\"\nmax_input_tokens = 2048");
     let before = plan(&workspace, &endpoint);
