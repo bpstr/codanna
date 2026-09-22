@@ -349,7 +349,6 @@ fn endpoint_or_dimension_changes_cannot_reuse_cached_vectors() {
     }
 }
 
-
 fn pressure_source(count: usize) -> String {
     let mut source = String::new();
     for index in 0..count {
