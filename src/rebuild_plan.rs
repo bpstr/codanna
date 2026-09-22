@@ -139,12 +139,18 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
         return Ok(lookup);
     };
     if dimension == 0 {
-        return Err(failure("Remote embedding dimension must be greater than zero"));
+        return Err(failure(
+            "Remote embedding dimension must be greater than zero",
+        ));
     }
     let path = settings.index_path.join("semantic/embedding-cache.json");
     lookup.present = Some(match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.is_file() => true,
-        Ok(_) => return Err(failure("Embedding cache must be a regular file for offline planning")),
+        Ok(_) => {
+            return Err(failure(
+                "Embedding cache must be a regular file for offline planning",
+            ));
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(failure(format!("Cannot inspect embedding cache: {error}"))),
     });
@@ -169,7 +175,9 @@ fn record_input(
     add_count(&mut report.embedding_input_bytes, input.len());
     let first = unique.insert(calculate_hash(input));
     if unique.len() > MAX_UNIQUE_INPUTS {
-        return Err(failure("Offline plan exceeded 100000 unique embedding inputs"));
+        return Err(failure(
+            "Offline plan exceeded 100000 unique embedding inputs",
+        ));
     }
     if first {
         add_count(&mut report.unique_embedding_input_bytes, input.len());
@@ -203,14 +211,19 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         requested_roots
     };
     if selected.is_empty() {
-        return Err(failure("No source roots selected; provide paths or configure indexing.indexed_paths"));
+        return Err(failure(
+            "No source roots selected; provide paths or configure indexing.indexed_paths",
+        ));
     }
     let mut roots = Vec::new();
     for root in selected {
-        let root = root.canonicalize()
+        let root = root
+            .canonicalize()
             .map_err(|error| failure(format!("Cannot resolve source root: {error}")))?;
         if !root.starts_with(&workspace) {
-            return Err(failure("Offline source root is outside the configured workspace"));
+            return Err(failure(
+                "Offline source root is outside the configured workspace",
+            ));
         }
         if !roots.contains(&root) {
             roots.push(root);
@@ -222,13 +235,24 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
     let inputs_known = policy == CodeEmbeddingPolicy::DocComment || lookup.budget.is_some();
     let settings = Arc::new(settings);
     let files = FileWalker::new(Arc::clone(&settings)).snapshot(
-        &roots, MAX_ENTRIES, MAX_FILES, MAX_SOURCE_BYTES,
+        &roots,
+        MAX_ENTRIES,
+        MAX_FILES,
+        MAX_SOURCE_BYTES,
     )?;
-    let inventory: Vec<_> = files.iter().map(|file| (
-        file.path.strip_prefix(&workspace).unwrap_or(&file.path)
-            .to_string_lossy().replace('\\', "/"),
-        &file.hash,
-    )).collect();
+    let inventory: Vec<_> = files
+        .iter()
+        .map(|file| {
+            (
+                file.path
+                    .strip_prefix(&workspace)
+                    .unwrap_or(&file.path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                &file.hash,
+            )
+        })
+        .collect();
     let fingerprint = calculate_hash(
         &serde_json::to_string(&inventory).map_err(|error| failure(error.to_string()))?,
     );
@@ -301,7 +325,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
             report.files_requiring_generic_parser += 1;
             continue;
         }
-        let parsed = parser.parse(file).map_err(|error| failure(error.to_string()))?;
+        let parsed = parser
+            .parse(file)
+            .map_err(|error| failure(error.to_string()))?;
         report.files_parsed += 1;
         for symbol in parsed.raw_symbols {
             report.symbols += 1;
@@ -332,7 +358,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
                     report.body_sources += 1;
                     report.body_sources_header_only += usize::from(source.fragments.is_empty());
                     report.retained_representation_bytes += source.retained_bytes();
-                    let Some(budget) = &lookup.budget else { continue };
+                    let Some(budget) = &lookup.budget else {
+                        continue;
+                    };
                     match source.inputs(budget) {
                         Ok(inputs) => {
                             for input in inputs {
@@ -352,7 +380,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
     let partial = !inputs_known
         || report.files_requiring_generic_parser > 0
         || report.missing_body_sources > 0;
-    let blocked = report.input_policy_rejections.is_some_and(|count| count > 0);
+    let blocked = report
+        .input_policy_rejections
+        .is_some_and(|count| count > 0);
     report.input_inventory_complete = !partial && !blocked;
     report.status = match (partial, blocked) {
         (false, false) => "complete",
@@ -379,8 +409,12 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
 }
 
 fn has_native_parser(path: &Path, settings: &Settings) -> IndexResult<bool> {
-    let registry = crate::parsing::get_registry().lock().map_err(|_| IndexError::MutexPoisoned)?;
-    Ok(path.extension().and_then(|extension| extension.to_str())
+    let registry = crate::parsing::get_registry()
+        .lock()
+        .map_err(|_| IndexError::MutexPoisoned)?;
+    Ok(path
+        .extension()
+        .and_then(|extension| extension.to_str())
         .and_then(|extension| registry.get_by_extension(extension))
         .is_some_and(|definition| definition.is_enabled(settings)))
 }
