@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use tantivy::tokenizer::{Language, LowerCaser, SimpleTokenizer, Stemmer, TextAnalyzer};
 
 const MAX_QUERY_TERMS: usize = 32;
+const MAX_QUERY_BYTES: usize = 4096;
 const STOPWORDS: &[&str] = &[
     "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to", "was", "were",
     "what", "where", "which", "with",
@@ -50,6 +51,11 @@ fn normalized_words(text: &str) -> BTreeSet<String> {
 }
 
 pub(super) fn query_terms(query: &str) -> Option<Vec<String>> {
+    // This budget bounds only the optional normalization pass. Oversized text
+    // keeps the existing lexical query path rather than being silently clipped.
+    if query.len() > MAX_QUERY_BYTES {
+        return None;
+    }
     // Keep identifier and explicit query-language behavior on the existing path.
     // Do not rewrite Boolean/field/phrase expressions or copied code fragments.
     if query.chars().any(|character| {
@@ -84,11 +90,11 @@ pub(super) fn query_terms(query: &str) -> Option<Vec<String>> {
     }
     // Check eligibility before identifier splitting: one camelCase/snake_case
     // identifier must not start using discovery reranking just because it splits.
+    // Deduplicate before budgeting so repeated words cannot hide a later concept.
     let original: BTreeSet<_> = query
         .split(|character: char| !character.is_alphanumeric() && character != '_')
         .map(str::to_lowercase)
         .filter(|word| word.len() >= 3 && !STOPWORDS.contains(&word.as_str()))
-        .take(MAX_QUERY_TERMS + 1)
         .collect();
     if original.len() < 2 {
         return None;
@@ -217,5 +223,13 @@ mod tests {
             ),
             1
         );
+    }
+
+    #[test]
+    fn linguistic_coverage_bounds_query_bytes_without_losing_late_distinct_terms() {
+        let repeated = format!("{}namespace", "vector ".repeat(40));
+        assert_eq!(query_terms(&repeated), query_terms("vector namespace"));
+        let oversized = "vector namespace ".repeat(MAX_QUERY_BYTES);
+        assert!(query_terms(&oversized).is_none());
     }
 }
