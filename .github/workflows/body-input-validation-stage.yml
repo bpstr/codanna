@@ -29,34 +29,34 @@ jobs:
           cache-on-failure: true
       - name: Refresh native linker artifacts
         run: cargo clean -p ort-sys
-      - name: Apply reviewed compilation and disabled-search repairs
+      - name: Apply source-reviewed compilation, fallback and lint repairs
         shell: bash
         run: |
           python3 - <<'PY'
           import pathlib, subprocess
           changes = [
               ('src/semantic/journal.rs', 'b8728d37e9ba5d72ac15caf3dd8d1432a3aa0caa',
-               'format!("{:x}", writer.digest.finalize())', 'hex::encode(writer.digest.finalize())'),
+               'format!("{:x}", writer.digest.finalize())', 'hex::encode(writer.digest.finalize())', 1),
               ('src/indexing/facade_retrieval_tests.rs', '3afd890b6dbb86ec911a4d3ea2ffa6f1c0d3a5c8',
                'CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest,',
-               'CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchRequest,'),
+               'CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchRequest,', 1),
+              ('src/mcp/tools/search.rs', 'd7659fac48ab71e51136f00d6139950c6eae3b9a',
+               'Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.',
+               'Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.', 2),
+              ('src/semantic/simple.rs', 'c56c506dd543dc50f38a38774d1d5a50e961effa',
+               '.embeddings\n            .iter()\n            .filter_map(|(id, _)| {',
+               '.embeddings\n            .keys()\n            .filter_map(|id| {', 2),
+              ('src/symbol_representation.rs', '81ae42d80db65159d387ee1d5423cb9edb7fcaa8',
+               'let mut settings = crate::Settings::default();\n            settings.workspace_root = Some(temp.path().to_path_buf());\n            settings.index_path = temp.path().join("index");',
+               'let mut settings = crate::Settings {\n                workspace_root: Some(temp.path().to_path_buf()),\n                index_path: temp.path().join("index"),\n                ..Default::default()\n            };', 1),
           ]
-          for name, sha, old, new in changes:
+          for name, sha, old, new, count in changes:
               actual = subprocess.check_output(['git','hash-object',name], text=True).strip()
               assert actual == sha, (name, actual, sha)
               path = pathlib.Path(name)
               text = path.read_text()
-              assert text.count(old) == 1, name
+              assert text.count(old) == count, (name, text.count(old), count)
               path.write_text(text.replace(old, new))
-          name = 'src/mcp/tools/search.rs'
-          actual = subprocess.check_output(['git','hash-object',name], text=True).strip()
-          assert actual == 'd7659fac48ab71e51136f00d6139950c6eae3b9a', actual
-          path = pathlib.Path(name)
-          text = path.read_text()
-          old = 'Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.'
-          new = 'Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.'
-          assert text.count(old) == 2
-          path.write_text(text.replace(old, new))
           PY
           cargo fmt --all
           git diff --check
@@ -67,7 +67,7 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version --verbose
-            sha256sum tests/repository_body_inputs.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs src/mcp/tools/search.rs contributing/retrieval/evaluations/repository-tasks.json
+            sha256sum tests/repository_body_inputs.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs src/mcp/tools/search.rs src/semantic/simple.rs src/symbol_representation.rs contributing/retrieval/evaluations/repository-tasks.json
             cargo test --locked --test repository_body_inputs --test semantic_fallback_contracts -- --nocapture
             cargo test --locked --lib symbol_representation -- --nocapture
             cargo test --locked --lib semantic::journal::tests -- --nocapture
@@ -82,7 +82,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, urllib.request
-          names = ['src/semantic/journal.rs', 'src/indexing/facade_retrieval_tests.rs', 'src/mcp/tools/search.rs', 'tests/repository_body_inputs.rs', 'tests/semantic_fallback_contracts.rs']
+          names = ['src/semantic/journal.rs', 'src/indexing/facade_retrieval_tests.rs', 'src/mcp/tools/search.rs', 'src/semantic/simple.rs', 'src/symbol_representation.rs', 'tests/repository_body_inputs.rs', 'tests/semantic_fallback_contracts.rs']
           manifest = {'staged_head': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(), 'files': {}}
           for name in names:
               data = pathlib.Path(name).read_bytes()
