@@ -8,6 +8,7 @@ BODY = "1662e95e14323dbd197a381ff9789d103df8a538"
 CACHE = "00f8c7daba1fc1ac683469c7c6a8c214fddd01f0"
 STAGE = "src/indexing/pipeline/stages/semantic_embed.rs"
 FACADE = "src/indexing/facade.rs"
+SIMPLE = "src/semantic/simple.rs"
 
 
 def git(*args):
@@ -24,8 +25,25 @@ def combine():
     git("merge-base", "--is-ancestor", BODY, "HEAD")
     subprocess.run(["git", "merge", "--no-commit", "--no-ff", CACHE], check=False)
     conflicts = set(git("diff", "--name-only", "--diff-filter=U").splitlines())
-    if not conflicts.issubset({STAGE, FACADE}):
+    if not conflicts.issubset({STAGE, FACADE, SIMPLE}):
         raise SystemExit(f"Unreviewed merge conflict: {conflicts}")
+    if SIMPLE in conflicts:
+        # Both branches insert methods at the same location. Retain body storage
+        # in full and add only the three reviewed cache-reuse changes from #50.
+        simple = git("show", f"{BODY}:{SIMPLE}")
+        cache_simple = git("show", f"{CACHE}:{SIMPLE}")
+        marker = "use crate::SymbolId;"
+        simple = replace_once(simple, marker, '#[path = "rebuild_cache.rs"]\nmod rebuild_cache;\n\n' + marker)
+        begin = cache_simple.index("    /// Store one generated vector for every symbol with the same exact input.")
+        end = cache_simple.index("    fn insert_embedding(", begin)
+        marker = "    pub(crate) fn cached_symbol_input("
+        simple = replace_once(simple, marker, cache_simple[begin:end] + marker)
+        begin = cache_simple.index("        // An empty vector generation can still hold compatible cached inputs")
+        end = cache_simple.index("        if let Some(metadata) = &mut self.metadata {", begin)
+        method_start = simple.index("    pub(crate) fn set_embedding_identity(")
+        insertion = simple.index("        if let Some(metadata) = &mut self.metadata {", method_start)
+        simple = simple[:insertion] + cache_simple[begin:end] + simple[insertion:]
+        pathlib.Path(SIMPLE).write_text(simple)
     if FACADE in conflicts:
         facade = git("show", f"{BODY}:{FACADE}")
         marker = "        self.semantic_search = Some(Arc::new(Mutex::new(semantic)));"
@@ -46,7 +64,7 @@ def combine():
     pathlib.Path(STAGE).write_text(body[:begin] + method + "\n" + body[end:])
     tests = pathlib.Path("tests/semantic_rebuild_reuse.rs")
     tests.write_text(tests.read_text() + '\n#[path = "support/body_rebuild_cache_cases.rs"]\nmod body_rebuild_cache;\n')
-    git("add", FACADE, STAGE, str(tests))
+    git("add", FACADE, STAGE, SIMPLE, str(tests))
     if git("diff", "--name-only", "--diff-filter=U").strip():
         raise SystemExit("Unresolved merge state")
     print("Combined only pinned body planner and cache runtime; no branch push")
