@@ -505,3 +505,31 @@ fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
     assert_eq!(status.eligible_with_vector, None);
     assert_eq!(status.vector_code_generation, None);
 }
+
+
+#[tokio::test]
+async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() {
+    let (_temp, facade) = fixture();
+    let server = CodeIntelligenceServer::new(facade);
+    let response = server
+        .semantic_search_docs(Parameters(SemanticSearchRequest {
+            query: "calendar settings".into(),
+            limit: 5,
+            threshold: None,
+            lang: None,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(response.is_error, Some(true));
+    let text = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("No code or semantic index rebuild was attempted"));
+    assert!(text.contains("search_symbols") && text.contains("search_context"));
+}
