@@ -391,3 +391,31 @@ fn large_force_rebuild_reuses_late_snapshot_hits_before_admitting_early_misses()
     workspace.rebuild();
     assert_inputs(&endpoint, COUNT - CACHE_CAPACITY);
 }
+
+
+fn duplicate_pressure_source(count: usize) -> String {
+    let mut source = String::new();
+    for index in 0..count {
+        use std::fmt::Write as _;
+        writeln!(
+            &mut source,
+            "/// shared duplicate embedding input.\npub fn duplicate_{index:04}() -> usize {{ {index} }}"
+        )
+        .unwrap();
+    }
+    source
+}
+
+#[test]
+fn duplicate_missing_inputs_are_embedded_once_per_collector_batch() {
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.source(&duplicate_pressure_source(200));
+
+    workspace.rebuild();
+    let documents = assert_inputs(&endpoint, 1);
+    assert_eq!(documents, vec!["shared duplicate embedding input."]);
+
+    workspace.rebuild();
+    assert_inputs(&endpoint, 0);
+}
