@@ -4,7 +4,6 @@
 use codanna::Settings;
 use codanna::indexing::facade::IndexFacade;
 use codanna::storage::SearchResult;
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -259,7 +258,10 @@ fn evaluate_runtime(fixture: &Fixture, cases: &[Case]) -> (usize, f64) {
             .iter()
             .position(|result| result.name == case.name)
             .map(|rank| rank + 1);
-        println!("case={} expected={} runtime_rank={rank:?}", case.id, case.name);
+        println!(
+            "case={} expected={} runtime_rank={rank:?}",
+            case.id, case.name
+        );
         hits += usize::from(rank.is_some());
         reciprocal_rank_sum += rr;
     }
@@ -286,7 +288,10 @@ fn runtime_tuning_and_holdout_metrics_meet_the_t06_floor() {
         all.0 as f64 / CASES.len() as f64 >= 0.90,
         "runtime Hit@5 must meet the proposed 0.90 floor"
     );
-    assert!(all.1 >= 0.75, "runtime MRR@5 must meet the proposed 0.75 floor");
+    assert!(
+        all.1 >= 0.75,
+        "runtime MRR@5 must meet the proposed 0.75 floor"
+    );
     assert!(
         holdout.0 as f64 / (CASES.len() - HOLDOUT_START) as f64 >= 0.85,
         "holdout Hit@5 must not collapse"
