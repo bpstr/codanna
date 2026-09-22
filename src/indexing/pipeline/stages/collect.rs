@@ -113,6 +113,7 @@ struct CollectorState {
     caches: CollectorCaches,
     current_batch: IndexBatch,
     current_embed_batch: EmbeddingBatch,
+    retained_source_bytes: usize,
     batch_size: usize,
     /// Current file's language_id for embedding metadata
     current_language: Box<str>,
@@ -126,6 +127,7 @@ impl CollectorState {
             caches: CollectorCaches::new(),
             current_batch: IndexBatch::with_capacity(batch_size, 0, 0),
             current_embed_batch: EmbeddingBatch::new(),
+            retained_source_bytes: 0,
             batch_size,
             current_language: "unknown".into(),
         }
@@ -143,6 +145,7 @@ impl CollectorState {
 
     fn should_flush(&self) -> bool {
         self.current_batch.symbol_count() >= self.batch_size
+            || self.retained_source_bytes >= 4 * 1024 * 1024
     }
 
     fn take_batch(&mut self) -> IndexBatch {
@@ -153,6 +156,7 @@ impl CollectorState {
     }
 
     fn take_embed_batch(&mut self) -> EmbeddingBatch {
+        self.retained_source_bytes = 0;
         std::mem::take(&mut self.current_embed_batch)
     }
 }
@@ -352,7 +356,7 @@ impl CollectStage {
             });
 
         // Process symbols
-        for raw_sym in parsed.raw_symbols {
+        for mut raw_sym in parsed.raw_symbols {
             let symbol_id = state.next_symbol_id();
 
             // Cache for relationship resolution
@@ -361,13 +365,27 @@ impl CollectStage {
                 .caches
                 .insert(name.clone(), file_id, raw_sym.range, symbol_id);
 
-            // Extract embedding candidate if symbol has doc_comment
-            if let Some(ref doc) = raw_sym.doc_comment {
-                state.current_embed_batch.candidates.push((
-                    symbol_id,
-                    doc.clone(),
-                    state.current_language.clone(),
-                ));
+            match raw_sym.code_embedding_policy {
+                crate::symbol_representation::CodeEmbeddingPolicy::DocComment => {
+                    // Preserve legacy inputs exactly, including documented non-function symbols.
+                    if let Some(ref doc) = raw_sym.doc_comment {
+                        state.current_embed_batch.candidates.push((
+                            symbol_id,
+                            doc.clone(),
+                            state.current_language.clone(),
+                        ));
+                    }
+                }
+                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1 => {
+                    if let Some(source) = raw_sym.embedding_source.take() {
+                        state.retained_source_bytes += source.retained_bytes();
+                        state.current_embed_batch.body_candidates.push((
+                            symbol_id,
+                            source,
+                            state.current_language.clone(),
+                        ));
+                    }
+                }
             }
 
             // Create Symbol

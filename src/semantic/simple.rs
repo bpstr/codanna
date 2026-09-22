@@ -40,6 +40,45 @@ pub enum SemanticSearchError {
     },
 }
 
+/// A bounded embedding input belonging to a real parent symbol, never a fabricated graph node.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SymbolSegment {
+    pub source_range: Option<std::ops::Range<usize>>,
+    pub vector: Arc<[f32]>,
+    #[serde(skip)]
+    magnitude: f32,
+}
+
+impl SymbolSegment {
+    pub(crate) fn new(source_range: Option<std::ops::Range<usize>>, vector: Arc<[f32]>) -> Self {
+        let magnitude = vector_magnitude(&vector);
+        Self {
+            source_range,
+            vector,
+            magnitude,
+        }
+    }
+
+    pub(super) fn validate(&mut self, dimension: usize) -> Result<(), SemanticSearchError> {
+        if self.vector.len() != dimension
+            || self.vector.iter().any(|value| !value.is_finite())
+            || self
+                .source_range
+                .as_ref()
+                .is_some_and(|range| range.start >= range.end)
+        {
+            return Err(super::journal::error(
+                "invalid symbol segment vector or source range",
+            ));
+        }
+        self.magnitude = vector_magnitude(&self.vector);
+        Ok(())
+    }
+}
+
+pub(super) type SymbolSegments = HashMap<SymbolId, Arc<[SymbolSegment]>>;
+
 /// Advanced semantic search engine for documentation analysis
 ///
 /// This implementation uses state-of-the-art embeddings to find
@@ -49,6 +88,7 @@ pub enum SemanticSearchError {
 pub struct SimpleSemanticSearch {
     /// Embeddings indexed by symbol ID
     embeddings: Arc<HashMap<SymbolId, Arc<[f32]>>>,
+    symbol_segments: Arc<SymbolSegments>,
 
     /// Precomputed vector magnitudes, maintained with `embeddings`.
     embedding_magnitudes: Arc<HashMap<SymbolId, f32>>,
@@ -176,6 +216,7 @@ impl SimpleSemanticSearch {
 
         Ok(Self {
             embeddings: Arc::new(HashMap::new()),
+            symbol_segments: Arc::new(HashMap::new()),
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
@@ -337,6 +378,73 @@ impl SimpleSemanticSearch {
         count
     }
 
+    pub(crate) fn cached_symbol_input(&mut self, input: &str) -> Option<Arc<[f32]>> {
+        self.embedding_cache.get(input)
+    }
+
+    /// Validate the entire group before mutating the parent. A failed group cannot
+    /// leave only its first few segments indexed. Cache identity is already bound.
+    pub(crate) fn store_symbol_segments(
+        &mut self,
+        id: SymbolId,
+        mut segments: Vec<SymbolSegment>,
+        inputs: &[crate::symbol_representation::SymbolInput],
+        language: &str,
+    ) -> Result<(), SemanticSearchError> {
+        if segments.is_empty()
+            || segments.len() > crate::symbol_representation::MAX_SYMBOL_SEGMENTS
+            || segments.len() != inputs.len()
+        {
+            return Err(super::journal::error("invalid symbol segment group size"));
+        }
+        for segment in &mut segments {
+            segment.validate(self.dimensions)?;
+        }
+        self.insert_embedding(id, Arc::clone(&segments[0].vector), Some(language.into()));
+        for (segment, input) in segments.iter().zip(inputs) {
+            self.embedding_cache
+                .insert(&input.text, Arc::clone(&segment.vector));
+        }
+        Arc::make_mut(&mut self.symbol_segments).insert(id, Arc::from(segments));
+        Ok(())
+    }
+
+    /// Physical vector count, distinct from the number of represented parents.
+    pub fn vector_count(&self) -> usize {
+        self.embeddings.len()
+            + self
+                .symbol_segments
+                .values()
+                .map(|parts| parts.len().saturating_sub(1))
+                .sum::<usize>()
+    }
+
+    /// Segment maxima are ranking evidence, not probabilities. Aggregate before
+    /// top-k so a large implementation cannot occupy several result slots.
+    fn score_symbol(&self, id: SymbolId, query: &[f32], query_magnitude: f32) -> Option<f32> {
+        if let Some(segments) = self.symbol_segments.get(&id) {
+            return segments
+                .iter()
+                .map(|segment| {
+                    cosine_similarity_with_magnitudes(
+                        query,
+                        query_magnitude,
+                        &segment.vector,
+                        segment.magnitude,
+                    )
+                })
+                .max_by(f32::total_cmp);
+        }
+        let vector = self.embeddings.get(&id)?;
+        let magnitude = self.embedding_magnitudes.get(&id).copied()?;
+        Some(cosine_similarity_with_magnitudes(
+            query,
+            query_magnitude,
+            vector,
+            magnitude,
+        ))
+    }
+
     fn insert_embedding(
         &mut self,
         symbol_id: SymbolId,
@@ -344,6 +452,7 @@ impl SimpleSemanticSearch {
         language: Option<String>,
     ) {
         let magnitude = vector_magnitude(&embedding);
+        Arc::make_mut(&mut self.symbol_segments).remove(&symbol_id);
         Arc::make_mut(&mut self.embeddings).insert(symbol_id, embedding);
         Arc::make_mut(&mut self.embedding_magnitudes).insert(symbol_id, magnitude);
         if let Some(language) = language {
@@ -397,13 +506,8 @@ impl SimpleSemanticSearch {
         let mut similarities: Vec<(SymbolId, f32)> = self
             .embeddings
             .iter()
-            .filter_map(|(id, emb)| {
-                let sim = cosine_similarity_with_magnitudes(
-                    query_embedding,
-                    query_magnitude,
-                    emb,
-                    self.embedding_magnitudes.get(id).copied().unwrap_or(0.0),
-                );
+            .filter_map(|(id, _)| {
+                let sim = self.score_symbol(*id, query_embedding, query_magnitude)?;
                 if sim >= threshold {
                     Some((*id, sim))
                 } else {
@@ -457,17 +561,8 @@ impl SimpleSemanticSearch {
         };
         let mut similarities: Vec<(SymbolId, f32)> = candidate_ids
             .filter_map(|id| {
-                let embedding = self.embeddings.get(id)?;
-                let magnitude = self.embedding_magnitudes.get(id).copied()?;
-                Some((
-                    *id,
-                    cosine_similarity_with_magnitudes(
-                        query_embedding,
-                        query_magnitude,
-                        embedding,
-                        magnitude,
-                    ),
-                ))
+                self.score_symbol(*id, query_embedding, query_magnitude)
+                    .map(|score| (*id, score))
             })
             .collect();
         retain_top_k(&mut similarities, limit);
@@ -511,14 +606,9 @@ impl SimpleSemanticSearch {
         let mut similarities: Vec<(SymbolId, f32)> = self
             .embeddings
             .iter()
-            .map(|(id, embedding)| {
-                let similarity = cosine_similarity_with_magnitudes(
-                    &query_embedding,
-                    query_magnitude,
-                    embedding,
-                    self.embedding_magnitudes.get(id).copied().unwrap_or(0.0),
-                );
-                (*id, similarity)
+            .filter_map(|(id, _)| {
+                self.score_symbol(*id, &query_embedding, query_magnitude)
+                    .map(|score| (*id, score))
             })
             .collect();
 
@@ -576,17 +666,8 @@ impl SimpleSemanticSearch {
         };
         let mut similarities: Vec<(SymbolId, f32)> = candidate_ids
             .filter_map(|id| {
-                let embedding = self.embeddings.get(id)?;
-                let magnitude = self.embedding_magnitudes.get(id).copied()?;
-                Some((
-                    *id,
-                    cosine_similarity_with_magnitudes(
-                        &query_embedding,
-                        query_magnitude,
-                        embedding,
-                        magnitude,
-                    ),
-                ))
+                self.score_symbol(*id, &query_embedding, query_magnitude)
+                    .map(|score| (*id, score))
             })
             .collect();
 
@@ -647,6 +728,7 @@ impl SimpleSemanticSearch {
             self.mark_dirty(id);
         }
         Arc::make_mut(&mut self.embeddings).clear();
+        Arc::make_mut(&mut self.symbol_segments).clear();
         Arc::make_mut(&mut self.embedding_magnitudes).clear();
         Arc::make_mut(&mut self.symbol_languages).clear();
         Arc::make_mut(&mut self.language_symbols).clear();
@@ -662,6 +744,7 @@ impl SimpleSemanticSearch {
                 self.mark_dirty(*id);
             }
             Arc::make_mut(&mut self.embedding_magnitudes).remove(id);
+            Arc::make_mut(&mut self.symbol_segments).remove(id);
             if let Some(language) = Arc::make_mut(&mut self.symbol_languages).remove(id) {
                 let language_symbols = Arc::make_mut(&mut self.language_symbols);
                 if let Some(ids) = language_symbols.get_mut(&language) {
@@ -730,6 +813,7 @@ impl SimpleSemanticSearch {
     pub(crate) fn query_snapshot(&self) -> SemanticQuery {
         SemanticQuery(Self {
             embeddings: Arc::clone(&self.embeddings),
+            symbol_segments: Arc::clone(&self.symbol_segments),
             embedding_magnitudes: Arc::clone(&self.embedding_magnitudes),
             symbol_languages: Arc::clone(&self.symbol_languages),
             language_symbols: Arc::clone(&self.language_symbols),
@@ -759,8 +843,11 @@ impl SimpleSemanticSearch {
             crate::semantic::SemanticMetadata::new_remote("unknown".into(), self.dimensions, 0)
         });
         metadata.update(self.embeddings.len());
+        metadata.segment_embedding_count =
+            self.vector_count().saturating_sub(self.embeddings.len());
         Ok(SemanticSave {
             embeddings: Arc::clone(&self.embeddings),
+            symbol_segments: Arc::clone(&self.symbol_segments),
             languages: Arc::clone(&self.symbol_languages),
             metadata,
             state,
@@ -787,6 +874,7 @@ impl SimpleSemanticSearch {
             crate::semantic::SemanticMetadata::new_remote(model_name.to_string(), dimensions, 0);
         Self {
             embeddings: Arc::new(HashMap::new()),
+            symbol_segments: Arc::new(HashMap::new()),
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
@@ -808,6 +896,7 @@ impl SimpleSemanticSearch {
             crate::semantic::SemanticMetadata::new(model_name.to_string(), dimensions, 0);
         Self {
             embeddings: Arc::new(HashMap::new()),
+            symbol_segments: Arc::new(HashMap::new()),
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
@@ -875,6 +964,7 @@ impl SimpleSemanticSearch {
         );
         Ok(Self {
             embeddings: Arc::new(embeddings),
+            symbol_segments: Arc::new(snapshot.symbol_segments),
             embedding_magnitudes: Arc::new(embedding_magnitudes),
             symbol_languages: Arc::new(snapshot.languages),
             language_symbols: Arc::new(language_symbols),
@@ -919,6 +1009,14 @@ impl SimpleSemanticSearch {
                 None,
                 &input_budget,
             );
+            let identity = if crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+                .accepts_recorded_identity(metadata.embedding_identity.as_deref())
+            {
+                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+                    .bind_identity(identity)
+            } else {
+                identity
+            };
             search.validate_embedding_identity(&identity)?;
             search.input_budget = Some(input_budget);
             search.model = Some(Arc::new(Mutex::new(text_model)));
@@ -954,6 +1052,7 @@ impl SemanticQuery {
 
 pub(crate) struct SemanticSave {
     embeddings: Arc<HashMap<SymbolId, Arc<[f32]>>>,
+    symbol_segments: Arc<SymbolSegments>,
     languages: Arc<HashMap<SymbolId, String>>,
     metadata: super::SemanticMetadata,
     state: super::journal::Persistence,
@@ -994,6 +1093,7 @@ impl SemanticSave {
             path,
             &mut self.state,
             &self.embeddings,
+            &self.symbol_segments,
             &self.languages,
             self.metadata,
         )?;

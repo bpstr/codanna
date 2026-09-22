@@ -257,7 +257,12 @@ impl IndexFacade {
             SimpleSemanticSearch::new_empty_local(backend.dimensions(), model)
         };
         semantic.set_embedding_identity(
-            backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+            self.settings
+                .semantic_search
+                .code_representation
+                .bind_identity(
+                    backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+                ),
         )?;
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
@@ -325,6 +330,22 @@ impl IndexFacade {
             let load_result = SimpleSemanticSearch::load_without_model(path);
             match load_result {
                 Ok(semantic) => {
+                    if !self
+                        .settings
+                        .semantic_search
+                        .code_representation
+                        .accepts_recorded_identity(
+                            semantic
+                                .metadata()
+                                .and_then(|metadata| metadata.embedding_identity.as_deref()),
+                        )
+                    {
+                        self.semantic_incompatible = true;
+                        return Err(IndexError::SemanticSearch(SemanticSearchError::StorageError {
+                            message: "Semantic source representation differs from the configured policy".into(),
+                            suggestion: "Preserve the existing index and explicitly rebuild with codanna index <path> --force; queries never migrate source inputs".into(),
+                        }));
+                    }
                     // A hot reload can replace the persisted vector generation
                     // while this facade already owns a query backend.
                     if let Some(backend) = self.embedding_pool.get() {
@@ -338,8 +359,13 @@ impl IndexFacade {
                                 },
                             ));
                         }
-                        let identity = backend
-                            .identity(self.settings.semantic_search.model_revision.as_deref());
+                        let identity =
+                            self.settings
+                                .semantic_search
+                                .code_representation
+                                .bind_identity(backend.identity(
+                                    self.settings.semantic_search.model_revision.as_deref(),
+                                ));
                         if let Err(error) = semantic.validate_embedding_identity(&identity) {
                             self.semantic_incompatible = true;
                             return Err(IndexError::SemanticSearch(error));
@@ -424,8 +450,13 @@ impl IndexFacade {
                 ));
             }
 
-            let identity =
-                backend.identity(self.settings.semantic_search.model_revision.as_deref());
+            let identity = self
+                .settings
+                .semantic_search
+                .code_representation
+                .bind_identity(
+                    backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+                );
             if let Err(error) = semantic.set_embedding_identity(identity) {
                 self.semantic_incompatible = true;
                 return Err(IndexError::SemanticSearch(error));
@@ -477,7 +508,12 @@ impl IndexFacade {
         let total_symbols = symbols.len();
         let eligible_ids: HashSet<_> = symbols
             .iter()
-            .filter(|symbol| symbol.doc_comment.is_some())
+            .filter(|symbol| {
+                self.settings
+                    .semantic_search
+                    .code_representation
+                    .eligible(symbol.kind, symbol.doc_comment.is_some())
+            })
             .map(|symbol| symbol.id)
             .collect();
         let current_ids: HashSet<_> = symbols.iter().map(|symbol| symbol.id).collect();
@@ -506,7 +542,9 @@ impl IndexFacade {
         } else {
             "disabled"
         };
-        let mut vector_count = metadata.as_ref().map(|metadata| metadata.embedding_count);
+        let mut vector_count = metadata
+            .as_ref()
+            .map(|metadata| metadata.embedding_count + metadata.segment_embedding_count);
         let mut eligible_with_vector = None;
         let mut eligible_without_vector = None;
         let mut vector_without_current_symbol = None;
@@ -515,7 +553,7 @@ impl IndexFacade {
             match semantic.lock() {
                 Ok(semantic) => {
                     let vector_ids = semantic.embedding_ids();
-                    vector_count = Some(vector_ids.len());
+                    vector_count = Some(semantic.vector_count());
                     let with_vector = vector_ids
                         .iter()
                         .filter(|id| eligible_ids.contains(id))
@@ -540,7 +578,11 @@ impl IndexFacade {
             state,
             total_symbols,
             eligible_symbols: eligible_ids.len(),
-            source_input_policy: "doc_comment_present_v1",
+            source_input_policy: self
+                .settings
+                .semantic_search
+                .code_representation
+                .source_policy(),
             vector_count,
             eligible_with_vector,
             eligible_without_vector,

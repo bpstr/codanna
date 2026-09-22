@@ -13,6 +13,7 @@ mod storage;
 pub use metadata::{EmbeddingBackendKind, SemanticMetadata};
 pub use pool::{EmbeddingBackend, EmbeddingPool};
 pub use remote::RemoteEmbedder;
+pub(crate) use simple::SymbolSegment;
 pub use simple::{SemanticSearchError, SimpleSemanticSearch};
 pub use storage::SemanticVectorStorage;
 
@@ -33,3 +34,6 @@ pub mod thresholds {
     /// Default threshold for semantic search
     pub const DEFAULT: f32 = SIMILAR;
 }
+
+#[cfg(test)]
+mod symbol_representation_tests;

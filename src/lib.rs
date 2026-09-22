@@ -30,6 +30,7 @@ pub(crate) mod runtime;
 pub mod semantic;
 pub mod storage;
 pub mod symbol;
+pub mod symbol_representation;
 pub mod types;
 pub mod utils;
 pub mod vector;

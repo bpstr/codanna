@@ -195,6 +195,10 @@ pub struct McpConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SemanticSearchConfig {
+    /// Explicit source-input policy. Body representations require a force rebuild.
+    #[serde(default)]
+    pub code_representation: crate::symbol_representation::CodeEmbeddingPolicy,
+
     /// Enable semantic search
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -388,6 +392,7 @@ impl Default for McpConfig {
 impl Default for SemanticSearchConfig {
     fn default() -> Self {
         Self {
+            code_representation: Default::default(),
             enabled: true, // Enabled by default for better code intelligence
             model: default_embedding_model(),
             threshold: default_similarity_threshold(),

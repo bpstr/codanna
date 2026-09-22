@@ -84,7 +84,7 @@ impl SemanticEmbedStage {
                     batches_received += 1;
                     stats.input_wait += recv_start.elapsed();
 
-                    let candidate_count = batch.candidates.len();
+                    let candidate_count = batch.len();
                     stats.received += candidate_count;
 
                     tracing::debug!(
@@ -94,7 +94,7 @@ impl SemanticEmbedStage {
                         candidate_count
                     );
 
-                    if !batch.candidates.is_empty() {
+                    if !batch.is_empty() {
                         let count = self.process_batch(&batch)?;
                         stats.embedded += count;
                         stats.skipped += candidate_count - count;
@@ -133,7 +133,7 @@ impl SemanticEmbedStage {
     }
 
     /// Process a batch of embedding candidates.
-    fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
+    pub(crate) fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
         let accelerated = crate::memory::accelerated_embeddings_requested();
         let mut stored = 0;
         let mut offset = 0;
@@ -192,7 +192,87 @@ impl SemanticEmbedStage {
             offset = end;
         }
 
+        for (id, source, language) in &batch.body_candidates {
+            self.process_symbol_source(*id, source, language)?;
+            stored += 1;
+        }
         Ok(stored)
+    }
+
+    fn process_symbol_source(
+        &self,
+        parent: crate::SymbolId,
+        source: &crate::symbol_representation::SymbolSource,
+        language: &str,
+    ) -> PipelineResult<()> {
+        let failure = |reason: String| PipelineError::Parse {
+            path: Default::default(),
+            reason,
+        };
+        let inputs = source.inputs(self.pool.input_budget()).map_err(failure)?;
+        let mut vectors: Vec<Option<Arc<[f32]>>> = {
+            let mut semantic = self
+                .semantic
+                .lock()
+                .map_err(|_| failure("Failed to lock semantic search".into()))?;
+            inputs
+                .iter()
+                .map(|input| semantic.cached_symbol_input(&input.text))
+                .collect()
+        };
+        // Correlation IDs are request-local ordinals, never persisted symbol IDs.
+        let missing: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| vectors[*index].is_none())
+            .map(|(index, input)| {
+                (
+                    crate::SymbolId::new(index as u32 + 1).expect("bounded segment ordinal"),
+                    input.text.as_str(),
+                    language,
+                )
+            })
+            .collect();
+        for chunk in missing.chunks(
+            crate::memory::MemoryBudget::current()
+                .embedding_batch_size(64, crate::memory::accelerated_embeddings_requested())
+                .max(1),
+        ) {
+            if crate::memory::MemoryBudget::current().under_pressure() {
+                return Err(failure(
+                    "symbol representation embedding stopped before memory pressure".into(),
+                ));
+            }
+            let results = self
+                .pool
+                .embed_parallel(chunk)
+                .map_err(|error| failure(error.to_string()))?;
+            for (ordinal, vector, _) in results {
+                let index = ordinal.value() as usize - 1;
+                if !chunk.iter().any(|(id, _, _)| *id == ordinal) || vectors[index].is_some() {
+                    return Err(failure(
+                        "unexpected or duplicate symbol segment embedding ordinal".into(),
+                    ));
+                }
+                vectors[index] = Some(Arc::from(vector));
+            }
+        }
+        let segments: Result<Vec<_>, _> = vectors
+            .into_iter()
+            .zip(&inputs)
+            .map(|(vector, input)| {
+                vector
+                    .map(|vector| {
+                        crate::semantic::SymbolSegment::new(input.source_range.clone(), vector)
+                    })
+                    .ok_or_else(|| failure("missing symbol segment embedding".into()))
+            })
+            .collect();
+        self.semantic
+            .lock()
+            .map_err(|_| failure("Failed to lock semantic search".into()))?
+            .store_symbol_segments(parent, segments?, &inputs, language)
+            .map_err(|error| failure(error.to_string()))
     }
 }
 

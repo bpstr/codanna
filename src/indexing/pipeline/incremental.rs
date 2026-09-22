@@ -363,48 +363,14 @@ impl Pipeline {
             rebind_stage.rebind_inbound_edges(&captured_inbound)?;
         }
 
-        // Generate embeddings for symbols with doc_comments
+        // Full and watcher indexing use exactly the same source policy and bounded embed stage.
         if let (Some(pool), Some(sem)) = (&embedding_pool, &semantic) {
-            if !embed_batch.candidates.is_empty() {
-                tracing::info!(
-                    target: "pipeline",
-                    "Generating {} embeddings for {}",
-                    embed_batch.candidates.len(),
-                    path.display()
-                );
-
-                // Convert to the format expected by embed_parallel
-                let items: Vec<_> = embed_batch
-                    .candidates
-                    .iter()
-                    .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
-                    .collect();
-
-                let missing = sem
-                    .lock()
-                    .map_err(|_| PipelineError::Parse {
-                        path: path.to_path_buf(),
-                        reason: "Failed to lock semantic search".to_string(),
-                    })?
-                    .reuse_cached_embeddings(&items);
-
-                // Generate embeddings
-                let embeddings = if missing.is_empty() {
-                    Vec::new()
-                } else {
-                    pool.embed_parallel(&missing)
-                        .map_err(|e| PipelineError::Parse {
-                            path: path.to_path_buf(),
-                            reason: format!("Embedding generation failed: {e}"),
-                        })?
-                };
-
-                // store_embeddings warns internally on any dropped embeddings.
-                if !embeddings.is_empty() {
-                    if let Ok(mut guard) = sem.lock() {
-                        guard.store_embeddings_with_inputs(embeddings, &missing);
-                    }
-                }
+            if !embed_batch.is_empty() {
+                crate::indexing::pipeline::stages::SemanticEmbedStage::new(
+                    Arc::clone(pool),
+                    Arc::clone(sem),
+                )
+                .process_batch(&embed_batch)?;
             }
         }
 
