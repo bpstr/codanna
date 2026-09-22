@@ -23,6 +23,7 @@ mod writer;
 
 pub use codec::VectorMetadata;
 pub use graph::{GraphEdge, GraphView, RelationshipPage};
+pub(crate) use query::discovery_term_coverage;
 pub use schema::IndexSchema;
 
 /// Search result with rich metadata
