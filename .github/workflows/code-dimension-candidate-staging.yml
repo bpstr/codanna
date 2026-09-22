@@ -1,0 +1,115 @@
+name: Code dimension candidate staging
+on:
+  pull_request:
+    branches: [integration/body-cache-reuse]
+    paths:
+      - 'contributing/scripts/apply-code-dimension-contract.py'
+      - 'tests/code_dimension_contract.rs'
+      - '.github/workflows/code-dimension-candidate-staging.yml'
+permissions:
+  contents: write
+concurrency:
+  group: dimension-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.repository == 'bpstr/codanna' && github.event.pull_request.head.repo.full_name == 'bpstr/codanna' && github.head_ref == 'fix/code-embedding-dimensions'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Reproduce failures with frozen normalized fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          cargo fmt --all
+          sha256sum tests/code_dimension_contract.rs > "$RUNNER_TEMP/dimension-fixture.sha256"
+          if cargo test --locked --test code_dimension_contract -- --nocapture > "$RUNNER_TEMP/dimension-baseline.log" 2>&1; then
+            echo 'Baseline unexpectedly passed'; exit 1
+          else
+            status=$?
+          fi
+          test "$status" = 101
+          grep -F 'test result: FAILED. 2 passed; 5 failed; 0 ignored;' "$RUNNER_TEMP/dimension-baseline.log"
+      - name: Apply only the reviewed pinned-source changes
+        run: python3 contributing/scripts/apply-code-dimension-contract.py
+      - name: Verify candidate and existing input contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          cargo fmt --all
+          sha256sum -c "$RUNNER_TEMP/dimension-fixture.sha256"
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            cargo test --locked --test code_dimension_contract --test semantic_rebuild_reuse --test index_plan_cli --test body_index_plan_cli -- --nocapture
+            for target in code_dimension_contract rebuild_plan::tests symbol_representation semantic::journal::tests config::; do
+              cargo test --locked --lib "$target" -- --list > "$RUNNER_TEMP/dimension-selected.txt"
+              grep -Eq ': test$' "$RUNNER_TEMP/dimension-selected.txt"
+              cargo test --locked --lib "$target" -- --nocapture
+            done
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/dimension-candidate.log"
+      - name: Publish only verified immutable blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, tarfile, urllib.request
+          paths = [
+              'src/semantic/mod.rs', 'src/semantic/code_dimension.rs',
+              'src/semantic/journal.rs', 'src/indexing/facade.rs',
+              'src/main.rs', 'src/rebuild_plan.rs',
+              'src/indexing/pipeline/stages/semantic_embed.rs',
+              'tests/code_dimension_contract.rs',
+          ]
+          result = []
+          for name in paths:
+              data = pathlib.Path(name).read_bytes()
+              expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/bpstr/codanna/git/blobs',
+                  data=json.dumps({'encoding':'base64','content':base64.b64encode(data).decode()}).encode(),
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'},
+                  method='POST',
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  blob = json.load(response)
+              if blob['sha'] != expected:
+                  raise SystemExit('Published blob mismatch: '+name)
+              result.append({'path':name,'mode':'100644','type':'blob','sha':expected,'sha256':hashlib.sha256(data).hexdigest()})
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          (root/'dimension-blobs.json').write_text(json.dumps(result, indent=2))
+          with tarfile.open(root/'dimension-source.tar.gz','w:gz') as archive:
+              for name in paths:
+                  archive.add(name, arcname=name)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: code-dimension-candidate
+          path: |
+            ${{ runner.temp }}/dimension-baseline.log
+            ${{ runner.temp }}/dimension-candidate.log
+            ${{ runner.temp }}/dimension-fixture.sha256
+            ${{ runner.temp }}/dimension-blobs.json
+            ${{ runner.temp }}/dimension-source.tar.gz
+          retention-days: 14
+          if-no-files-found: error
