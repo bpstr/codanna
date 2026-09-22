@@ -38,8 +38,10 @@ jobs:
         run: |
           set -uo pipefail
           git rev-parse HEAD | tee "$RUNNER_TEMP/scope-head.txt"
+          set +e
           cargo test --locked --test scoped_search_snapshots -- --nocapture 2>&1 | tee "$RUNNER_TEMP/scope-baseline.log"
           status=${PIPESTATUS[0]}
+          set -e
           test "$status" -ne 0
           grep -q '1 passed; 2 failed' "$RUNNER_TEMP/scope-baseline.log"
       - name: Apply exact reviewed snapshot wiring
