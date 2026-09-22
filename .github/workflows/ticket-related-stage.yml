@@ -1,0 +1,101 @@
+name: Ticket related staging
+on:
+  pull_request:
+    branches: [feature/ticket-code-fusion]
+    paths:
+      - 'src/mcp/tools/ticket_related*.rs'
+      - 'tests/ticket_related*.rs'
+      - 'tests/fixtures/repository_task_sources/**'
+      - 'contributing/retrieval/evaluations/repository-tasks.json'
+      - 'contributing/scripts/wire-ticket-related.py'
+      - '.github/workflows/ticket-related-stage.yml'
+permissions:
+  contents: read
+concurrency:
+  group: ticket-related-stage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.repository == 'bpstr/codanna' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo clean -p ort-sys
+      - name: Apply exact reviewed integration
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/related-head.txt"
+          python3 contributing/scripts/wire-ticket-related.py
+          cargo fmt --all
+          git diff --check
+          git diff > "$RUNNER_TEMP/related-integration.diff"
+      - name: Verify bounded graph contracts and frozen relevance
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            rustc --version
+            cargo test --locked --lib ticket_related -- --list | tee "$RUNNER_TEMP/related-selected.txt"
+            grep -Eq '^mcp::tools::ticket_related_tests::.*: test$' "$RUNNER_TEMP/related-selected.txt"
+            cargo test --locked --lib ticket_related -- --nocapture
+            cargo test --locked --test ticket_related_relevance --test ticket_related_cli -- --nocapture
+            cargo test --locked --lib ticket_code_fusion -- --nocapture
+            cargo test --locked --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+            cargo fmt --all -- --check
+          } 2>&1 | tee "$RUNNER_TEMP/related-contracts.log"
+      - name: Publish tested immutable blobs only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          names = [
+              'src/mcp/tools/ticket_context.rs', 'src/mcp/tools/mod.rs', 'src/mcp/catalog.rs',
+              'src/mcp/tools/context.rs', 'src/mcp/tools/ticket_related.rs',
+              'src/mcp/tools/ticket_related_tests.rs', 'tests/ticket_related_cli.rs',
+              'tests/ticket_related_relevance.rs',
+          ]
+          manifest = {}
+          for name in names:
+              data = pathlib.Path(name).read_bytes()
+              payload = json.dumps({'content': data.decode(), 'encoding': 'utf-8'}).encode()
+              request = urllib.request.Request('https://api.github.com/repos/bpstr/codanna/git/blobs', data=payload,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'}, method='POST')
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  blob = json.load(response)['sha']
+              expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if blob != expected:
+                  raise SystemExit('Published Git blob differs from tested source')
+              manifest[name] = {'blob': blob, 'sha256': hashlib.sha256(data).hexdigest()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'related-blobs.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ticket-related-evidence
+          path: |
+            ${{ runner.temp }}/related-head.txt
+            ${{ runner.temp }}/related-selected.txt
+            ${{ runner.temp }}/related-contracts.log
+            ${{ runner.temp }}/related-integration.diff
+            ${{ runner.temp }}/related-blobs.json
+          retention-days: 14
+          if-no-files-found: error
