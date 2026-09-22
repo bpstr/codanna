@@ -63,7 +63,7 @@ impl CodeIntelligenceServer {
                 .as_deref()
                 .unwrap_or("unknown");
             let timestamp_info = metadata.as_ref().map_or_else(
-                || String::new(),
+                String::new,
                 |metadata| {
                     format!(
                         "\n  - Created: {}\n  - Updated: {}",

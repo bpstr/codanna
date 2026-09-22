@@ -2,7 +2,8 @@
 use super::*;
 use crate::mcp::service::{FindSymbolTarget, page_symbols, try_resolve_find_symbol_target};
 use crate::mcp::{
-    CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchWithContextRequest,
+    CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest,
+    SemanticSearchWithContextRequest,
 };
 use crate::{Range, ScopeContext};
 use rmcp::handler::server::wrapper::Parameters;
@@ -377,7 +378,6 @@ async fn reference_context_surfaces_remain_distinct_from_calls() {
         .join("\n");
     assert!(text.contains("Referenced by: 1 symbol(s)"));
 }
-
 
 #[test]
 fn semantic_coverage_distinguishes_eligibility_missing_and_orphan_vectors() {

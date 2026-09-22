@@ -521,8 +521,7 @@ impl IndexFacade {
                         .filter(|id| eligible_ids.contains(id))
                         .count();
                     eligible_with_vector = Some(with_vector);
-                    eligible_without_vector =
-                        Some(eligible_ids.len().saturating_sub(with_vector));
+                    eligible_without_vector = Some(eligible_ids.len().saturating_sub(with_vector));
                     vector_without_current_symbol = Some(
                         vector_ids
                             .iter()
@@ -551,7 +550,9 @@ impl IndexFacade {
             // a split from the aggregate difference above.
             skipped_symbols: None,
             pending_symbols: None,
-            model_name: metadata.as_ref().map(|metadata| metadata.model_name.clone()),
+            model_name: metadata
+                .as_ref()
+                .map(|metadata| metadata.model_name.clone()),
             backend: metadata.as_ref().map(|metadata| {
                 if metadata.is_remote() {
                     "remote"
