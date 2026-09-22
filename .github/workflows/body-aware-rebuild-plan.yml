@@ -42,9 +42,13 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version --verbose
-            sha256sum src/rebuild_plan.rs src/symbol_representation.rs tests/index_plan_cli.rs tests/body_index_plan_cli.rs
+            sha256sum src/rebuild_plan.rs src/rebuild_plan_tests.rs src/symbol_representation.rs tests/index_plan_cli.rs tests/body_index_plan_cli.rs
             cargo test --locked --test index_plan_cli -- --nocapture
             cargo test --locked --test body_index_plan_cli -- --nocapture
+            cargo test --locked --lib rebuild_plan::tests -- --list | tee "$RUNNER_TEMP/body-plan-selected.txt"
+            grep -Eq '^rebuild_plan::tests::.*: test$' "$RUNNER_TEMP/body-plan-selected.txt"
+            cargo test --locked --lib rebuild_plan::tests -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/body-aware-rebuild-plan.log"
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -54,6 +58,8 @@ jobs:
         if: always()
         with:
           name: body-aware-rebuild-plan
-          path: ${{ runner.temp }}/body-aware-rebuild-plan.log
+          path: |
+            ${{ runner.temp }}/body-aware-rebuild-plan.log
+            ${{ runner.temp }}/body-plan-selected.txt
           retention-days: 14
           if-no-files-found: error
