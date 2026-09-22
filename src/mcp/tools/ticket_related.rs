@@ -223,10 +223,12 @@ pub(super) fn collect(
                     relationship.metadata.as_ref().and_then(|metadata| metadata.column),
                 )
             });
-            let target_ids: Vec<_> = edges.iter().map(|(_, target, _)| *target).collect::<BTreeSet<_>>().into_iter().collect();
-            let targets: BTreeMap<_, _> = view.symbols(&target_ids)?.into_iter().map(|symbol| (symbol.id, symbol)).collect();
+            let mut target_ids: Vec<_> = edges.iter().map(|(_, target, _)| *target).collect();
+            target_ids.sort_unstable_by_key(|id| id.value());
+            target_ids.dedup();
+            let targets: BTreeMap<_, _> = view.symbols(&target_ids)?.into_iter().map(|symbol| (symbol.id.value(), symbol)).collect();
             for (_, target_id, relationship) in edges {
-                let Some(target) = targets.get(&target_id) else {
+                let Some(target) = targets.get(&target_id.value()) else {
                     probe.unhydrated_edges += 1;
                     continue;
                 };
