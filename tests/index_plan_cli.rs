@@ -244,7 +244,7 @@ fn over_budget_inputs_produce_a_nonzero_blocked_report() {
     assert_eq!(output.status.code(), Some(3));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"], "blocked");
-    assert_eq!(report["over_budget_inputs"], 2);
+    assert_eq!(report["input_policy_rejections"], 2);
 }
 
 #[test]
@@ -280,23 +280,28 @@ fn local_identity_stays_unknown_without_initializing_a_model() {
     assert_eq!(report["backend"], "local");
     assert_eq!(report["cache_lookup"], "local_model_identity_not_loaded");
     assert!(report["snapshot_hit_inputs"].is_null());
-    assert!(report["over_budget_inputs"].is_null());
+    assert!(report["input_policy_rejections"].is_null());
 }
 
 #[test]
-fn generic_grammar_files_are_partial_not_silently_downloaded() {
+fn generic_grammar_files_are_partial_but_native_lua_is_parsed() {
     let fixture = Fixture::new();
     std::fs::write(
         fixture.root().join("src/module.lua"),
         "function calendar() return 1 end\n",
     )
     .unwrap();
+    std::fs::write(
+        fixture.root().join("src/module.zig"),
+        "pub fn calendar() u32 { return 1; }\n",
+    )
+    .unwrap();
     let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(3));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"], "partial");
-    assert_eq!(report["files_discovered"], 2);
-    assert_eq!(report["files_parsed"], 1);
+    assert_eq!(report["files_discovered"], 3);
+    assert_eq!(report["files_parsed"], 2);
     assert_eq!(report["files_requiring_generic_parser"], 1);
 }
 
@@ -310,4 +315,35 @@ fn corrupt_index_documents_are_not_opened_by_source_planning() {
     let report = fixture.plan(&[]);
     assert_eq!(report["snapshot_hit_inputs"], 2);
     assert_eq!(report["status"], "complete");
+}
+
+#[test]
+fn tokenizer_encoding_failure_is_blocked_not_reported_as_a_token_count() {
+    let fixture = Fixture::new();
+    let tokenizer = tokenizers::Tokenizer::new(tokenizers::models::wordlevel::WordLevel::default());
+    // Valid tokenizer JSON, but its unknown token is absent from the vocabulary.
+    assert!(tokenizer.encode(INPUTS[0], true).is_err());
+    tokenizer.save(fixture.root().join("tokenizer.json"), false).unwrap();
+    fixture.configure(true, Some(2), "tokenizer_path = \"tokenizer.json\"");
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "blocked");
+    assert_eq!(report["input_policy_rejections"], 2);
+    assert!(report["exact_provider_tokens"].is_null());
+}
+
+#[test]
+fn nonregular_optional_input_files_are_rejected_before_reading() {
+    let fixture = Fixture::new();
+    let cache = fixture.root().join(".codanna/index/semantic/embedding-cache.json");
+    std::fs::create_dir_all(&cache).unwrap();
+    let output = fixture.run(&[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("regular file"));
+    std::fs::remove_dir(&cache).unwrap();
+    fixture.configure(true, Some(2), "tokenizer_path = \".home\"");
+    let output = fixture.run(&[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("regular file"));
 }

@@ -47,7 +47,7 @@ pub struct RebuildPlan {
     pub snapshot_miss_inputs: Option<usize>,
     pub snapshot_unique_miss_inputs: Option<usize>,
     pub snapshot_miss_input_bytes: Option<usize>,
-    pub over_budget_inputs: Option<usize>,
+    pub input_policy_rejections: Option<usize>,
     pub exact_provider_tokens: Option<usize>,
     pub provider_requests_made: usize,
     pub future_probe_may_cost_tokens: bool,
@@ -96,6 +96,13 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
         lookup.reason = "local_model_identity_not_loaded";
         return Ok(lookup);
     };
+    if let Some(path) = &cfg.tokenizer_path {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| failure(format!("Cannot inspect configured tokenizer: {error}")))?;
+        if !metadata.is_file() {
+            return Err(failure("Offline tokenizer must be a regular file"));
+        }
+    }
     let budget = InputBudget::remote(cfg.max_input_tokens, cfg.tokenizer_path.as_deref())
         .map_err(failure)?;
     let identity = backend_identity(
@@ -227,7 +234,7 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         snapshot_miss_inputs: lookup.cache.as_ref().map(|_| 0),
         snapshot_unique_miss_inputs: lookup.cache.as_ref().map(|_| 0),
         snapshot_miss_input_bytes: lookup.cache.as_ref().map(|_| 0),
-        over_budget_inputs: lookup.budget.as_ref().map(|_| 0),
+        input_policy_rejections: lookup.budget.as_ref().map(|_| 0),
         exact_provider_tokens: None,
         provider_requests_made: 0,
         future_probe_may_cost_tokens: lookup.backend == "remote",
@@ -270,7 +277,7 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
             }
             if let Some(budget) = &lookup.budget {
                 if budget.validate([input.as_ref()]).is_err() {
-                    *report.over_budget_inputs.as_mut().unwrap() += 1;
+                    *report.input_policy_rejections.as_mut().unwrap() += 1;
                 }
             }
             if let Some(cache) = &lookup.cache {
@@ -292,13 +299,13 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         report.status = "partial";
         report.warnings.push("Generic grammar files were not parsed, even if cached, to prohibit implicit downloads; their embedding inputs are unknown, not zero.");
     }
-    if report.over_budget_inputs.is_some_and(|count| count > 0) {
+    if report.input_policy_rejections.is_some_and(|count| count > 0) {
         report.status = if report.status == "partial" {
             "partial_blocked"
         } else {
             "blocked"
         };
-        report.warnings.push("At least one parsed input exceeds the configured embedding budget; a successful full rebuild is not predicted.");
+        report.warnings.push("At least one parsed input failed budget or tokenizer validation; a successful full rebuild is not predicted.");
     }
     Ok(report)
 }
