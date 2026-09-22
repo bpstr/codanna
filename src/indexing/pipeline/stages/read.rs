@@ -148,7 +148,10 @@ impl ReadStage {
 
 /// Storage keys stay workspace-relative. Only filesystem I/O uses an absolute
 /// path; an unrelated process working directory must not select another file.
-fn read_workspace_file(path: &PathBuf, workspace_root: Option<&Path>) -> PipelineResult<FileContent> {
+fn read_workspace_file(
+    path: &PathBuf,
+    workspace_root: Option<&Path>,
+) -> PipelineResult<FileContent> {
     let source_path = match workspace_root {
         Some(root) if path.is_relative() => root.join(path),
         _ => path.clone(),
@@ -254,7 +257,11 @@ mod tests {
         assert_eq!((read, failed), (2, 0));
         let contents: Vec<_> = content_rx.iter().collect();
         assert_eq!(contents.len(), 2);
-        assert!(contents.iter().all(|content| content.path == relative && content.hash == single.hash));
+        assert!(
+            contents
+                .iter()
+                .all(|content| content.path == relative && content.hash == single.hash)
+        );
     }
 
     #[test]
@@ -264,10 +271,21 @@ mod tests {
         let stage = ReadStage::with_workspace_root(1, Some(root.clone()));
         let missing = PathBuf::from("missing.rs");
         let error = stage.read_single(&missing).unwrap_err();
-        assert!(matches!(error, PipelineError::FileRead { ref path, .. } if path == &root.join(&missing)));
+        assert!(
+            matches!(error, PipelineError::FileRead { ref path, .. } if path == &root.join(&missing))
+        );
         let huge = PathBuf::from("huge.rs");
-        fs::File::create(root.join(&huge)).unwrap().set_len(MAX_SOURCE_FILE_BYTES + 1).unwrap();
-        assert!(stage.read_single(&huge).unwrap_err().to_string().contains("maximum supported size"));
+        fs::File::create(root.join(&huge))
+            .unwrap()
+            .set_len(MAX_SOURCE_FILE_BYTES + 1)
+            .unwrap();
+        assert!(
+            stage
+                .read_single(&huge)
+                .unwrap_err()
+                .to_string()
+                .contains("maximum supported size")
+        );
     }
 
     #[test]
