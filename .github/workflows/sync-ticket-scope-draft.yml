@@ -27,13 +27,27 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if ! git -c core.hooksPath=/dev/null merge --no-commit --no-ff 7715ed08b2403721fb1d0e415052268bd44cacff; then
-            git diff --cc
-            echo 'Conflicting source requires explicit review; nothing was pushed.' >&2
-            exit 1
-          fi
-          # The dependency workflow is published by the connected app separately;
-          # the Actions token never writes or grants additional workflow access.
+          python3 - <<'PY'
+          import pathlib, subprocess
+          dependency = '7715ed08b2403721fb1d0e415052268bd44cacff'
+          merged = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'merge', '--no-commit', '--no-ff', dependency])
+          if merged.returncode:
+              conflicts = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=U'], text=True).splitlines()
+              if conflicts != ['src/mcp/catalog.rs']:
+                  raise SystemExit(f'Unreviewed conflicts; nothing published: {conflicts}')
+              path = conflicts[0]
+              ours = subprocess.check_output(['git', 'show', f'HEAD:{path}'], text=True)
+              base = subprocess.check_output(['git', 'show', f'{dependency}:{path}'], text=True)
+              entry = '    SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations"],["query"],Some("query"),Read),\n'
+              if ours.count(entry) != 1 or ours.replace(entry, '') != base:
+                  raise SystemExit('Catalog differs beyond the reviewed new ticket entry')
+              # Both catalogs have the exact same scope fields. The only
+              # difference is our new tool entry, which must not be removed.
+              pathlib.Path(path).write_text(ours)
+              subprocess.run(['git', 'add', '--', path], check=True)
+          PY
+          # The connected app publishes workflow changes separately; this token
+          # performs ordinary source writes only, without broader permissions.
           git restore --source=HEAD --staged --worktree -- .github/workflows/symbol-path-scope.yml
           rustfmt --edition 2024 --config skip_children=true src/cli/commands/mcp.rs src/mcp/catalog.rs
           git add -- src/cli/commands/mcp.rs src/mcp/catalog.rs
