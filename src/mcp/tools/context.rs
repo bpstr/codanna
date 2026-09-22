@@ -46,7 +46,7 @@ impl CodeIntelligenceServer {
                 Ok(results) => {
                     for (i, result) in results.iter().enumerate() {
                         output.push_str(&format!(
-                            "{}. {} ({:?}) at {}:{} [score {:.2}]\n",
+                            "{}. {} ({:?}) at {}:{} [lexical candidate score {:.2}]\n",
                             i + 1,
                             result.name,
                             result.kind,
@@ -54,6 +54,13 @@ impl CodeIntelligenceServer {
                             result.line,
                             result.score
                         ));
+                        if let Some((matched, total)) =
+                            crate::storage::tantivy::discovery_term_coverage(&code_query, result)
+                        {
+                            output.push_str(&format!(
+                                "   Distinct query-term coverage: {matched}/{total}\n"
+                            ));
+                        }
                         if let Some(signature) = &result.signature {
                             output.push_str(&format!("   Signature: {signature}\n"));
                         }
