@@ -4,3 +4,4 @@ pub mod context;
 pub mod recall;
 pub mod search;
 pub mod symbols;
+pub mod ticket_context;

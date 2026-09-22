@@ -1,4 +1,5 @@
 //! Unified, bounded topic context across code, documents, and conversation recall.
+use super::ticket_context::TicketContextRequest;
 use crate::documents::SearchQuery as DocSearchQuery;
 use crate::mcp::requests::SearchContextRequest;
 use crate::mcp::server::CodeIntelligenceServer;
@@ -8,6 +9,16 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router};
 
 #[tool_router(router = context_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
+    #[tool(
+        description = "Retrieve ticket-aware code context by fusing bounded lexical candidates, optional semantic candidates, and exact indexed identifiers mentioned in relevant documents. Semantic code queries and conversation recall default off. Separate evidence sections and source availability remain visible; no index is rebuilt."
+    )]
+    pub async fn search_ticket_context(
+        &self,
+        Parameters(request): Parameters<TicketContextRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        super::ticket_context::search(self, request).await
+    }
+
     #[tool(
         description = "Search one topic across indexed code, project documents, and shared Codex/Claude conversation recall. Returns separate evidence sections without asking a model to summarize or extract memory. Conversation recall is optional and remains a separate local index."
     )]

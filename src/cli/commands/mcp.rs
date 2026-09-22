@@ -353,6 +353,22 @@ pub async fn run(
     }
     let arguments = arguments;
 
+    let ticket_context_request = if tool_kind == ToolKind::SearchTicketContext {
+        let request =
+            serde_json::from_value::<crate::mcp::tools::ticket_context::TicketContextRequest>(
+                serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+            )
+            .unwrap_or_else(|error| {
+                exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+            });
+        if let Err(error) = crate::mcp::tools::ticket_context::validate(&request) {
+            exit_invalid_args(&tool, error, tool_param_spec(&tool).0, json);
+        }
+        Some(request)
+    } else {
+        None
+    };
+
     // Share typed defaults and validation with the actual MCP handler. The
     // CLI-only symbol_id alias has already supplied the name string above.
     let find_symbol_request = if tool_kind == ToolKind::FindSymbol {
@@ -802,7 +818,10 @@ pub async fn run(
 
     // Only load document store for tools that need it.
     // This is expensive (~1s to load ML model) so we skip it for other tools
-    let needs_document_store = matches!(tool.as_str(), "search_documents" | "search_context");
+    let needs_document_store = matches!(
+        tool.as_str(),
+        "search_documents" | "search_context" | "search_ticket_context"
+    );
     let document_store = if needs_document_store {
         crate::documents::load_from_settings(config)
     } else {
@@ -984,7 +1003,11 @@ pub async fn run(
     // JSON mode already collected everything above through the shared
     // service layer — one execution per invocation. The JSON emit arms
     // below use only pre-collected data; handler dispatch is text-only.
-    let result = if json && tool_kind != ToolKind::SearchContext {
+    let result = if json
+        && !matches!(
+            tool_kind,
+            ToolKind::SearchContext | ToolKind::SearchTicketContext
+        ) {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
         match tool_kind {
@@ -1215,6 +1238,13 @@ pub async fn run(
                     }))
                     .await
             }
+            ToolKind::SearchTicketContext => {
+                server
+                    .search_ticket_context(Parameters(
+                        ticket_context_request.expect("ticket context request validated upstream"),
+                    ))
+                    .await
+            }
             ToolKind::SearchContext => {
                 let query = arguments
                     .as_ref()
@@ -1256,7 +1286,19 @@ pub async fn run(
     // Print result
     match result {
         Ok(call_result) => {
-            if json && tool == "search_context" {
+            if json && tool == "search_ticket_context" {
+                use crate::io::envelope::{EntityType, Envelope};
+                let data = call_result
+                    .structured_content
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({"content": call_result.content}));
+                let envelope = Envelope::success(data)
+                    .with_entity_type(EntityType::SearchResult)
+                    .with_message(
+                        "Bounded ticket context retrieval completed; scores are not confidence",
+                    );
+                println!("{}", render_envelope_json(&envelope, fields.as_ref()));
+            } else if json && tool == "search_context" {
                 use crate::io::envelope::{EntityType, Envelope};
                 let text = call_result
                     .content
