@@ -762,6 +762,7 @@ impl CodeIntelligenceServer {
             kind,
             module,
             lang,
+            path_prefix,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
@@ -778,12 +779,13 @@ impl CodeIntelligenceServer {
                 }
             };
 
-            match indexer.search(
+            match indexer.search_scoped(
                 &query,
                 limit as usize,
                 kind_filter,
                 module.as_deref(),
                 lang.as_deref(),
+                path_prefix.as_deref(),
             ) {
                 Ok(results) => {
                     if results.is_empty() {
