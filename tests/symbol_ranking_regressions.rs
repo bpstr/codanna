@@ -172,10 +172,15 @@ fn small_requested_limit_still_has_a_bounded_discovery_floor() {
         "bounded discovery should select a multi-concept owner, got {}",
         results[0].name
     );
-    assert_eq!(
-        codanna::storage::tantivy::discovery_term_coverage("calendar settings", &results[0]),
-        Some((2, 2))
-    );
+    let evidence = format!(
+        "{} {} {} {}",
+        results[0].name,
+        results[0].doc_comment.as_deref().unwrap_or_default(),
+        results[0].module_path,
+        results[0].file_path
+    )
+    .to_lowercase();
+    assert!(evidence.contains("calendar") && evidence.contains("settings"));
 }
 
 #[test]
