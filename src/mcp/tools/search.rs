@@ -832,7 +832,7 @@ impl CodeIntelligenceServer {
                         }
 
                         result.push_str(&format!(
-                            "   Lexical candidate score: {:.2}\n",
+                            "   Score: {:.2} (raw lexical candidate score)\n",
                             search_result.score
                         ));
                         if let Some((matched, total)) =
