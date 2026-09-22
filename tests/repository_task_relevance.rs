@@ -1,9 +1,9 @@
 //! Source-grounded relevance measurement, not a synthetic perfect-score gate.
 //! Expected owner labels and queries stay outside the indexed source directory.
 
+use codanna::Settings;
 use codanna::indexing::{IndexFacade, calculate_hash};
 use codanna::storage::SearchResult;
-use codanna::Settings;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,7 +22,10 @@ const SOURCES: &[(&str, &str)] = &[
         "src/mcp/tools/recall.rs",
         include_str!("../src/mcp/tools/recall.rs"),
     ),
-    ("src/embedding_cache.rs", include_str!("../src/embedding_cache.rs")),
+    (
+        "src/embedding_cache.rs",
+        include_str!("../src/embedding_cache.rs"),
+    ),
     ("src/memory.rs", include_str!("../src/memory.rs")),
 ];
 
@@ -31,8 +34,11 @@ fn fixture() -> (tempfile::TempDir, IndexFacade, Value) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("corpus");
     for &(path, source) in SOURCES {
-        assert_eq!(calculate_hash(source), oracle["files"][path].as_str().unwrap(),
-            "frozen source changed: {path}; update judgments deliberately, not silently");
+        assert_eq!(
+            calculate_hash(source),
+            oracle["files"][path].as_str().unwrap(),
+            "frozen source changed: {path}; update judgments deliberately, not silently"
+        );
         let target = root.join(path);
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, source).unwrap();
@@ -72,7 +78,11 @@ fn repository_task_relevance_records_misses_instead_of_claiming_perfect_recall()
             .into_iter()
             .filter(|symbol| symbol.file_path.as_ref() == path)
             .collect();
-        assert_eq!(owners.len(), 1, "invalid owner judgment for {name} at {path}");
+        assert_eq!(
+            owners.len(),
+            1,
+            "invalid owner judgment for {name} at {path}"
+        );
         for (variant, query) in task["queries"].as_array().unwrap().iter().enumerate() {
             assert!(variant < 2);
             let query = query.as_str().unwrap();
@@ -94,32 +104,38 @@ fn repository_task_relevance_records_misses_instead_of_claiming_perfect_recall()
                 classified[2] += 1;
                 "owner_not_retrieved_with_200_budget"
             };
-            println!("repository_task_relevance={}", json!({
-                "task": task["id"], "variant": if variant == 0 {"operational"} else {"paraphrase"},
-                "query": query, "owner_name": name, "owner_path": path,
-                "owner_documented": owners[0].doc_comment.is_some(),
-                "rank_at_5": rank, "expanded_coverage_rank_at_200": expanded_rank,
-                "classification": classification,
-                "top_5": results.iter().map(|hit| json!({
-                    "name": hit.name, "path": hit.file_path, "raw_score": hit.score
-                })).collect::<Vec<_>>(),
-            }));
+            println!(
+                "repository_task_relevance={}",
+                json!({
+                    "task": task["id"], "variant": if variant == 0 {"operational"} else {"paraphrase"},
+                    "query": query, "owner_name": name, "owner_path": path,
+                    "owner_documented": owners[0].doc_comment.is_some(),
+                    "rank_at_5": rank, "expanded_coverage_rank_at_200": expanded_rank,
+                    "classification": classification,
+                    "top_5": results.iter().map(|hit| json!({
+                        "name": hit.name, "path": hit.file_path, "raw_score": hit.score
+                    })).collect::<Vec<_>>(),
+                })
+            );
             measured += 1;
         }
     }
     let tasks = oracle["tasks"].as_array().unwrap().len();
     assert_eq!(measured, tasks * 2);
     assert_eq!(classified.iter().sum::<usize>(), measured);
-    println!("repository_task_summary={}", json!({
-        "oracle_sha256": calculate_hash(ORACLE), "source_files": SOURCES.len(),
-        "indexed_symbols": index.symbol_count(), "tasks": tasks, "queries": measured,
-        "operational_hit_at_5": hits[0], "paraphrase_hit_at_5": hits[1],
-        "operational_mrr_at_5": reciprocal_ranks[0] / tasks as f64,
-        "paraphrase_mrr_at_5": reciprocal_ranks[1] / tasks as f64,
-        "owner_in_top_5": classified[0], "owner_only_at_200": classified[1],
-        "owner_not_retrieved_at_200": classified[2], "measured_query_microseconds": query_micros,
-        "measurement_only": true, "semantic_indexing": false,
-    }));
+    println!(
+        "repository_task_summary={}",
+        json!({
+            "oracle_sha256": calculate_hash(ORACLE), "source_files": SOURCES.len(),
+            "indexed_symbols": index.symbol_count(), "tasks": tasks, "queries": measured,
+            "operational_hit_at_5": hits[0], "paraphrase_hit_at_5": hits[1],
+            "operational_mrr_at_5": reciprocal_ranks[0] / tasks as f64,
+            "paraphrase_mrr_at_5": reciprocal_ranks[1] / tasks as f64,
+            "owner_in_top_5": classified[0], "owner_only_at_200": classified[1],
+            "owner_not_retrieved_at_200": classified[2], "measured_query_microseconds": query_micros,
+            "measurement_only": true, "semantic_indexing": false,
+        })
+    );
     // This assertion protects measurement completeness. It is not a quality
     // threshold: observed misses must stay visible until independently repaired.
 }
@@ -129,14 +145,34 @@ fn repository_task_relevance_retains_exact_identifier_and_absence_controls() {
     let (_temp, index, oracle) = fixture();
     for control in oracle["identifier_controls"].as_array().unwrap() {
         let results = index
-            .search(control["query"].as_str().unwrap(), 5, None, None, Some("rust"))
+            .search(
+                control["query"].as_str().unwrap(),
+                5,
+                None,
+                None,
+                Some("rust"),
+            )
             .unwrap();
         assert_eq!(
-            owner_rank(&results, control["name"].as_str().unwrap(), control["path"].as_str().unwrap()),
-            Some(1), "exact identifier control: {control}"
+            owner_rank(
+                &results,
+                control["name"].as_str().unwrap(),
+                control["path"].as_str().unwrap()
+            ),
+            Some(1),
+            "exact identifier control: {control}"
         );
     }
-    assert!(index
-        .search(oracle["absent_control"].as_str().unwrap(), 5, None, None, Some("rust"))
-        .unwrap().is_empty());
+    assert!(
+        index
+            .search(
+                oracle["absent_control"].as_str().unwrap(),
+                5,
+                None,
+                None,
+                Some("rust")
+            )
+            .unwrap()
+            .is_empty()
+    );
 }
