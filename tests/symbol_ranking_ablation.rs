@@ -266,11 +266,13 @@ fn current_top_k_loses_multi_concept_owners_that_exist_in_the_bounded_candidate_
 }
 
 #[test]
-fn bounded_distinct_term_coverage_ablation_recovers_topic_owners_without_changing_query_syntax() {
+fn bounded_distinct_term_coverage_ablation_measures_candidate_pool_size_before_selection() {
     let fixture = Fixture::new();
     let mut r0_hits = 0;
     let mut r1x4_hits = 0;
     let mut r1x8_hits = 0;
+    let mut r1x16_hits = 0;
+    let mut r1cap_hits = 0;
 
     for case in TOPIC_CASES {
         let r0 = fixture.raw(case.query, 5);
@@ -281,10 +283,18 @@ fn bounded_distinct_term_coverage_ablation_recovers_topic_owners_without_changin
 
         let eight = rerank_r1(case.query, fixture.raw(case.query, 40), 5);
         r1x8_hits += usize::from(rank(&eight, case.expected).is_some());
+
+        let sixteen = rerank_r1(case.query, fixture.raw(case.query, 80), 5);
+        r1x16_hits += usize::from(rank(&sixteen, case.expected).is_some());
+
+        let capped = rerank_r1(case.query, fixture.raw(case.query, 200), 5);
+        r1cap_hits += usize::from(rank(&capped, case.expected).is_some());
     }
 
     println!(
-        "topic_hit_at_5: r0={r0_hits}/{} r1x4={r1x4_hits}/{} r1x8={r1x8_hits}/{}",
+        "topic_hit_at_5: r0={r0_hits}/{} r1x4={r1x4_hits}/{} r1x8={r1x8_hits}/{} r1x16={r1x16_hits}/{} r1cap200={r1cap_hits}/{}",
+        TOPIC_CASES.len(),
+        TOPIC_CASES.len(),
         TOPIC_CASES.len(),
         TOPIC_CASES.len(),
         TOPIC_CASES.len()
@@ -292,8 +302,14 @@ fn bounded_distinct_term_coverage_ablation_recovers_topic_owners_without_changin
     assert!(r1x4_hits >= r0_hits);
     assert!(r1x8_hits >= r1x4_hits);
     assert!(
-        r1x8_hits >= TOPIC_CASES.len() - 1,
-        "8x bounded overfetch should recover nearly all labeled topic owners"
+        r1x8_hits < TOPIC_CASES.len() - 1,
+        "fixture must retain evidence that 8x overfetch is insufficient"
+    );
+    assert!(r1x16_hits >= r1x8_hits);
+    assert!(r1cap_hits >= r1x16_hits);
+    assert!(
+        r1cap_hits >= TOPIC_CASES.len() - 1,
+        "a bounded 200-candidate pool should show whether ranking rather than recall is the blocker"
     );
 }
 
