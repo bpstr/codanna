@@ -407,16 +407,8 @@ fn semantic_coverage_distinguishes_eligibility_missing_and_orphan_vectors() {
     let mut semantic = SimpleSemanticSearch::new_empty(2, "fixture");
     semantic.set_embedding_identity(identity).unwrap();
     semantic.store_embeddings(vec![
-        (
-            eligible_with_vector.id,
-            vec![1.0, 0.0],
-            "rust".into(),
-        ),
-        (
-            SymbolId::new(99).unwrap(),
-            vec![0.0, 1.0],
-            "rust".into(),
-        ),
+        (eligible_with_vector.id, vec![1.0, 0.0], "rust".into()),
+        (SymbolId::new(99).unwrap(), vec![0.0, 1.0], "rust".into()),
     ]);
     facade.semantic_search = Some(Arc::new(Mutex::new(semantic)));
 
