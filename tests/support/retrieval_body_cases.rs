@@ -111,6 +111,14 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
         "lexical-only request initialized a provider"
     );
 
+    // Keep scope identical on both sides: a scope filter contributes to the
+    // raw lexical score, independently of semantic/related-code opt-in.
+    let scoped_direct = ticket(
+        &workspace,
+        &json!({"query": QUERY, "code_limit": 1, "code_path_prefix": "src/lib.rs"}),
+    );
+    assert_eq!(scoped_direct["code"]["items"][0]["name"], "dispatch_ticket");
+    assert!(endpoint.take_inputs().is_empty());
     let scoped = ticket(
         &workspace,
         &json!({
@@ -118,7 +126,7 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
             "include_semantic_code": true, "code_path_prefix": "src/lib.rs"
         }),
     );
-    assert_eq!(scoped["code"]["items"], direct["code"]["items"]);
+    assert_eq!(scoped["code"]["items"], scoped_direct["code"]["items"]);
     assert_eq!(
         scoped["code"]["semantic_status"],
         "not_run_scoped_semantic_unsupported"
