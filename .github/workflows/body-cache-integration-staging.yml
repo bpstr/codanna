@@ -1,0 +1,119 @@
+name: Body cache integration staging
+on:
+  pull_request:
+    branches: [feature/body-aware-rebuild-plan]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: body-cache-integration-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Combine only the pinned implementation branches locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Integration verification'
+          git config user.email 'integration@invalid.local'
+          git fetch --no-tags origin 00f8c7daba1fc1ac683469c7c6a8c214fddd01f0
+          python3 contributing/scripts/integrate-body-cache.py combine
+          cargo fmt --all
+          git add -u
+          git commit -m 'Combine pinned body planner and cache reuse for verification'
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Record pressure baseline without hiding compilation failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --test semantic_rebuild_reuse --no-run
+          sha256sum tests/support/body_rebuild_cache_cases.rs > "$RUNNER_TEMP/body-cache-fixture.sha256"
+          set +e
+          cargo test --locked --test semantic_rebuild_reuse body_rebuild_cache -- --nocapture > "$RUNNER_TEMP/body-cache-baseline.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/body-cache-baseline.log"
+          test "$status" -ne 0
+          grep -q 'test result: FAILED' "$RUNNER_TEMP/body-cache-baseline.log"
+          grep -q 'body_cache_pressure_preserves_late_hits_and_continues_learning.*FAILED' "$RUNNER_TEMP/body-cache-baseline.log"
+      - name: Apply reviewed bounded body-cache repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 contributing/scripts/integrate-body-cache.py repair
+          cargo fmt --all
+          sha256sum -c "$RUNNER_TEMP/body-cache-fixture.sha256"
+      - name: Verify planner parity, reuse and existing body contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/indexing/pipeline/stages/semantic_embed.rs src/semantic/simple.rs src/indexing/facade.rs tests/support/body_rebuild_cache_cases.rs
+            cargo test --locked --test semantic_rebuild_reuse --test index_plan_cli --test body_index_plan_cli -- --nocapture
+            cargo test --locked --lib rebuild_plan::tests -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
+            cargo test --locked --lib rebuild_cache -- --nocapture
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/body-cache-candidate.log"
+      - name: Publish verified immutable source blobs only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          base = '1662e95e14323dbd197a381ff9789d103df8a538'
+          paths = subprocess.check_output(['git','diff','--name-only',base], text=True).splitlines()
+          entries = []
+          for name in paths:
+              path = pathlib.Path(name)
+              if not path.is_file():
+                  raise SystemExit(f'Unexpected deletion: {name}')
+              data = path.read_bytes()
+              expected = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              request = urllib.request.Request('https://api.github.com/repos/bpstr/codanna/git/blobs',
+                  data=json.dumps({'content':base64.b64encode(data).decode(),'encoding':'base64'}).encode(),
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'}, method='POST')
+              with urllib.request.urlopen(request) as response:
+                  returned = json.load(response)['sha']
+              if returned != expected:
+                  raise SystemExit(f'Blob mismatch: {name}')
+              entries.append({'path':name,'mode':'100644','type':'blob','sha':returned,'sha256':hashlib.sha256(data).hexdigest()})
+          pathlib.Path(os.environ['RUNNER_TEMP'],'body-cache-blobs.json').write_text(json.dumps(entries,indent=2))
+          PY
+          git add -u
+          git -c user.name='Integration verification' -c user.email='integration@invalid.local' commit -m 'Record tested bounded body cache sources'
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/body-cache-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: body-cache-integration
+          path: |
+            ${{ runner.temp }}/body-cache-baseline.log
+            ${{ runner.temp }}/body-cache-candidate.log
+            ${{ runner.temp }}/body-cache-fixture.sha256
+            ${{ runner.temp }}/body-cache-blobs.json
+            ${{ runner.temp }}/body-cache-source.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
