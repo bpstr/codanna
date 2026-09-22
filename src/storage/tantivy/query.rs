@@ -11,7 +11,7 @@ use tantivy::{
 use super::{DocumentIndex, SearchResult};
 
 const DISCOVERY_CANDIDATE_MULTIPLIER: usize = 16;
-const DISCOVERY_CANDIDATE_FLOOR: usize = 64;
+const DISCOVERY_CANDIDATE_FLOOR: usize = 128;
 const DISCOVERY_CANDIDATE_CAP: usize = 200;
 
 fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
