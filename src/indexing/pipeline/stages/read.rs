@@ -8,7 +8,7 @@ use crate::indexing::pipeline::types::{FileContent, PipelineError, PipelineResul
 use crossbeam_channel::{Receiver, Sender};
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -44,7 +44,7 @@ impl ReadStage {
 
     /// Read a single file directly (for incremental mode).
     pub fn read_single(&self, path: &PathBuf) -> PipelineResult<FileContent> {
-        read_file(path)
+        read_workspace_file(path, self.workspace_root.as_deref())
     }
 
     /// Run the read stage, reading from path channel and sending to content channel.
@@ -93,15 +93,8 @@ impl ReadStage {
                         input_wait_ns
                             .fetch_add(recv_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
-                        match read_file(&path) {
-                            Ok(mut content) => {
-                                // Normalize path to relative if workspace_root is set
-                                if let Some(ref root) = *workspace_root {
-                                    if let Ok(relative) = content.path.strip_prefix(root) {
-                                        content.path = relative.to_path_buf();
-                                    }
-                                }
-
+                        match read_workspace_file(&path, workspace_root.as_deref()) {
+                            Ok(content) => {
                                 read_count.fetch_add(1, Ordering::Relaxed);
 
                                 // Track output wait (time blocked on send)
@@ -151,6 +144,25 @@ impl ReadStage {
             start.elapsed(),
         ))
     }
+}
+
+/// Storage keys stay workspace-relative. Only filesystem I/O uses an absolute
+/// path; an unrelated process working directory must not select another file.
+fn read_workspace_file(
+    path: &PathBuf,
+    workspace_root: Option<&Path>,
+) -> PipelineResult<FileContent> {
+    let source_path = match workspace_root {
+        Some(root) if path.is_relative() => root.join(path),
+        _ => path.clone(),
+    };
+    let mut content = read_file(&source_path)?;
+    if let Some(root) = workspace_root {
+        if let Ok(relative) = content.path.strip_prefix(root) {
+            content.path = relative.to_path_buf();
+        }
+    }
+    Ok(content)
 }
 
 /// Read a single file and compute its SHA256 hash.
@@ -221,6 +233,60 @@ mod tests {
     use super::*;
     use crossbeam_channel::bounded;
     use tempfile::TempDir;
+
+    #[test]
+    fn workspace_reads_preserve_keys_for_single_and_parallel_paths() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let relative = PathBuf::from("src/owned.rs");
+        let absolute = root.join(&relative);
+        fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+        fs::write(&absolute, "fn workspace_owner() {}\n").unwrap();
+        let stage = ReadStage::with_workspace_root(2, Some(root));
+        let single = stage.read_single(&relative).unwrap();
+        assert_eq!(single.path, relative);
+        assert_eq!(single.content, "fn workspace_owner() {}\n");
+        assert_eq!(stage.read_single(&absolute).unwrap().path, relative);
+
+        let (path_tx, path_rx) = bounded(2);
+        let (content_tx, content_rx) = bounded(2);
+        path_tx.send(relative.clone()).unwrap();
+        path_tx.send(absolute).unwrap();
+        drop(path_tx);
+        let (read, failed, _, _, _) = stage.run(path_rx, content_tx).unwrap();
+        assert_eq!((read, failed), (2, 0));
+        let contents: Vec<_> = content_rx.iter().collect();
+        assert_eq!(contents.len(), 2);
+        assert!(
+            contents
+                .iter()
+                .all(|content| content.path == relative && content.hash == single.hash)
+        );
+    }
+
+    #[test]
+    fn workspace_read_failure_keeps_absolute_error_and_existing_byte_limits() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let stage = ReadStage::with_workspace_root(1, Some(root.clone()));
+        let missing = PathBuf::from("missing.rs");
+        let error = stage.read_single(&missing).unwrap_err();
+        assert!(
+            matches!(error, PipelineError::FileRead { ref path, .. } if path == &root.join(&missing))
+        );
+        let huge = PathBuf::from("huge.rs");
+        fs::File::create(root.join(&huge))
+            .unwrap()
+            .set_len(MAX_SOURCE_FILE_BYTES + 1)
+            .unwrap();
+        assert!(
+            stage
+                .read_single(&huge)
+                .unwrap_err()
+                .to_string()
+                .contains("maximum supported size")
+        );
+    }
 
     #[test]
     fn test_read_single_file() {
