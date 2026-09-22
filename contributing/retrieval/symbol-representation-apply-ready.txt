@@ -1,1 +1,0 @@
-Apply only the checked source patch 6af7b564cae62c9b0e680706df0759073a36c87e78425916a7acba5f06d041b2 to feature/symbol-body-representation. The temporary runner removes itself after committing source and regression tests. Verification remains the separate read-only representation contract workflow.
