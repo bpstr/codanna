@@ -812,6 +812,7 @@ impl CodeIntelligenceServer {
             kind,
             module,
             lang,
+            path_prefix,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
@@ -828,12 +829,13 @@ impl CodeIntelligenceServer {
                 }
             };
 
-            match indexer.search(
+            match indexer.search_scoped(
                 &query,
                 limit as usize,
                 kind_filter,
                 module.as_deref(),
                 lang.as_deref(),
+                path_prefix.as_deref(),
             ) {
                 Ok(results) => {
                     if results.is_empty() {
@@ -881,7 +883,17 @@ impl CodeIntelligenceServer {
                             result.push_str(&format!("   Signature: {sig}\n"));
                         }
 
-                        result.push_str(&format!("   Score: {:.2}\n", search_result.score));
+                        result.push_str(&format!(
+                            "   Score: {:.2} (raw lexical candidate score)\n",
+                            search_result.score
+                        ));
+                        if let Some((matched, total)) =
+                            crate::storage::tantivy::discovery_term_coverage(&query, search_result)
+                        {
+                            result.push_str(&format!(
+                                "   Distinct query-term coverage: {matched}/{total}\n"
+                            ));
+                        }
                         result.push('\n');
                     }
 

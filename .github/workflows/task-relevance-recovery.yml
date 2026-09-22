@@ -1,0 +1,52 @@
+name: Task relevance recovery
+on:
+  pull_request:
+    branches: [perf/discovery-coverage-evaluation]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: task-relevance-recovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Measure frozen questions and verify selected policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum contributing/retrieval/evaluations/repository-tasks.json src/storage/tantivy/query.rs src/storage/tantivy/linguistic_coverage.rs
+            cargo test --locked --lib linguistic_coverage -- --nocapture
+            cargo test --locked --test repository_relevance_ablation --test repository_task_relevance --test symbol_ranking_regressions --test symbol_ranking_runtime_holdout --test retrieval_ranking_regressions -- --nocapture
+            cargo test --locked --test adversarial_regressions search_graph -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/task-relevance-recovery.log"
+          python3 contributing/scripts/check-task-relevance-recovery.py "$RUNNER_TEMP/task-relevance-recovery.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: task-relevance-recovery
+          path: ${{ runner.temp }}/task-relevance-recovery.log
+          retention-days: 14
+          if-no-files-found: error

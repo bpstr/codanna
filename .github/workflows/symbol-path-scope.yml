@@ -1,0 +1,71 @@
+name: Symbol path scope
+on:
+  pull_request:
+    branches: [fix/symbol-ranking-coverage]
+    paths:
+      - 'src/storage/tantivy/query.rs'
+      - 'src/indexing/facade.rs'
+      - 'src/indexing/pipeline/stages/discover.rs'
+      - 'src/indexing/pipeline/stages/read.rs'
+      - 'src/mcp/requests.rs'
+      - 'src/mcp/catalog.rs'
+      - 'src/mcp/tools/search.rs'
+      - 'src/mcp/tools/context.rs'
+      - 'src/cli/args.rs'
+      - 'src/cli/commands/retrieve.rs'
+      - 'src/cli/commands/mcp.rs'
+      - 'src/retrieve.rs'
+      - 'tests/symbol_path_scope.rs'
+      - 'tests/symbol_scope_cli.rs'
+      - '.github/workflows/symbol-path-scope.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: symbol-path-scope-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Run subtree scope contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/storage/tantivy/query.rs src/indexing/pipeline/stages/discover.rs src/indexing/pipeline/stages/read.rs src/mcp/tools/context.rs src/cli/commands/mcp.rs tests/symbol_path_scope.rs tests/symbol_scope_cli.rs
+            cargo test --locked --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --lib indexing::pipeline::stages::read::tests -- --nocapture
+            cargo test --locked --lib workspace_incremental_reads -- --nocapture
+            cargo test --locked --lib run_incremental_ -- --nocapture
+            cargo test --locked --lib pair_relocations_ -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/symbol-path-scope.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: symbol-path-scope
+          path: ${{ runner.temp }}/symbol-path-scope.log
+          retention-days: 14
+          if-no-files-found: error

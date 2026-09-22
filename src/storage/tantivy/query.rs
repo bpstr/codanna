@@ -4,11 +4,47 @@ use std::path::PathBuf;
 use tantivy::{
     TantivyDocument as Document, Term,
     collector::{Count, DocSetCollector, TopDocs},
-    query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery},
+    query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery, TermSetQuery},
     schema::{IndexRecordOption, Value},
 };
 
 use super::{DocumentIndex, SearchResult};
+
+const DISCOVERY_CANDIDATE_MULTIPLIER: usize = 16;
+const DISCOVERY_CANDIDATE_FLOOR: usize = 128;
+const DISCOVERY_CANDIDATE_CAP: usize = 200;
+
+fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
+    super::linguistic_coverage::query_terms(query)
+}
+
+fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
+    super::linguistic_coverage::coverage(result, terms)
+}
+
+pub(crate) fn discovery_term_coverage(
+    query: &str,
+    result: &SearchResult,
+) -> Option<(usize, usize)> {
+    let terms = simple_discovery_terms(query)?;
+    Some((result_term_coverage(result, &terms), terms.len()))
+}
+
+fn discovery_candidate_limit(limit: usize, enabled: bool) -> usize {
+    if !enabled {
+        return limit;
+    }
+    let expanded = limit
+        .saturating_mul(DISCOVERY_CANDIDATE_MULTIPLIER)
+        .clamp(DISCOVERY_CANDIDATE_FLOOR, DISCOVERY_CANDIDATE_CAP);
+    limit.max(expanded)
+}
+
+fn rerank_discovery_results(results: &mut Vec<SearchResult>, terms: &[String], limit: usize) {
+    super::ranking_efficiency::sort_coverage_once(results, limit, |row| {
+        result_term_coverage(row, terms)
+    });
+}
 
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
 pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
@@ -45,7 +81,7 @@ impl DocumentIndex {
         searcher.search(query, &TopDocs::with_limit(count).order_by_score())
     }
 
-    /// Search for documents
+    /// Search symbols without a path scope.
     pub fn search(
         &self,
         query_str: &str,
@@ -53,6 +89,26 @@ impl DocumentIndex {
         kind_filter: Option<SymbolKind>,
         module_filter: Option<&str>,
         language_filter: Option<&str>,
+    ) -> StorageResult<Vec<SearchResult>> {
+        self.search_scoped(
+            query_str,
+            limit,
+            kind_filter,
+            module_filter,
+            language_filter,
+            None,
+        )
+    }
+
+    /// Search symbols with an optional portable workspace-relative subtree.
+    pub fn search_scoped(
+        &self,
+        query_str: &str,
+        limit: usize,
+        kind_filter: Option<SymbolKind>,
+        module_filter: Option<&str>,
+        language_filter: Option<&str>,
+        path_prefix: Option<&str>,
     ) -> StorageResult<Vec<SearchResult>> {
         if !(1..=1000).contains(&limit) {
             return Err(StorageError::InvalidFieldValue {
@@ -152,12 +208,24 @@ impl DocumentIndex {
             ));
         }
 
+        if let Some(path_prefix) = path_prefix {
+            let terms = self.file_scope_terms(&searcher, path_prefix)?;
+            if terms.is_empty() {
+                return Ok(Vec::new());
+            }
+            all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
+        }
+
         let final_query = BooleanQuery::new(all_clauses);
+        let discovery_terms = simple_discovery_terms(query_str);
+        let candidate_limit = discovery_candidate_limit(limit, discovery_terms.is_some());
 
-        let top_docs =
-            searcher.search(&final_query, &TopDocs::with_limit(limit).order_by_score())?;
+        let top_docs = searcher.search(
+            &final_query,
+            &TopDocs::with_limit(candidate_limit).order_by_score(),
+        )?;
 
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
             let doc: Document = searcher.doc(doc_address)?;
 
@@ -251,6 +319,12 @@ impl DocumentIndex {
                 highlights: Vec::new(), // TODO: Implement highlighting
                 context,
             });
+        }
+
+        if let Some(terms) = discovery_terms {
+            rerank_discovery_results(&mut results, &terms, limit);
+        } else {
+            results.truncate(limit);
         }
 
         Ok(results)

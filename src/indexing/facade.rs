@@ -1139,8 +1139,34 @@ impl IndexFacade {
         module_filter: Option<&str>,
         language_filter: Option<&str>,
     ) -> FacadeResult<Vec<SearchResult>> {
+        self.search_scoped(
+            query,
+            limit,
+            kind_filter,
+            module_filter,
+            language_filter,
+            None,
+        )
+    }
+
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        kind_filter: Option<SymbolKind>,
+        module_filter: Option<&str>,
+        language_filter: Option<&str>,
+        path_prefix: Option<&str>,
+    ) -> FacadeResult<Vec<SearchResult>> {
         self.document_index
-            .search(query, limit, kind_filter, module_filter, language_filter)
+            .search_scoped(
+                query,
+                limit,
+                kind_filter,
+                module_filter,
+                language_filter,
+                path_prefix,
+            )
             .map_err(Into::into)
     }
 

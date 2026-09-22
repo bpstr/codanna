@@ -1,0 +1,55 @@
+name: Scoped search snapshots
+on:
+  pull_request:
+    paths:
+      - 'src/storage/tantivy/**'
+      - 'tests/scoped_search_snapshots.rs'
+      - 'tests/symbol_path_scope.rs'
+      - 'tests/symbol_scope_cli.rs'
+      - '.github/workflows/scoped-search-snapshots.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: scoped-search-snapshots-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify scopes and snapshot-keyed inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/storage/tantivy/query.rs src/storage/tantivy/mod.rs src/storage/tantivy/scope.rs tests/scoped_search_snapshots.rs
+            cargo test --locked --test scoped_search_snapshots --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --lib storage::tantivy::scope::tests -- --nocapture
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/scoped-search-snapshots.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoped-search-snapshots
+          path: ${{ runner.temp }}/scoped-search-snapshots.log
+          retention-days: 14
+          if-no-files-found: error
