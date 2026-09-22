@@ -1,0 +1,130 @@
+name: Relevance policy candidate
+on:
+  pull_request:
+    branches: [perf/discovery-coverage-evaluation]
+    paths:
+      - 'src/storage/tantivy/linguistic_coverage.rs'
+      - '.github/workflows/relevance-policy-candidate.yml'
+permissions:
+  contents: read
+concurrency:
+  group: relevance-policy-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.event.pull_request.head.repo.full_name == 'bpstr/codanna' && github.event.pull_request.head.ref == 'investigate/task-relevance-recovery'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Wire the reviewed policy only on pinned base blobs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          files = {
+              'src/storage/tantivy/query.rs': 'ad1b820c0ba765564837e7ca06171cb38c6991d2',
+              'src/storage/tantivy/mod.rs': '452c258d2da0b17c92b9be8d3ae2f146ba02ec42',
+          }
+          for path, expected in files.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == expected, (path, actual, expected)
+          path = pathlib.Path('src/storage/tantivy/query.rs')
+          text = path.read_text()
+          start = text.index('fn simple_discovery_terms(')
+          end = text.index('pub(crate) fn discovery_term_coverage(', start)
+          replacement = '''fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
+              super::linguistic_coverage::query_terms(query)
+          }
+
+          fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
+              super::linguistic_coverage::coverage(result, terms)
+          }
+
+          '''
+          path.write_text(text[:start] + replacement + text[end:])
+          path = pathlib.Path('src/storage/tantivy/mod.rs')
+          text = path.read_text()
+          assert text.count('mod query;\n') == 1
+          path.write_text(text.replace('mod query;\n', 'mod query;\nmod linguistic_coverage;\n'))
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Execute policy and compatibility contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/storage/tantivy/query.rs src/storage/tantivy/linguistic_coverage.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --lib linguistic_coverage -- --nocapture
+            cargo test --locked --test repository_task_relevance --test symbol_ranking_regressions --test symbol_ranking_runtime_holdout --test retrieval_ranking_regressions -- --nocapture
+            cargo test --locked --test adversarial_regressions search_graph -- --nocapture
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/relevance-policy-candidate.log"
+      - name: Check actual runtime recovery without concealing remaining misses
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          lines = pathlib.Path(os.environ['RUNNER_TEMP'], 'relevance-policy-candidate.log').read_text().splitlines()
+          cases = [json.loads(line.split('repository_task_relevance=', 1)[1]) for line in lines if 'repository_task_relevance=' in line]
+          assert len(cases) == 20, len(cases)
+          indexed = {(row['task'], row['variant']): row for row in cases}
+          assert len(indexed) == 20
+          required = [('growing-file','operational'), ('rename-ambiguity','operational'),
+                      ('recall-identity','paraphrase'), ('cache-identity','operational'),
+                      ('cache-atomic-save','operational'), ('adaptive-batch','operational'),
+                      ('partial-walk','operational'), ('recall-identity','operational')]
+          for key in required:
+              rank = indexed[key]['rank_at_5']
+              assert rank is not None and 1 <= rank <= 5, (key, rank)
+          print('Eight targeted recoveries retained; this is not the original 90% quality gate.')
+          PY
+      - name: Publish tested immutable blobs only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          paths = ['src/storage/tantivy/query.rs', 'src/storage/tantivy/mod.rs', 'src/storage/tantivy/linguistic_coverage.rs']
+          manifest = {'staged_head': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(), 'files': {}}
+          for name in paths:
+              content = pathlib.Path(name).read_bytes()
+              request = urllib.request.Request('https://api.github.com/repos/bpstr/codanna/git/blobs',
+                  data=json.dumps({'content': content.decode(), 'encoding':'utf-8'}).encode(),
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type':'application/json'}, method='POST')
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  sha = json.load(response)['sha']
+              expected = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+              assert sha == expected, name
+              manifest['files'][name] = {'blob_sha':sha, 'sha256':hashlib.sha256(content).hexdigest()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'relevance-policy-blobs.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: relevance-policy-candidate
+          path: |
+            ${{ runner.temp }}/relevance-policy-candidate.log
+            ${{ runner.temp }}/relevance-policy-blobs.json
+          retention-days: 14
+          if-no-files-found: error
