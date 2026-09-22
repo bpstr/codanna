@@ -40,6 +40,45 @@ fn rank(items: &Value, name: &str, path: &str) -> Option<usize> {
         .map(|position| position + 1)
 }
 
+// The index reader may process a delayed reload from the initial fixture commit.
+// The runtime correctly rejects related evidence when that happens mid-query.
+// Retry only that explicit state, with a hard cap and a recorded event. Never
+// retry missing owners, empty pools, graph errors, budget errors or failed tests.
+// This is a test measurement policy, not an automatic retry in the product.
+async fn stable_pair(server: &CodeIntelligenceServer, value: &Value) -> (Value, Value, usize) {
+    for attempt in 0..3 {
+        let original: TicketContextRequest = serde_json::from_value(value.clone()).unwrap();
+        let response = server
+            .search_ticket_context(Parameters(original))
+            .await
+            .unwrap();
+        assert_ne!(response.is_error, Some(true));
+        let direct = response.structured_content.unwrap();
+        let mut opted_in = value.clone();
+        opted_in["include_related_code"] = json!(true);
+        let response = server
+            .search_ticket_context(Parameters(serde_json::from_value(opted_in).unwrap()))
+            .await
+            .unwrap();
+        assert_ne!(response.is_error, Some(true));
+        let expanded = response.structured_content.unwrap();
+        let related = &expanded["code"]["related_code"];
+        if matches!(
+            related["status"].as_str(),
+            Some("not_run_generation_mismatch" | "discarded_generation_changed")
+        ) {
+            assert_eq!(related["items"], json!([]), "changed generations must not leak related identities");
+            println!(
+                "ticket_related_generation_retry={}",
+                json!({"query":value["query"], "attempt":attempt + 1, "related":related})
+            );
+            continue;
+        }
+        return (direct, expanded, attempt);
+    }
+    panic!("reader did not stabilize within three explicitly recorded attempts: {value}");
+}
+
 #[tokio::test]
 async fn ticket_related_relevance_preserves_direct_results_and_measures_related_owners() {
     assert_eq!(
@@ -78,26 +117,14 @@ async fn ticket_related_relevance_preserves_direct_results_and_measures_related_
     let mut direct_hits = [0usize; 2];
     let mut expanded_hits = [0usize; 2];
     let mut queries = 0;
+    let mut generation_retries = 0;
     for task in oracle["tasks"].as_array().unwrap() {
         let name = task["name"].as_str().unwrap();
         let path = task["path"].as_str().unwrap();
         for (family, query) in task["queries"].as_array().unwrap().iter().enumerate() {
             let value = json!({ "query":query, "code_limit":5, "document_limit":1, "conversation_limit":1 });
-            let original: TicketContextRequest = serde_json::from_value(value.clone()).unwrap();
-            let response = server
-                .search_ticket_context(Parameters(original))
-                .await
-                .unwrap();
-            assert_ne!(response.is_error, Some(true));
-            let direct = response.structured_content.unwrap();
-            let mut opted_in = value;
-            opted_in["include_related_code"] = json!(true);
-            let response = server
-                .search_ticket_context(Parameters(serde_json::from_value(opted_in).unwrap()))
-                .await
-                .unwrap();
-            assert_ne!(response.is_error, Some(true));
-            let expanded = response.structured_content.unwrap();
+            let (direct, expanded, retries) = stable_pair(&server, &value).await;
+            generation_retries += retries;
             assert_eq!(
                 expanded["code"]["items"], direct["code"]["items"],
                 "opting in must not reorder or rescore direct candidates"
@@ -114,7 +141,7 @@ async fn ticket_related_relevance_preserves_direct_results_and_measures_related_
                 json!({
                     "task":task["id"], "family":family, "query":query, "owner":name, "path":path,
                     "direct_rank_at_5":direct_rank, "related_rank_at_6":related_rank,
-                    "related":expanded["code"]["related_code"],
+                    "generation_retries":retries, "related":expanded["code"]["related_code"],
                 })
             );
             if family == 0
@@ -138,6 +165,8 @@ async fn ticket_related_relevance_preserves_direct_results_and_measures_related_
             "queries":queries, "direct_hit_at_5":direct_hits,
             "direct_or_related_hit_at_up_to_11":expanded_hits,
             "direct_results_unchanged":true, "paid_inference":false,
+            "generation_retries":generation_retries,
+            "measurement":"bounded_retry_only_for_explicit_generation_invalidation",
             "quality_gate_passed":false,
         })
     );
