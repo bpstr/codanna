@@ -135,13 +135,30 @@ impl SemanticEmbedStage {
     /// Process a batch of embedding candidates.
     fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
         let accelerated = crate::memory::accelerated_embeddings_requested();
-        let mut stored = 0;
+
+        // Probe the whole collector batch before admitting any newly generated
+        // vector into the bounded cache. Otherwise early misses can evict later
+        // compatible hits before those hits are looked up (the production
+        // collector batch is 5,000 symbols, larger than the default cache).
+        let items: Vec<_> = batch
+            .candidates
+            .iter()
+            .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
+            .collect();
+        let missing = {
+            let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+                path: std::path::PathBuf::new(),
+                reason: "Failed to lock semantic search".to_string(),
+            })?;
+            semantic.reuse_cached_embeddings(&items)
+        };
+        let mut stored = items.len() - missing.len();
         let mut offset = 0;
 
         // Persist each bounded inference result before producing the next one.
-        // Previously a 5,000-symbol pipeline batch could retain every output
-        // vector plus all native inference temporaries at the same time.
-        while offset < batch.candidates.len() {
+        // This retains the memory bound while cache lookup remains snapshot-like
+        // for the entire collector batch.
+        while offset < missing.len() {
             let memory = crate::memory::MemoryBudget::current();
             if memory.under_pressure() {
                 return Err(PipelineError::Parse {
@@ -155,28 +172,12 @@ impl SemanticEmbedStage {
                 });
             }
             let batch_size = memory.embedding_batch_size(64, accelerated);
-            let end = (offset + batch_size).min(batch.candidates.len());
-            let items: Vec<_> = batch.candidates[offset..end]
-                .iter()
-                .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
-                .collect();
-
-            let missing = {
-                let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
-                    path: std::path::PathBuf::new(),
-                    reason: "Failed to lock semantic search".to_string(),
-                })?;
-                semantic.reuse_cached_embeddings(&items)
-            };
-            stored += items.len() - missing.len();
-            if missing.is_empty() {
-                offset = end;
-                continue;
-            }
+            let end = (offset + batch_size).min(missing.len());
+            let inference = &missing[offset..end];
 
             let embeddings =
                 self.pool
-                    .embed_parallel(&missing)
+                    .embed_parallel(inference)
                     .map_err(|e| PipelineError::Parse {
                         path: std::path::PathBuf::new(),
                         reason: format!("Embedding generation failed: {e}"),
@@ -187,7 +188,7 @@ impl SemanticEmbedStage {
                     path: std::path::PathBuf::new(),
                     reason: "Failed to lock semantic search".to_string(),
                 })?;
-                stored += semantic.store_embeddings_with_inputs(embeddings, &missing);
+                stored += semantic.store_embeddings_with_inputs(embeddings, inference);
             }
             offset = end;
         }
