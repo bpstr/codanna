@@ -368,6 +368,23 @@ pub async fn run(
         None
     };
 
+    // Use the same typed request validation in JSON collection and text
+    // dispatch. A malformed optional scope must not turn into an omitted filter.
+    let typed_validation = match tool_kind {
+        ToolKind::SearchSymbols => serde_json::from_value::<crate::mcp::SearchSymbolsRequest>(
+            serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+        )
+        .map(|_| ()),
+        ToolKind::SearchContext => serde_json::from_value::<crate::mcp::SearchContextRequest>(
+            serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+        )
+        .map(|_| ()),
+        _ => Ok(()),
+    };
+    if let Err(error) = typed_validation {
+        exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json);
+    }
+
     // Semantic snapshots intentionally load without constructing a second
     // query model. Direct CLI invocations do not pass through the workspace
     // reader's lazy initializer, so initialize the shared backend once before
@@ -627,8 +644,21 @@ pub async fn run(
                 }
             };
 
-            match facade.search(q, limit as usize, kind_filter, module, language) {
+            let path_prefix = arguments
+                .as_ref()
+                .and_then(|m| m.get("path_prefix"))
+                .and_then(|v| v.as_str());
+            match facade.search_scoped(q, limit as usize, kind_filter, module, language, path_prefix) {
                 Ok(results) => Some(results),
+                Err(crate::IndexError::Storage(crate::StorageError::InvalidFieldValue {
+                    field,
+                    reason,
+                })) if field == "path_prefix" => exit_invalid_args(
+                    &tool,
+                    &format!("path_prefix: {reason}"),
+                    tool_param_spec(&tool).0,
+                    json,
+                ),
                 Err(e) => exit_index_error(EntityType::SearchResult, q, e),
             }
         } else {
@@ -1272,6 +1302,15 @@ pub async fn run(
                     .and_then(|m| m.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                if call_result.is_error == Some(true) {
+                    let envelope: Envelope<()> = Envelope::error(
+                        crate::io::envelope::ResultCode::InvalidQuery,
+                        text,
+                    )
+                    .with_entity_type(EntityType::SearchResult)
+                    .with_query(query);
+                    emit_envelope_and_exit(envelope);
+                }
                 let envelope = Envelope::success(serde_json::json!({"text": text}))
                     .with_entity_type(EntityType::SearchResult)
                     .with_query(query)
@@ -1850,6 +1889,11 @@ pub async fn run(
                             eprintln!("Warning: Non-text content returned");
                         }
                     }
+                }
+                if call_result.is_error == Some(true)
+                    && matches!(tool_kind, ToolKind::SearchSymbols | ToolKind::SearchContext)
+                {
+                    std::process::exit(2);
                 }
                 if text_exit != 0 {
                     std::process::exit(text_exit);
