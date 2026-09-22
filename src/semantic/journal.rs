@@ -124,10 +124,10 @@ fn valid_name(name: &str) -> bool {
 
 fn manifest(bytes: &[u8]) -> Result<Manifest, SemanticSearchError> {
     let value: Manifest = serde_json::from_slice(bytes).map_err(error)?;
-    if !(1..=4).contains(&value.metadata.version) || !(1..=4096).contains(&value.metadata.dimension)
-    {
-        return Err(error("unsupported semantic metadata version or dimension"));
+    if !(1..=4).contains(&value.metadata.version) {
+        return Err(error("unsupported semantic metadata version"));
     }
+    super::validate_code_embedding_dimension(value.metadata.dimension)?;
     if let Some(j) = &value.journal {
         if !(2..=4).contains(&value.metadata.version)
             || (value.metadata.version == 4
@@ -211,6 +211,9 @@ pub(super) fn save(
     languages: &HashMap<SymbolId, String>,
     mut metadata: SemanticMetadata,
 ) -> Result<(), SemanticSearchError> {
+    // Reject even the first/empty checkpoint before creating a directory, lock,
+    // generation file or cache. Reader and writer use the same code contract.
+    super::validate_code_embedding_dimension(metadata.dimension)?;
     fs::create_dir_all(path).map_err(error)?;
     let canonical = path.canonicalize().map_err(error)?;
     let same_path = state.saved.as_ref().is_some_and(|(p, _)| p == &canonical);

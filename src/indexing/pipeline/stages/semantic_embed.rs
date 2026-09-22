@@ -134,6 +134,12 @@ impl SemanticEmbedStage {
 
     /// Process a batch of embedding candidates.
     pub(crate) fn process_batch(&self, batch: &EmbeddingBatch) -> PipelineResult<usize> {
+        crate::semantic::validate_code_embedding_dimension(self.pool.dimensions()).map_err(
+            |error| PipelineError::Parse {
+                path: Default::default(),
+                reason: error.to_string(),
+            },
+        )?;
         let accelerated = crate::memory::accelerated_embeddings_requested();
         // Pin only existing body-input hits before any admission can evict them.
         let body_hits = self.body_cache_hits(batch)?;

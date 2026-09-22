@@ -3,6 +3,7 @@
 //! This module provides a simple API for semantic search on documentation,
 //! designed to integrate with the existing indexing system.
 
+mod code_dimension;
 mod journal;
 mod metadata;
 mod pool;
@@ -10,6 +11,10 @@ pub(crate) mod remote;
 mod simple;
 mod storage;
 
+pub(crate) use code_dimension::configured_code_dimension;
+pub use code_dimension::{
+    MAX_CODE_EMBEDDING_DIMENSION, build_code_embedding_backend, validate_code_embedding_dimension,
+};
 pub use metadata::{EmbeddingBackendKind, SemanticMetadata};
 pub use pool::{EmbeddingBackend, EmbeddingPool};
 pub use remote::RemoteEmbedder;

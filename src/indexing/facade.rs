@@ -236,10 +236,18 @@ impl IndexFacade {
 
     /// Enable semantic search with the configured model.
     pub fn enable_semantic_search(&mut self) -> FacadeResult<()> {
+        let backend =
+            crate::semantic::build_code_embedding_backend(&self.settings.semantic_search)?;
+        self.enable_semantic_search_with_backend(backend)
+    }
+
+    fn enable_semantic_search_with_backend(
+        &mut self,
+        backend: EmbeddingBackend,
+    ) -> FacadeResult<()> {
+        crate::semantic::validate_code_embedding_dimension(backend.dimensions())?;
         let semantic_path = self.index_base.join("semantic");
         std::fs::create_dir_all(&semantic_path)?;
-
-        let backend = build_embedding_backend(&self.settings.semantic_search)?;
         let backend = Arc::new(backend);
 
         // The backend is the sole model owner for both indexing and queries.
@@ -433,8 +441,26 @@ impl IndexFacade {
         self.check_semantic_state()?;
         let backend = match self.embedding_pool.get() {
             Some(backend) => Arc::clone(backend),
-            None => Arc::new(build_embedding_backend(&self.settings.semantic_search)?),
+            None => Arc::new(crate::semantic::build_code_embedding_backend(
+                &self.settings.semantic_search,
+            )?),
         };
+        self.bind_embedding_backend(backend)
+    }
+
+    /// Reuse CLI preflight's backend rather than repeating a possibly paid probe.
+    /// A loaded generation still has to match dimensions and the complete identity.
+    pub fn install_prepared_code_backend(&mut self, backend: EmbeddingBackend) -> FacadeResult<()> {
+        self.check_semantic_state()?;
+        if self.semantic_search.is_none() {
+            self.enable_semantic_search_with_backend(backend)
+        } else {
+            self.bind_embedding_backend(Arc::new(backend))
+        }
+    }
+
+    fn bind_embedding_backend(&mut self, backend: Arc<EmbeddingBackend>) -> FacadeResult<()> {
+        crate::semantic::validate_code_embedding_dimension(backend.dimensions())?;
         if let Some(semantic) = &self.semantic_search {
             let mut semantic = semantic.lock().map_err(|_| IndexError::lock_error())?;
             let backend_dim = backend.dimensions();
@@ -465,6 +491,7 @@ impl IndexFacade {
                 return Err(IndexError::SemanticSearch(error));
             }
         }
+        let _ = self.embedding_pool.take();
         let _ = self.embedding_pool.set(backend);
         tracing::debug!("Initialized embedding backend on first semantic operation");
         Ok(())

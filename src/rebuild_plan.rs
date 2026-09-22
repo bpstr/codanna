@@ -126,23 +126,12 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
     ));
     lookup.identity = Some(calculate_hash(&identity));
     lookup.budget = Some(budget);
-    let dimension = match std::env::var("CODANNA_EMBED_DIM") {
-        Ok(value) => Some(
-            value
-                .parse::<usize>()
-                .map_err(|_| failure("CODANNA_EMBED_DIM must be a positive integer"))?,
-        ),
-        Err(_) => cfg.remote_dim,
-    };
+    let dimension =
+        crate::semantic::configured_code_dimension(cfg).map_err(IndexError::SemanticSearch)?;
     let Some(dimension) = dimension else {
         lookup.reason = "remote_dimension_unknown_without_probe";
         return Ok(lookup);
     };
-    if dimension == 0 {
-        return Err(failure(
-            "Remote embedding dimension must be greater than zero",
-        ));
-    }
     let path = settings.index_path.join("semantic/embedding-cache.json");
     lookup.present = Some(match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.is_file() => true,

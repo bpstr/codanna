@@ -501,6 +501,21 @@ async fn main() {
             }
         }
     }
+    // Validate the code backend before a force/emission-heal lane can clear
+    // an existing index. An unknown dimension may need one probe, not source
+    // inference. Reuse this exact backend after facade construction.
+    let mut prepared_index_backend =
+        if matches!(cli.command, Commands::Index { .. }) && config.semantic_search.enabled {
+            match codanna::semantic::build_code_embedding_backend(&config.semantic_search) {
+                Ok(backend) => Some(backend),
+                Err(error) => {
+                    eprintln!("Error: code embedding preflight failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
+        };
     let mut indexer: Option<IndexFacade> = if !needs_indexer {
         None
     } else {
@@ -576,6 +591,16 @@ async fn main() {
     };
 
     if let Some(ref mut idx) = indexer {
+        // The indexing lane already validated before destructive setup. Loaded
+        // vectors must still match this backend; do not silently fall back to a
+        // successful lexical-only rebuild when semantic initialization failed.
+        if let Some(backend) = prepared_index_backend.take() {
+            if let Err(error) = idx.install_prepared_code_backend(backend) {
+                eprintln!("Error: prepared code embedding backend is incompatible: {error}");
+                std::process::exit(1);
+            }
+            eprintln!("{}", format_semantic_status(&config.semantic_search));
+        }
         // Only enable semantic search for commands that need it
         if needs_semantic_search
             && config.semantic_search.enabled
