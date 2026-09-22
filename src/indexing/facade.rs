@@ -84,6 +84,34 @@ impl SyncStats {
     }
 }
 
+/// Read-only semantic coverage/freshness diagnostics.
+///
+/// Counts distinguish source eligibility from actual vector presence. A missing
+/// generation contract is represented as unknown rather than inferred from
+/// timestamps or the current reader generation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SemanticCoverageStatus {
+    pub state: &'static str,
+    pub total_symbols: usize,
+    pub eligible_symbols: usize,
+    pub source_input_policy: &'static str,
+    pub vector_count: Option<usize>,
+    pub eligible_with_vector: Option<usize>,
+    pub eligible_without_vector: Option<usize>,
+    pub vector_without_current_symbol: Option<usize>,
+    pub skipped_symbols: Option<usize>,
+    pub pending_symbols: Option<usize>,
+    pub model_name: Option<String>,
+    pub backend: Option<&'static str>,
+    pub dimension: Option<usize>,
+    pub embedding_identity_sha256: Option<String>,
+    pub embedding_input_policy: Option<String>,
+    pub code_generation: u64,
+    pub vector_code_generation: Option<u64>,
+    pub generation_alignment: &'static str,
+    pub freshness: &'static str,
+}
+
 /// IndexFacade - Unified interface for code intelligence operations
 ///
 /// This facade wraps DocumentIndex (for queries) and Pipeline (for indexing),
@@ -440,6 +468,107 @@ impl IndexFacade {
             .as_ref()
             .and_then(|s| s.lock().ok().and_then(|sem| sem.metadata().cloned()))
             .or_else(|| self.semantic_metadata_snapshot.clone())
+    }
+
+    /// Describe semantic source eligibility and vector presence without loading a
+    /// model, contacting a provider, or mutating either index.
+    pub fn semantic_coverage_status(&self, symbols: &[Symbol]) -> SemanticCoverageStatus {
+        let metadata = self.get_semantic_metadata();
+        let total_symbols = symbols.len();
+        let eligible_ids: HashSet<_> = symbols
+            .iter()
+            .filter(|symbol| symbol.doc_comment.is_some())
+            .map(|symbol| symbol.id)
+            .collect();
+        let current_ids: HashSet<_> = symbols.iter().map(|symbol| symbol.id).collect();
+
+        let identity = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.embedding_identity.as_deref());
+        let embedding_input_policy = identity.and_then(|identity| {
+            serde_json::from_str::<serde_json::Value>(identity)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("input_policy")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+        });
+        let embedding_identity_sha256 = identity.map(crate::indexing::calculate_hash);
+
+        let mut state = if self.semantic_incompatible {
+            "incompatible"
+        } else if self.semantic_search.is_some() {
+            "live"
+        } else if metadata.is_some() {
+            "metadata_only"
+        } else {
+            "disabled"
+        };
+        let mut vector_count = metadata.as_ref().map(|metadata| metadata.embedding_count);
+        let mut eligible_with_vector = None;
+        let mut eligible_without_vector = None;
+        let mut vector_without_current_symbol = None;
+
+        if let Some(semantic) = &self.semantic_search {
+            match semantic.lock() {
+                Ok(semantic) => {
+                    let vector_ids = semantic.embedding_ids();
+                    vector_count = Some(vector_ids.len());
+                    let with_vector = vector_ids
+                        .iter()
+                        .filter(|id| eligible_ids.contains(id))
+                        .count();
+                    eligible_with_vector = Some(with_vector);
+                    eligible_without_vector =
+                        Some(eligible_ids.len().saturating_sub(with_vector));
+                    vector_without_current_symbol = Some(
+                        vector_ids
+                            .iter()
+                            .filter(|id| !current_ids.contains(id))
+                            .count(),
+                    );
+                }
+                Err(_) => {
+                    state = "unavailable";
+                    vector_count = None;
+                }
+            }
+        }
+
+        SemanticCoverageStatus {
+            state,
+            total_symbols,
+            eligible_symbols: eligible_ids.len(),
+            source_input_policy: "doc_comment_present_v1",
+            vector_count,
+            eligible_with_vector,
+            eligible_without_vector,
+            vector_without_current_symbol,
+            // Current persistence does not distinguish a missing eligible vector
+            // as skipped versus pending. Keep both unknown instead of inventing
+            // a split from the aggregate difference above.
+            skipped_symbols: None,
+            pending_symbols: None,
+            model_name: metadata.as_ref().map(|metadata| metadata.model_name.clone()),
+            backend: metadata.as_ref().map(|metadata| {
+                if metadata.is_remote() {
+                    "remote"
+                } else {
+                    "local"
+                }
+            }),
+            dimension: metadata.as_ref().map(|metadata| metadata.dimension),
+            embedding_identity_sha256,
+            embedding_input_policy,
+            code_generation: self.document_index.generation(),
+            // Semantic metadata does not currently persist a corresponding code
+            // generation. Timestamp proximity is not sufficient evidence.
+            vector_code_generation: None,
+            generation_alignment: "unknown_untracked",
+            freshness: "unknown",
+        }
     }
 
     // =========================================================================
