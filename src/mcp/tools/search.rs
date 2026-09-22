@@ -831,7 +831,17 @@ impl CodeIntelligenceServer {
                             result.push_str(&format!("   Signature: {sig}\n"));
                         }
 
-                        result.push_str(&format!("   Score: {:.2}\n", search_result.score));
+                        result.push_str(&format!(
+                            "   Lexical candidate score: {:.2}\n",
+                            search_result.score
+                        ));
+                        if let Some((matched, total)) =
+                            crate::storage::tantivy::discovery_term_coverage(&query, search_result)
+                        {
+                            result.push_str(&format!(
+                                "   Distinct query-term coverage: {matched}/{total}\n"
+                            ));
+                        }
                         result.push('\n');
                     }
 
