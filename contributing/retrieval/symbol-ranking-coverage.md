@@ -21,8 +21,10 @@ with 4x or 8x overfetch remained 4/7; **16x reached 7/7**, as did a 200-candidat
 pool. The implementation therefore chooses 16x rather than the larger fixed pool.
 
 A subsequent 21-query TypeScript/Rust/Go evaluation recorded R0 at 11/21 Hit@5
-and MRR@5 0.524, while the same 16x coverage strategy reached 20/21 and MRR@5
-0.952. Its seven-query holdout was 7/7, MRR@5 1.000. These synthetic metrics meet
+and MRR@5 0.524, while the 80-candidate 16x coverage strategy reached 20/21 and MRR@5
+0.952. The remaining owner was candidate rank 98, so the selected runtime keeps
+16x but raises the small-query floor to 128. Its seven-query holdout was 7/7,
+MRR@5 1.000. These synthetic metrics meet
 the proposed PR #43 minimums but are not a production relevance score.
 
 ## Runtime policy
@@ -32,7 +34,7 @@ syntax and single-term identifier lookup keep the existing order. For eligible
 queries the lexical candidate limit is:
 
 - 16 times the requested limit;
-- at least 64 for small discovery requests;
+- at least 128 for small discovery requests;
 - at most 200;
 - never below the user's requested limit.
 
