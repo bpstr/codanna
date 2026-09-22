@@ -35,6 +35,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
       - name: Run selected ranking contracts
         shell: bash
         run: |
