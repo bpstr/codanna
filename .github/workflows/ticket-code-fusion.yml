@@ -6,7 +6,7 @@ on:
       - 'tests/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'contributing/retrieval/ticket-code-fusion.md'
+      - 'contributing/retrieval/**'
       - '.github/workflows/ticket-code-fusion.yml'
   workflow_dispatch:
 permissions:
@@ -45,15 +45,22 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo clean -p ort-sys
-      - name: Run deterministic contracts
+      - name: Run deterministic contracts with nonempty selection
         shell: bash
         run: |
           set -euo pipefail
           {
             git rev-parse HEAD
             rustc --version
+            cargo test --locked --lib ticket_code_fusion -- --list | tee "$RUNNER_TEMP/fusion-unit-tests.txt"
+            grep -Eq '^mcp::tools::ticket_context::ticket_code_fusion::.*: test$' "$RUNNER_TEMP/fusion-unit-tests.txt"
             cargo test --locked --lib ticket_code_fusion -- --nocapture
-            cargo test --locked --lib subtree_scope -- --nocapture
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --list | tee "$RUNNER_TEMP/fusion-client-tests.txt"
+            grep -Eq '^ticket_code_fusion_.*: test$' "$RUNNER_TEMP/fusion-client-tests.txt"
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --test symbol_path_scope -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+            cargo test --locked --lib search_context_defaults_and_limits_are_bounded -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/ticket-code-fusion.log"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
@@ -61,6 +68,9 @@ jobs:
         if: always()
         with:
           name: ticket-code-fusion-results
-          path: ${{ runner.temp }}/ticket-code-fusion.log
+          path: |
+            ${{ runner.temp }}/ticket-code-fusion.log
+            ${{ runner.temp }}/fusion-unit-tests.txt
+            ${{ runner.temp }}/fusion-client-tests.txt
           retention-days: 14
           if-no-files-found: warn
