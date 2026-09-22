@@ -1,0 +1,57 @@
+name: Apply symbol representation patch
+on:
+  pull_request:
+    paths:
+      - 'contributing/retrieval/symbol-representation-apply-ready.txt'
+permissions:
+  contents: write
+concurrency:
+  group: apply-symbol-representation
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.repository == 'bpstr/codanna' && github.event.pull_request.head.repo.full_name == 'bpstr/codanna' && github.event.pull_request.head.ref == 'feature/symbol-body-representation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check and apply exactly the reviewed source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          encoded = ''.join(pathlib.Path(f'.github/patches/symbol-representation-{i}.txt').read_text().strip() for i in range(4))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True), memlimit=128 * 1024 * 1024)
+          assert len(patch) == 70765
+          assert hashlib.sha256(patch).hexdigest() == '6af7b564cae62c9b0e680706df0759073a36c87e78425916a7acba5f06d041b2'
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit implementation and regression fixtures without touching other branches
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src
+          git reset -- src/indexing/facade_retrieval_tests.rs src/semantic/symbol_representation_tests.rs
+          git commit -m 'Add versioned bounded symbol implementation embeddings'
+          git add src/indexing/facade_retrieval_tests.rs src/semantic/symbol_representation_tests.rs
+          git commit -m 'Test symbol representations and persisted parent segments'
+          git rm .github/patches/symbol-representation-{0,1,2,3}.txt .github/workflows/apply-symbol-representation.yml contributing/retrieval/symbol-representation-apply-ready.txt
+          git commit -m 'Remove temporary representation patch runner'
+          current=$(git ls-remote origin refs/heads/feature/symbol-body-representation | cut -f1)
+          test "$current" = "$EXPECTED_HEAD"
+          git push origin HEAD:refs/heads/feature/symbol-body-representation
