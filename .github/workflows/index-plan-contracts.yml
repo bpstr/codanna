@@ -54,6 +54,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check strict lints
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Check standalone planner without default features
+        run: cargo check --locked --no-default-features --bin codanna-index-plan
+      - name: Exercise CLI help without workspace initialization
+        run: ./target/debug/codanna-index-plan --help
       - name: Retain tested sources
         if: always()
         run: tar czf "$RUNNER_TEMP/index-plan-sources.tar.gz" src/lib.rs src/rebuild_plan.rs src/rebuild_plan_pressure.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
