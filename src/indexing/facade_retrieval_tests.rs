@@ -506,7 +506,6 @@ fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
     assert_eq!(status.vector_code_generation, None);
 }
 
-
 #[tokio::test]
 async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() {
     let (_temp, facade) = fixture();
