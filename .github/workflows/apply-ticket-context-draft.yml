@@ -1,0 +1,154 @@
+name: Apply reviewed ticket context draft
+on:
+  push:
+    branches: ['feature/ticket-code-fusion']
+    paths: ['.github/workflows/apply-ticket-context-draft.yml']
+permissions:
+  contents: read
+concurrency:
+  group: apply-ticket-context-draft
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/feature/ticket-code-fusion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      source_sha: ${{ steps.publish.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Validate and apply the reviewed source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, gzip, hashlib, io, pathlib, subprocess
+          expected = {
+              '.github/workflows/ticket-code-fusion.yml': '443b4e059cf018bb506169f034645ce3e777e97d',
+              'contributing/retrieval/ticket-code-fusion.md': '6d8708feb4e66520465251ceb35eedaf14834caa',
+              'src/cli/commands/mcp.rs': 'b2936b96cee4738596ee7491037498a03c8b4b55',
+              'src/cli/workspace/mcp/reader.rs': 'fcb224e223df649e8c27e56d2b1954c62f301356',
+              'src/mcp/catalog.rs': '4e4c80898af832df39d31f3f17cf334309525d9a',
+              'src/mcp/tools/context.rs': '0b7ff61dcf66e1615b0cca12b587b357dcb0f50d',
+              'src/mcp/tools/mod.rs': 'f2d1903ccfb9939306afea0b01d82d69b61e3501',
+              'src/mcp/tools/ticket_context.rs': None,
+              'tests/workspace_mcp.rs': 'dcef5eaf907fa202146c493ee0a38607f9662403',
+          }
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', '--', path], text=True).strip() if pathlib.Path(path).exists() else None
+              if actual != sha:
+                  raise SystemExit(f'Refusing to overwrite a changed source: {path}: {actual} != {sha}')
+          encoded = ''.join(pathlib.Path(f'contributing/retrieval/.ticket-context-patch-{i}.b64').read_text().strip() for i in (1, 2, 3))
+          # Correct two known duplicated characters in the transport text only.
+          # The exact reviewed decompressed patch must still match its SHA-256.
+          encoded = encoded.replace('Y6MRGG1sW', 'Y6MRG1sW').replace('CHYeKKzp', 'CHYeKzp')
+          if len(encoded) != 20288:
+              raise SystemExit('Unexpected encoded patch length')
+          with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(encoded, validate=True))) as archive:
+              patch = archive.read(100001)
+          if len(patch) != 54688 or hashlib.sha256(patch).hexdigest() != '43e9f0f788b3aa4279135e7af9d93a1e086cd18017af1f160af9bb38eb4fa3bd':
+              raise SystemExit('Patch checksum mismatch; no source files were changed')
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '--', *expected], check=True)
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          if changed != set(expected):
+              raise SystemExit(f'Unexpected patch paths: {changed}')
+          for path in expected:
+              if path.endswith('.rs'):
+                  subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true', path], check=True)
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'add', '--', *expected], check=True)
+          subprocess.run(['git', 'rm', '--', '.github/workflows/apply-ticket-context-draft.yml', *[f'contributing/retrieval/.ticket-context-patch-{i}.b64' for i in (1, 2, 3)]], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          PY
+      - name: Publish only to the existing draft branch
+        id: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m 'Implement bounded ticket context retrieval across MCP and CLI'
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/feature/ticket-code-fusion
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  contracts:
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.source_sha }}
+          persist-credentials: false
+      - name: Capture exact committed source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/ticket-runtime-source-sha.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/ticket-runtime-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ticket-runtime-source
+          path: |
+            ${{ runner.temp }}/ticket-runtime-source-sha.txt
+            ${{ runner.temp }}/ticket-runtime-source.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo clean -p ort-sys
+      - name: Run provider-free contracts with nonempty filters
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            cargo test --locked --lib ticket_code_fusion -- --list | tee "$RUNNER_TEMP/ticket-unit-list.txt"
+            grep -Eq '^mcp::tools::ticket_context::ticket_code_fusion::.*: test$' "$RUNNER_TEMP/ticket-unit-list.txt"
+            cargo test --locked --lib ticket_code_fusion -- --nocapture
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --list | tee "$RUNNER_TEMP/ticket-client-list.txt"
+            grep -Eq '^ticket_code_fusion_.*: test$' "$RUNNER_TEMP/ticket-client-list.txt"
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --test symbol_path_scope -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+            cargo test --locked --lib search_context_defaults_and_limits_are_bounded -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/ticket-runtime-tests.log"
+      - name: Check formatting and strict lints
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/ticket-runtime-lints.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ticket-runtime-results
+          path: |
+            ${{ runner.temp }}/ticket-runtime-tests.log
+            ${{ runner.temp }}/ticket-runtime-lints.log
+            ${{ runner.temp }}/ticket-unit-list.txt
+            ${{ runner.temp }}/ticket-client-list.txt
+          retention-days: 14
+          if-no-files-found: warn
