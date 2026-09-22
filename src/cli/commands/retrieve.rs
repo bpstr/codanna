@@ -109,6 +109,7 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             json,
             kind,
             module,
+            path_prefix,
             fields,
         } => {
             use crate::io::args::parse_positional_args;
@@ -136,19 +137,23 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
 
             let final_kind = kind.or_else(|| params.get("kind").cloned());
             let final_module = module.or_else(|| params.get("module").cloned());
+            let final_path_prefix = path_prefix
+                .or_else(|| params.get("path_prefix").cloned())
+                .or_else(|| params.get("path").cloned());
 
             // Extract language filter
             let language = params.get("lang").map(|s| s.as_str());
 
             // Call retrieve function with merged parameters
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_search(
+            retrieve::retrieve_search_scoped(
                 indexer,
                 &final_query,
                 final_limit,
                 final_kind.as_deref(),
                 final_module.as_deref(),
                 language,
+                final_path_prefix.as_deref(),
                 format,
                 fields,
             )
