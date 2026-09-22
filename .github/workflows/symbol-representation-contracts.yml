@@ -1,0 +1,69 @@
+name: Symbol representation contracts
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'contributing/retrieval/symbol-body-representation.md'
+      - '.github/workflows/symbol-representation-contracts.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: symbol-representation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.repository == 'bpstr/codanna'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Capture exact tracked source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/representation-source-sha.txt"
+          git archive --format=tar.gz HEAD src tests Cargo.toml Cargo.lock build.rs contributing .github README.md CONTRIBUTING.md AGENTS.md > "$RUNNER_TEMP/representation-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: representation-source
+          path: |
+            ${{ runner.temp }}/representation-source.tar.gz
+            ${{ runner.temp }}/representation-source-sha.txt
+          retention-days: 7
+          if-no-files-found: error
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native dependency setup after cache restoration
+        run: cargo clean -p ort-sys
+      - name: Run deterministic contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            cargo test --locked --lib semantic_coverage -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/representation-contracts.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: representation-contract-results
+          path: ${{ runner.temp }}/representation-contracts.log
+          retention-days: 14
+          if-no-files-found: warn
