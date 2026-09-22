@@ -385,4 +385,10 @@ fn large_force_rebuild_reuses_late_snapshot_hits_before_admitting_early_misses()
             .all(|input| input.starts_with("pressure embedding input 0")),
         "only the oldest uncached inputs should require embedding"
     );
+
+    // New misses are still admitted, so the cache continues learning rather
+    // than freezing one favorable snapshot. Capacity means a later rebuild
+    // must still miss COUNT-CACHE_CAPACITY inputs, but not the entire corpus.
+    workspace.rebuild();
+    assert_inputs(&endpoint, COUNT - CACHE_CAPACITY);
 }
