@@ -24,6 +24,7 @@ pub mod parsing;
 pub mod plugins;
 pub mod profiles;
 pub mod project_resolver;
+pub mod rebuild_plan;
 pub mod relationship;
 pub mod retrieve;
 pub(crate) mod runtime;
