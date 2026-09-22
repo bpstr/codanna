@@ -1,140 +1,96 @@
 # Calendar investigation implementation progress
 
-Snapshot: 2026-09-22 (Europe/Budapest). This is a checkpoint of two small
-implementation batches, **not completion of all fourteen task groups**.
-All writes are confined to `bpstr/codanna`; upstream has not been modified.
+Updated 2026-09-22 (Europe/Budapest). This is a navigation checkpoint for
+[PR #43](https://github.com/bpstr/codanna/pull/43), **not completion of all fourteen
+task groups**. Implementations remain on the fork's feature branches. This work
+has not merged or deployed them, rebuilt a production index, or used paid inference.
 
-## Implemented batches
+The [original two-batch record](https://github.com/bpstr/codanna/blob/a5661ffd51a87a8ad785261829d567a884f71f19/contributing/retrieval/calendar-investigation/implementation-progress.md)
+preserves the first #44/#45 execution history, exact hashes and then-pending gates.
+Those historical pending statuses must not be read as the current status of later
+integration branches. Each PR's current-head CI remains authoritative.
 
-| Batch | Pull request / branch | Verified head | Scope |
-| --- | --- | --- | --- |
-| Graph evidence | [#44](https://github.com/bpstr/codanna/pull/44), `fix/calendar-graph-evidence` | `4795f45ff7aad053b34e4d5eb1a60c0e5e5b0ba7` | T01 graph-contract fixture subset; T02 successful graph response wording and additive evidence metadata. |
-| Context limits | [#45](https://github.com/bpstr/codanna/pull/45), `fix/context-limit-diagnostics` | `ae44c713c1dc5c7f877237c3652d88e74cf4fb74` | T09 field-aware argument diagnostics shared by deserialization and direct handler validation. |
+## Current integration checkpoints
 
-Both PRs are independent draft PRs against main revision
-`ddb5ae61a72938d82cceaf42123dc7a88bfe3417`. Neither has been merged.
-
-### Graph responses
-
-`get_calls`, `find_callers`, and `analyze_impact` retain readable text and add
-`structuredContent.graph`. Empty results now mean no **resolved indexed**
-relationships were found, not that source code has no calls or a change has no
-effect. Positive impact wording likewise describes indexed dependents.
-
-The evidence includes operation, current target identity/path/line, result
-count, requested depth, and completed query status. Source coverage and
-freshness are explicitly unknown; index generation is null rather than guessed.
-Missing/ambiguous lookups and budget errors retain separate response paths.
-No parser, import resolver, ranking, or storage algorithm was changed.
-
-The synthetic corpus separates isolated, external-browser-call, local call-chain,
-and unrelated same-named reference symbols. An oracle outside the indexed root
-selects symbols by path/name/kind and resolves IDs from the newly created index.
-The focused runner verifies fixture hashes, compiles once, records the executable
-hash, and executes those exact bytes without invoking Cargo a second time.
-
-### Context request diagnostics
-
-The original `conversation_limit: 0` request remains invalid. Its diagnostic now
-names `conversation_limit`, states the accepted integer range, and includes the
-received out-of-range value. The same treatment applies to `code_limit` and
-`document_limit`, including wrong JSON types and overflow.
-
-All three limits retain inclusive bounds 1 through 10 and omitted default 5.
-Zero is not a section-disable switch. Unknown keys remain invalid. Direct Rust
-calls use the same validator and reject bad limits before retrieval or recall.
-Retrieval behavior and output sections are unchanged.
-
-## Execution evidence
-
-| Check | Graph batch | Context batch |
+| Slice | Committed head | Observed verification and boundary |
 | --- | --- | --- |
-| Focused regression tests | **6 passed, 0 failed, 0 ignored** | **5 passed, 0 failed, 0 ignored** |
-| Quick Check | Passed | Passed |
-| Repository auto-fix check | Passed | Passed |
-| Hardening workflow | Passed | Still running at this snapshot |
-| Review security regressions | Passed | Still running at this snapshot |
-| Full Test Suite | Still running; no overall pass claimed | Still running; no overall pass claimed |
+| [#62: lexical recovery, workspace scopes and related implementations](https://github.com/bpstr/codanna/pull/62) | `8b8f08c4bee87264665f0df02134089b7632b49f` | Combined source has 66 selected passing contracts. The retained final-source workflow [35768636082](https://github.com/bpstr/codanna/actions/runs/35768636082) passed. Direct owner Hit@5 is 8/20; five direct plus up to six related results expose 10/20. These are different evidence budgets, not additive quality gains. |
+| [#64: body-aware planner and rebuild cache reuse](https://github.com/bpstr/codanna/pull/64) | `3496ba1fbf24e5ec8be531a653204c6e9a219327` | Current-head Quick Check, representation and body-cache workflows passed. Integrates #63/#60 with #50/#47 while preserving histories. Controlled body-pressure rebuilds send 272 genuinely missing source inputs instead of 1280; repeated seven-segment input is embedded as three unique texts, without losing seven source-range records. This is not a bill or relevance score. |
+| [#65: code dimension rejection before inference and publication](https://github.com/bpstr/codanna/pull/65) | `1f8cc2e4031c4ad167bd409414d15bda62827da9` | The exact-source candidate passed 117 selected contracts, strict Clippy and formatting; one pre-existing CWD-sensitive configuration test remained ignored. Seven new tests changed from 2 passed / 5 failed to 7 passed / 0 failed. Final-head Quick Check passed; the expanded read-only workflow [35783603865](https://github.com/bpstr/codanna/actions/runs/35783603865) is pending at this snapshot. |
 
-For the graph full-suite job, formatting, all-target/all-feature Clippy, and
-no-default-features compilation had passed. Default-feature tests were running;
-all-feature tests, CLI checks, and documentation gates had not all completed.
-Workflow results are tied to the heads above, not to future commits or merges.
+The code-dimension repair enforces the existing journal's 1..=4096 range before
+known-invalid probes, before source inference/force clearing after an unknown
+probe, and before checkpoint artifacts. Planner and code runtime share effective
+environment/configuration validation. The generic document backend keeps its own
+contract. Neither cache capacity nor the code format limit was increased.
 
-### Graph baseline and post-change run
+## Relevance evidence, not only cache work
 
-[Baseline run 35664366650](https://github.com/bpstr/codanna/actions/runs/35664366650)
-compiled and ran the new tests against unchanged runtime source. **Three passed
-and three failed**. Failures occurred at the new graph metadata assertion;
-subsequent assertions in those failing tests are not claimed as reached. The
-old absolute wording was independently confirmed by reading the pinned source.
-This is not a parser-recall or ranking-quality baseline.
+The frozen task corpus contains five real Rust modules, 152 indexed symbols, ten
+source-inspected path/name owners and twenty operational/paraphrase questions.
+The original oracle SHA-256 remains:
 
-[Post-change run 35664941685](https://github.com/bpstr/codanna/actions/runs/35664941685)
-ran all six tests successfully. The actual GitHub merge checkout was
-`9f95c09f6ab695916e85c5740184a69b5242f76b`, and the executed test binary SHA-256 was
-`b2085352233d376c3f07fc8f821b3c8a91bf9e5efaf47eb839d7d0a69a90007a`.
-The `calendar-graph-evidence` artifact contains its log and tested-source archive.
+`129a2c11790e6981134c5ab4d727128b4c27f5f1a1e467b10ee00628c3c90fd6`
 
-The baseline runner's earlier pre-run binary hash is not asserted to identify
-executed bytes: a second Cargo invocation rebuilt the target. The post-change
-runner fixes that provenance gap. Earlier formatter and fixture-construction
-compilation failures were harness errors, not reproduced Codanna behavior.
+[#58](https://github.com/bpstr/codanna/pull/58) measured direct 6/20 Hit@5 and
+MRR@5 0.210, exposing the limits of the earlier vocabulary-matched synthetic
+21/21 corpus. [#59](https://github.com/bpstr/codanna/pull/59) selected normalized
+whole-word/identifier-part/English-stem coverage from measured alternatives:
+direct 8/20, MRR@5 0.267, with all previous successes retained. Raw-score-only
+and file-quota alternatives were not shipped because they lost successes.
 
-### Context run
+[#61](https://github.com/bpstr/codanna/pull/61) added bounded one-hop Calls evidence
+separately from direct ranks. #62 now measures it together with lexical recovery
+and pinned workspace scoping: direct 8/20 versus direct-or-related 10/20.
+Paraphrases remain **1/10** in both surfaces. These questions influenced selection
+and are not an independent holdout. Passing fixtures are not passing the original
+90% Hit@5 / 0.75 MRR@5 quality requirement.
 
-[Context run 35665415312](https://github.com/bpstr/codanna/actions/runs/35665415312)
-ran all five tests successfully on merge checkout
-`d6b7f34668d6cd8c25d4bd0f69af5f9567ef8fba`.
-The `context-request-contracts` artifact records source hashes and the complete
-compiler/test log. This runner does not claim an executed-binary digest.
+Body capture and planning in [#60](https://github.com/bpstr/codanna/pull/60) and
+[#63](https://github.com/bpstr/codanna/pull/63) establish available inputs, not a
+semantic model's relevance. For the entire five-file corpus the recorded planner
+comparison is 37 comment inputs / 4423 UTF-8 bytes versus 117 body segment inputs /
+116547 bytes for 102 body parents under a 2048-byte budget proxy. Those are not
+provider token counts or a workspace-wide cost estimate. Comment mode remains
+the default; no model evaluation or body-policy opt-in is implied.
 
-Both focused runs used Rust 1.98.1 on x86_64-unknown-linux-gnu. Local Rust tooling
-was unavailable; these are actual GitHub CI results, not claimed local runs.
-The new fixtures disable semantic indexing and use no provider, private
-transcript, or production index. Initial `not_run` fixture manifests and pending
-notes in earlier commits are historical checkpoints; this document and the PR
-bodies record subsequent execution without rewriting the frozen baseline.
+## Next implementation and qualification sequence
 
-## Small commit checkpoints
+1. Complete #65's current-head read-only gates, including existing CLI force-path
+   and emission-version tests. Retain actual failures and approval-required states;
+   never turn a successful staged run into an unobserved final-head pass.
+2. Qualify the #62 query integration with the #65 body/cache/planner integration
+   on an isolated branch. Verify actual dependency ancestry and remaining original
+   parser/graph branches, rather than assuming the two trees contain all #43 work.
+   Keep lexical-only default behavior and no implicit provider/reindex transitions.
+3. Evaluate the unresolved relevance gap using additional independent source-grounded
+   judgments and genuinely available extra retrieval evidence. Do not add separate
+   branch gains, expand budgets without cost evidence, or present fixed-vector tests
+   as real semantic quality. A paid model experiment still requires explicit
+   approval, a hard request/spending cap and a stop condition.
+4. Run the all-branch release matrix: persistence and corruption recovery, CLI/MCP
+   behavior, watcher/lifecycle parity, default/all/no-default-feature compatibility,
+   read-only planner packaging, and controlled cold/warm latency and memory checks.
+   A combined release and one recoverable production rebuild come after those gates,
+   not after every small PR.
 
-| Commit | Delivered change |
-| --- | --- |
-| `b307280` | Freeze graph corpus and independent oracle. |
-| `b546153` | Add public MCP graph contract tests. |
-| `91953ac` | Correct fixture construction and retain compiler diagnostics. |
-| `e156aa7` | Implement truthful graph wording and evidence metadata. |
-| `4795f45` | Verify fixture hashes and execute the recorded test binary. |
-| `18737f0` | Add context argument/schema/direct-handler tests. |
-| `8247018` | Implement shared field-aware context validation. |
-| `ae44c71` | Run context contracts independently in CI. |
-| `4d527ca` | Record source-level fixture gaps and adversarial follow-ups. |
+## Original task groups still need bounded closure
 
-Repository-generated formatting commits are preserved. No branch was force-pushed.
+T01 has progressively stronger frozen corpora, not a complete real-workspace
+acceptance suite. T02 truthful graph evidence and T03/T04 JSX/import/ownership
+repairs have their own PRs and negative controls; related-code diagnostics do not
+prove every graph tool or language complete. T05/T06 ranking experiments and T07
+scope integration are implemented but the overall quality gate remains unmet.
+T08 now distinguishes eligibility, representation/input policy and vector presence;
+unknown code/vector generation alignment must not be labeled fresh. T09 still
+needs closure of all result-parity and unavailable-versus-empty recall cases.
+T10 routing, T11 full lifecycle/watch parity and T13 release qualification are not
+closed by a focused test pass. T12/T14 product/caller follow-ups remain outside
+these runtime changes. Browser-scroll argument errors from the original capture
+remain caller-side evidence, not newly inferred Codanna parser defects.
 
-## Findings that must not be conflated
-
-An empty indexed graph is incomplete evidence about source behavior, which is
-why T02's response contract changed. In contrast, `conversation_limit: 0` was a
-caller argument error under the existing valid bounds; T09 improves its
-explanation rather than weakening validation. The accessibility-tree errors in
-the intake came from browser-scroll argument shapes, not Codanna responses.
-No new Codanna parser error is inferred from those browser failures.
-
-## Remaining work
-
-T01's complete lexical/semantic/routing/lifecycle acceptance corpus remains open.
-T02 still needs broader evidence-state fixtures, including dangling endpoints
-and hydration loss; the current unknown-coverage metadata does not implement
-those diagnostics. T03/T04 parser and import/member resolution, T05/T06 measured
-retrieval/ranking experiments, T07 workspace scope, T08 semantic eligibility,
-T10 routing, and T11 lifecycle reconciliation remain open. The rest of T09
-includes structured/text result parity and unavailable-versus-empty recall.
-T12/T14 product/caller follow-ups remain outside these runtime changes. T13 has
-partial publication/verification evidence here, not a completed release gate.
-
-The [fixture follow-up review](fixture-followups.md) records the additional
-source findings and proposed cases. Its recommended next batch is assigned-arrow
-JSX ownership and lowercase namespace JSX members, with exact owner/range/edge
-oracles, nearby same-name decoys, and a parser-to-persistence-to-MCP diagnosis.
-Those source findings have not yet been turned into executed Rust regressions.
+The [original fixture follow-up review](fixture-followups.md) is retained as a
+historical source of cases. Later PRs supersede its then-unimplemented status;
+use their recorded failing baselines and committed-source results for current
+coverage. No production source, private transcript or provider credential is part
+of the automated fixtures.
