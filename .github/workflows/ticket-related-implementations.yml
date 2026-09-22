@@ -1,5 +1,7 @@
 name: Ticket related implementations
 on:
+  push:
+    branches: [feature/ticket-related-implementations]
   pull_request:
     branches: [feature/ticket-code-fusion]
     paths:
@@ -17,7 +19,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ticket-related-${{ github.event.pull_request.number || github.ref }}
+  group: ticket-related-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   contracts:
