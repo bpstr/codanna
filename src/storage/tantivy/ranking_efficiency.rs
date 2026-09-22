@@ -4,7 +4,9 @@ use super::SearchResult;
 use std::cmp::Ordering;
 
 fn tie_break(left: &SearchResult, right: &SearchResult) -> Ordering {
-    right.score.total_cmp(&left.score)
+    right
+        .score
+        .total_cmp(&left.score)
         .then_with(|| left.file_path.cmp(&right.file_path))
         .then_with(|| left.line.cmp(&right.line))
         .then_with(|| left.column.cmp(&right.column))
@@ -35,24 +37,26 @@ mod tests {
     use std::cell::Cell;
 
     fn rows() -> Vec<SearchResult> {
-        (0..128).map(|slot| {
-            let id = (slot * 37) % 128 + 1;
-            SearchResult {
-                symbol_id: SymbolId::new(id).unwrap(),
-                name: format!("owner{}", id % 5),
-                kind: SymbolKind::Function,
-                file_path: format!("src/{}.rs", id % 3),
-                line: id % 7 + 1,
-                column: id % 4,
-                doc_comment: Some("calendar preferences ".repeat(200)),
-                signature: Some("fn owner()".into()),
-                module_path: "src".into(),
-                language_id: Some("rust".into()),
-                score: (id % 11) as f32 / 11.0,
-                highlights: Vec::new(),
-                context: None,
-            }
-        }).collect()
+        (0..128)
+            .map(|slot| {
+                let id = (slot * 37) % 128 + 1;
+                SearchResult {
+                    symbol_id: SymbolId::new(id).unwrap(),
+                    name: format!("owner{}", id % 5),
+                    kind: SymbolKind::Function,
+                    file_path: format!("src/{}.rs", id % 3),
+                    line: id % 7 + 1,
+                    column: id % 4,
+                    doc_comment: Some("calendar preferences ".repeat(200)),
+                    signature: Some("fn owner()".into()),
+                    module_path: "src".into(),
+                    language_id: Some("rust".into()),
+                    score: (id % 11) as f32 / 11.0,
+                    highlights: Vec::new(),
+                    context: None,
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -64,35 +68,55 @@ mod tests {
         let key = |row: &SearchResult| row.symbol_id.value() as usize % 4;
         old.sort_by(|left, right| {
             old_calls.set(old_calls.get() + 2);
-            key(right).cmp(&key(left)).then_with(|| tie_break(left, right))
+            key(right)
+                .cmp(&key(left))
+                .then_with(|| tie_break(left, right))
         });
         sort_coverage_once(&mut new, 128, |row| {
             new_calls.set(new_calls.get() + 1);
             key(row)
         });
-        assert_eq!(serde_json::to_value(&new).unwrap(), serde_json::to_value(&old).unwrap());
+        assert_eq!(
+            serde_json::to_value(&new).unwrap(),
+            serde_json::to_value(&old).unwrap()
+        );
         assert_eq!(new_calls.get(), 128);
         assert!(old_calls.get() > new_calls.get());
-        println!("ranking_key_calls: candidates=128 before={} after={}", old_calls.get(), new_calls.get());
+        println!(
+            "ranking_key_calls: candidates=128 before={} after={}",
+            old_calls.get(),
+            new_calls.get()
+        );
         sort_coverage_once(&mut new, 5, key);
-        assert_eq!(serde_json::to_value(new).unwrap(), serde_json::to_value(&old[..5]).unwrap());
+        assert_eq!(
+            serde_json::to_value(new).unwrap(),
+            serde_json::to_value(&old[..5]).unwrap()
+        );
     }
 
     #[test]
     fn ranking_efficiency_retains_total_float_order_and_original_score_bits() {
         let mut items = rows();
         items.truncate(6);
-        for (row, score) in items.iter_mut().zip([
-            f32::NAN, f32::NEG_INFINITY, -0.0, 0.0, 1.0, f32::INFINITY,
-        ]) {
+        for (row, score) in
+            items
+                .iter_mut()
+                .zip([f32::NAN, f32::NEG_INFINITY, -0.0, 0.0, 1.0, f32::INFINITY])
+        {
             row.score = score;
         }
         let mut expected = items.clone();
         expected.sort_by(tie_break);
         sort_coverage_once(&mut items, 20, |_| 1);
         assert_eq!(
-            items.iter().map(|row| (row.symbol_id, row.score.to_bits())).collect::<Vec<_>>(),
-            expected.iter().map(|row| (row.symbol_id, row.score.to_bits())).collect::<Vec<_>>()
+            items
+                .iter()
+                .map(|row| (row.symbol_id, row.score.to_bits()))
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|row| (row.symbol_id, row.score.to_bits()))
+                .collect::<Vec<_>>()
         );
     }
 

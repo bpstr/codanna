@@ -20,6 +20,7 @@ mod graph;
 mod query;
 #[cfg(test)]
 mod ranking_diagnostics;
+mod ranking_efficiency;
 mod schema;
 mod writer;
 

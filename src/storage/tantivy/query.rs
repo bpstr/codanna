@@ -102,17 +102,9 @@ fn discovery_candidate_limit(limit: usize, enabled: bool) -> usize {
 }
 
 fn rerank_discovery_results(results: &mut Vec<SearchResult>, terms: &[String], limit: usize) {
-    results.sort_by(|left, right| {
-        result_term_coverage(right, terms)
-            .cmp(&result_term_coverage(left, terms))
-            .then_with(|| right.score.total_cmp(&left.score))
-            .then_with(|| left.file_path.cmp(&right.file_path))
-            .then_with(|| left.line.cmp(&right.line))
-            .then_with(|| left.column.cmp(&right.column))
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.symbol_id.value().cmp(&right.symbol_id.value()))
+    super::ranking_efficiency::sort_coverage_once(results, limit, |row| {
+        result_term_coverage(row, terms)
     });
-    results.truncate(limit);
 }
 
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].

@@ -12,21 +12,24 @@ const ORACLE: &str = include_str!("../contributing/retrieval/evaluations/reposit
 const SOURCES: &[(&str, &str)] = &[
     (
         "src/indexing/pipeline/stages/read.rs",
-        include_str!("../src/indexing/pipeline/stages/read.rs"),
+        include_str!("fixtures/repository_task_sources/read.rs.fixture"),
     ),
     (
         "src/indexing/pipeline/stages/discover.rs",
-        include_str!("../src/indexing/pipeline/stages/discover.rs"),
+        include_str!("fixtures/repository_task_sources/discover.rs.fixture"),
     ),
     (
         "src/mcp/tools/recall.rs",
-        include_str!("../src/mcp/tools/recall.rs"),
+        include_str!("fixtures/repository_task_sources/recall.rs.fixture"),
     ),
     (
         "src/embedding_cache.rs",
-        include_str!("../src/embedding_cache.rs"),
+        include_str!("fixtures/repository_task_sources/embedding_cache.rs.fixture"),
     ),
-    ("src/memory.rs", include_str!("../src/memory.rs")),
+    (
+        "src/memory.rs",
+        include_str!("fixtures/repository_task_sources/memory.rs.fixture"),
+    ),
 ];
 
 fn fixture() -> (tempfile::TempDir, IndexFacade, Value) {
