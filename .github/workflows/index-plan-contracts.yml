@@ -3,7 +3,8 @@ on:
   pull_request:
     branches: [main, fix/semantic-rebuild-reuse]
     paths:
-      - 'src/rebuild_plan.rs'
+      - 'src/lib.rs'
+      - 'src/rebuild_plan*.rs'
       - 'src/bin/codanna-index-plan.rs'
       - 'src/embedding_cache.rs'
       - 'src/embedding_input.rs'
@@ -45,17 +46,23 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version
-            sha256sum src/rebuild_plan.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
+            sha256sum src/rebuild_plan.rs src/rebuild_plan_pressure.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
+            cargo test --locked --lib rebuild_plan_pressure -- --nocapture
             cargo test --locked --test index_plan_cli --test semantic_rebuild_reuse -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/index-plan-contracts.log"
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check strict lints
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Retain tested sources
+        if: always()
+        run: tar czf "$RUNNER_TEMP/index-plan-sources.tar.gz" src/lib.rs src/rebuild_plan.rs src/rebuild_plan_pressure.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: index-plan-contracts
-          path: ${{ runner.temp }}/index-plan-contracts.log
+          path: |
+            ${{ runner.temp }}/index-plan-contracts.log
+            ${{ runner.temp }}/index-plan-sources.tar.gz
           retention-days: 14
           if-no-files-found: error
