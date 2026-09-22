@@ -97,8 +97,7 @@ fn discovery_candidate_limit(limit: usize, enabled: bool) -> usize {
     }
     let expanded = limit
         .saturating_mul(DISCOVERY_CANDIDATE_MULTIPLIER)
-        .max(DISCOVERY_CANDIDATE_FLOOR)
-        .min(DISCOVERY_CANDIDATE_CAP);
+        .clamp(DISCOVERY_CANDIDATE_FLOOR, DISCOVERY_CANDIDATE_CAP);
     limit.max(expanded)
 }
 
