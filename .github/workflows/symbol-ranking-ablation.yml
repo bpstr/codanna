@@ -7,6 +7,7 @@ on:
       - 'src/indexing/facade.rs'
       - 'src/mcp/tools/search.rs'
       - 'tests/symbol_ranking_ablation.rs'
+      - 'tests/symbol_ranking_holdout.rs'
       - '.github/workflows/symbol-ranking-ablation.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -40,7 +41,7 @@ jobs:
             git rev-parse HEAD
             rustc --version
             sha256sum src/storage/tantivy/query.rs tests/symbol_ranking_ablation.rs
-            cargo test --locked --test symbol_ranking_ablation -- --nocapture
+            cargo test --locked --test symbol_ranking_ablation --test symbol_ranking_holdout -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/symbol-ranking-ablation.log"
       - name: Check formatting
         run: cargo fmt --all -- --check
