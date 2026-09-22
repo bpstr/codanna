@@ -219,7 +219,10 @@ fn ranking_diagnostics_measure_fields_fuzzy_clauses_and_score_trees() {
             "signature_only",
             parsed(index, vec![index.schema.signature], query),
         ),
-        ("whole_query_fuzzy_ngram", fuzzy(index.schema.name_text, query)),
+        (
+            "whole_query_fuzzy_ngram",
+            fuzzy(index.schema.name_text, query),
+        ),
         ("whole_query_fuzzy_name", fuzzy(index.schema.name, query)),
     ];
     let mut component_rows = Vec::new();
@@ -261,7 +264,14 @@ fn ranking_diagnostics_measure_fields_fuzzy_clauses_and_score_trees() {
 
     let selected = index.search(query, 5, None, None, None).unwrap();
     assert!(selected.iter().any(|result| result.symbol_id.value() == 1));
-    assert!(rows(index, &searcher, fuzzy(index.schema.name_text, query).as_ref()).is_empty());
+    assert!(
+        rows(
+            index,
+            &searcher,
+            fuzzy(index.schema.name_text, query).as_ref()
+        )
+        .is_empty()
+    );
     assert!(rows(index, &searcher, fuzzy(index.schema.name, query).as_ref()).is_empty());
     println!(
         "ranking_clause_evidence={}",
