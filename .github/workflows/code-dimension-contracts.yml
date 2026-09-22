@@ -1,0 +1,58 @@
+name: Code dimension contracts
+on:
+  pull_request:
+    branches: [integration/body-cache-reuse]
+    paths:
+      - 'src/**'
+      - 'tests/code_dimension_contract.rs'
+      - 'contributing/retrieval/code-embedding-dimensions*'
+      - '.github/workflows/code-dimension-contracts.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: code-dimensions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Run code dimension contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum tests/code_dimension_contract.rs src/semantic/journal.rs src/indexing/facade.rs src/rebuild_plan.rs src/main.rs
+            cargo test --locked --test code_dimension_contract -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/code-dimension-contracts.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: code-dimension-contracts
+          path: ${{ runner.temp }}/code-dimension-contracts.log
+          retention-days: 14
+          if-no-files-found: error
