@@ -73,7 +73,13 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
         .ok()
         .or_else(|| cfg.remote_url.clone());
     let mut lookup = Lookup {
-        backend: if !cfg.enabled { "disabled" } else if remote.is_some() { "remote" } else { "local" },
+        backend: if !cfg.enabled {
+            "disabled"
+        } else if remote.is_some() {
+            "remote"
+        } else {
+            "local"
+        },
         identity: None,
         cache: None,
         present: None,
@@ -102,7 +108,11 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
     lookup.identity = Some(calculate_hash(&identity));
     lookup.budget = Some(budget);
     let dimension = match std::env::var("CODANNA_EMBED_DIM") {
-        Ok(value) => Some(value.parse::<usize>().map_err(|_| failure("CODANNA_EMBED_DIM must be a positive integer"))?),
+        Ok(value) => Some(
+            value
+                .parse::<usize>()
+                .map_err(|_| failure("CODANNA_EMBED_DIM must be a positive integer"))?,
+        ),
         Err(_) => cfg.remote_dim,
     };
     let Some(dimension) = dimension else {
@@ -110,12 +120,18 @@ fn lookup(settings: &Settings) -> IndexResult<Lookup> {
         return Ok(lookup);
     };
     if dimension == 0 {
-        return Err(failure("Remote embedding dimension must be greater than zero"));
+        return Err(failure(
+            "Remote embedding dimension must be greater than zero",
+        ));
     }
     let path = settings.index_path.join("semantic/embedding-cache.json");
     lookup.present = Some(match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.is_file() => true,
-        Ok(_) => return Err(failure("Embedding cache must be a regular file for offline planning")),
+        Ok(_) => {
+            return Err(failure(
+                "Embedding cache must be a regular file for offline planning",
+            ));
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(failure(format!("Cannot inspect embedding cache: {error}"))),
     });
@@ -137,28 +153,55 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
     let workspace = settings.workspace_root.as_ref()
         .ok_or_else(|| failure("Offline planning requires an explicit workspace_root or a .codanna/settings.toml config"))?
         .canonicalize().map_err(|error| failure(format!("Cannot resolve workspace: {error}")))?;
-    let selected = if requested_roots.is_empty() { &settings.indexed_paths_cache } else { requested_roots };
+    let selected = if requested_roots.is_empty() {
+        &settings.indexed_paths_cache
+    } else {
+        requested_roots
+    };
     if selected.is_empty() {
-        return Err(failure("No source roots selected; provide paths or configure indexing.indexed_paths"));
+        return Err(failure(
+            "No source roots selected; provide paths or configure indexing.indexed_paths",
+        ));
     }
     let mut roots = Vec::new();
     for root in selected {
-        let root = root.canonicalize().map_err(|error| failure(format!("Cannot resolve source root: {error}")))?;
+        let root = root
+            .canonicalize()
+            .map_err(|error| failure(format!("Cannot resolve source root: {error}")))?;
         if !root.starts_with(&workspace) {
-            return Err(failure("Offline source root is outside the configured workspace"));
+            return Err(failure(
+                "Offline source root is outside the configured workspace",
+            ));
         }
-        if !roots.contains(&root) { roots.push(root); }
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
     }
     roots.sort();
     let lookup = lookup(&settings)?;
     let settings = Arc::new(settings);
-    let files = FileWalker::new(Arc::clone(&settings))
-        .snapshot(&roots, MAX_ENTRIES, MAX_FILES, MAX_SOURCE_BYTES)?;
-    let inventory: Vec<_> = files.iter().map(|file| (
-        file.path.strip_prefix(&workspace).unwrap_or(&file.path).to_string_lossy().replace('\\', "/"),
-        &file.hash,
-    )).collect();
-    let fingerprint = calculate_hash(&serde_json::to_string(&inventory).map_err(|error| failure(error.to_string()))?);
+    let files = FileWalker::new(Arc::clone(&settings)).snapshot(
+        &roots,
+        MAX_ENTRIES,
+        MAX_FILES,
+        MAX_SOURCE_BYTES,
+    )?;
+    let inventory: Vec<_> = files
+        .iter()
+        .map(|file| {
+            (
+                file.path
+                    .strip_prefix(&workspace)
+                    .unwrap_or(&file.path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                &file.hash,
+            )
+        })
+        .collect();
+    let fingerprint = calculate_hash(
+        &serde_json::to_string(&inventory).map_err(|error| failure(error.to_string()))?,
+    );
     let mut report = RebuildPlan {
         schema_version: 1,
         status: "complete",
@@ -203,7 +246,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
             report.files_requiring_generic_parser += 1;
             continue;
         }
-        let parsed = parser.parse(file).map_err(|error| failure(error.to_string()))?;
+        let parsed = parser
+            .parse(file)
+            .map_err(|error| failure(error.to_string()))?;
         report.files_parsed += 1;
         for symbol in parsed.raw_symbols {
             report.symbols += 1;
@@ -216,9 +261,13 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
             report.embedding_input_bytes += input.len();
             let first = unique.insert(calculate_hash(&input));
             if unique.len() > MAX_UNIQUE_INPUTS {
-                return Err(failure("Offline plan exceeded 100000 unique embedding inputs"));
+                return Err(failure(
+                    "Offline plan exceeded 100000 unique embedding inputs",
+                ));
             }
-            if first { report.unique_embedding_input_bytes += input.len(); }
+            if first {
+                report.unique_embedding_input_bytes += input.len();
+            }
             if let Some(budget) = &lookup.budget {
                 if budget.validate([input.as_ref()]).is_err() {
                     *report.over_budget_inputs.as_mut().unwrap() += 1;
@@ -230,7 +279,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
                 } else {
                     *report.snapshot_miss_inputs.as_mut().unwrap() += 1;
                     *report.snapshot_miss_input_bytes.as_mut().unwrap() += input.len();
-                    if first { *report.snapshot_unique_miss_inputs.as_mut().unwrap() += 1; }
+                    if first {
+                        *report.snapshot_unique_miss_inputs.as_mut().unwrap() += 1;
+                    }
                 }
             }
         }
@@ -242,15 +293,23 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         report.warnings.push("Generic grammar files were not parsed, even if cached, to prohibit implicit downloads; their embedding inputs are unknown, not zero.");
     }
     if report.over_budget_inputs.is_some_and(|count| count > 0) {
-        report.status = if report.status == "partial" { "partial_blocked" } else { "blocked" };
+        report.status = if report.status == "partial" {
+            "partial_blocked"
+        } else {
+            "blocked"
+        };
         report.warnings.push("At least one parsed input exceeds the configured embedding budget; a successful full rebuild is not predicted.");
     }
     Ok(report)
 }
 
 fn has_native_parser(path: &Path, settings: &Settings) -> IndexResult<bool> {
-    let registry = crate::parsing::get_registry().lock().map_err(|_| IndexError::MutexPoisoned)?;
-    Ok(path.extension().and_then(|extension| extension.to_str())
+    let registry = crate::parsing::get_registry()
+        .lock()
+        .map_err(|_| IndexError::MutexPoisoned)?;
+    Ok(path
+        .extension()
+        .and_then(|extension| extension.to_str())
         .and_then(|extension| registry.get_by_extension(extension))
         .is_some_and(|definition| definition.is_enabled(settings)))
 }

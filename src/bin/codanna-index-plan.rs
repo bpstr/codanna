@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(about = "Plan code rebuild inputs offline; never initializes an index or provider", version)]
+#[command(
+    about = "Plan code rebuild inputs offline; never initializes an index or provider",
+    version
+)]
 struct Cli {
     /// Existing settings file. No discovery, registration, or auto-initialization.
     #[arg(long, value_name = "FILE")]

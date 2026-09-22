@@ -8,9 +8,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const SOURCE: &str = "/// alpha calendar preference owner.\npub fn owner() {}\n/// beta calendar preference consumer.\npub fn consumer() {}\npub fn undocumented() {}\n";
-const INPUTS: [&str; 2] = ["alpha calendar preference owner.", "beta calendar preference consumer."];
+const INPUTS: [&str; 2] = [
+    "alpha calendar preference owner.",
+    "beta calendar preference consumer.",
+];
 
-fn hash(input: &str) -> String { format!("{:x}", Sha256::digest(input.as_bytes())) }
+fn hash(input: &str) -> String {
+    format!("{:x}", Sha256::digest(input.as_bytes()))
+}
 
 struct Fixture {
     temp: tempfile::TempDir,
@@ -24,7 +29,11 @@ impl Fixture {
         let endpoint = TcpListener::bind("127.0.0.1:0").unwrap();
         endpoint.set_nonblocking(true).unwrap();
         let url = format!("http://{}", endpoint.local_addr().unwrap());
-        let fixture = Self { temp, endpoint, url };
+        let fixture = Self {
+            temp,
+            endpoint,
+            url,
+        };
         for directory in ["src", ".home", ".codanna"] {
             std::fs::create_dir_all(fixture.root().join(directory)).unwrap();
         }
@@ -33,12 +42,16 @@ impl Fixture {
         fixture
     }
 
-    fn root(&self) -> &Path { self.temp.path() }
+    fn root(&self) -> &Path {
+        self.temp.path()
+    }
 
     fn configure(&self, enabled: bool, dimension: Option<usize>, extra: &str) {
         let root = serde_json::to_string(&self.root().to_string_lossy()).unwrap();
         let source = serde_json::to_string(&self.root().join("src").to_string_lossy()).unwrap();
-        let dim = dimension.map(|value| format!("remote_dim = {value}\n")).unwrap_or_default();
+        let dim = dimension
+            .map(|value| format!("remote_dim = {value}\n"))
+            .unwrap_or_default();
         std::fs::write(self.root().join(".codanna/settings.toml"), format!(
             "workspace_root = {root}\nindex_path = \".codanna/index\"\n[indexing]\nindexed_paths = [{source}]\n[semantic_search]\nenabled = {enabled}\nremote_url = {:?}\nremote_model = \"offline-fixture\"\n{dim}{extra}\n", self.url
         )).unwrap();
@@ -56,7 +69,9 @@ impl Fixture {
                 "input_sha256": hash(input), "embedding": [1.0, 0.0]
             })).collect::<Vec<_>>()
         });
-        let path = self.root().join(".codanna/index/semantic/embedding-cache.json");
+        let path = self
+            .root()
+            .join(".codanna/index/semantic/embedding-cache.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, cache.to_string()).unwrap();
     }
@@ -68,20 +83,43 @@ impl Fixture {
         // No real credential enters the child. A forbidden backend startup would
         // hit the listener and fail the test even if it swallowed a network error.
         command.env("CODANNA_EMBED_API_KEY", "synthetic-do-not-send");
-        for variable in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "SYSTEMROOT", "WINDIR"] {
-            if let Some(value) = std::env::var_os(variable) { command.env(variable, value); }
+        for variable in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+        ] {
+            if let Some(value) = std::env::var_os(variable) {
+                command.env(variable, value);
+            }
         }
-        let output = command.current_dir(self.root())
-            .args(["--config", ".codanna/settings.toml"]).args(args).output().unwrap();
-        assert_eq!(tree(self.root()), before, "preflight modified the workspace");
-        assert!(matches!(self.endpoint.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock), "preflight contacted the embedding endpoint");
+        let output = command
+            .current_dir(self.root())
+            .args(["--config", ".codanna/settings.toml"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            tree(self.root()),
+            before,
+            "preflight modified the workspace"
+        );
+        assert!(
+            matches!(self.endpoint.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "preflight contacted the embedding endpoint"
+        );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-do-not-send"));
         output
     }
 
     fn plan(&self, args: &[&str]) -> Value {
         let output = self.run(args);
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         serde_json::from_slice(&output.stdout).unwrap()
     }
 }
@@ -93,7 +131,9 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Option<Vec<u8>>, Option<std::time::Sy
         let metadata = std::fs::symlink_metadata(&path).unwrap();
         if metadata.is_dir() {
             result.insert(path.clone(), (None, metadata.modified().ok()));
-            for entry in std::fs::read_dir(&path).unwrap() { pending.push(entry.unwrap().path()); }
+            for entry in std::fs::read_dir(&path).unwrap() {
+                pending.push(entry.unwrap().path());
+            }
         } else {
             let bytes = std::fs::read(&path).unwrap();
             result.insert(path, (Some(bytes), metadata.modified().ok()));
@@ -125,13 +165,25 @@ fn exact_cache_matches_track_current_source_and_not_old_symbol_ids() {
     let before = fixture.plan(&[]);
     assert_eq!(before["snapshot_hit_inputs"], 2);
     assert_eq!(before["snapshot_miss_inputs"], 0);
-    std::fs::write(fixture.root().join("src/lib.rs"), SOURCE.replace("beta calendar", "updated calendar")).unwrap();
+    std::fs::write(
+        fixture.root().join("src/lib.rs"),
+        SOURCE.replace("beta calendar", "updated calendar"),
+    )
+    .unwrap();
     let after = fixture.plan(&[]);
     assert_eq!(after["snapshot_hit_inputs"], 1);
     assert_eq!(after["snapshot_unique_miss_inputs"], 1);
     assert_ne!(after["source_fingerprint"], before["source_fingerprint"]);
-    assert!(!serde_json::to_string(&after).unwrap().contains("alpha calendar preference owner"));
-    assert!(!serde_json::to_string(&after).unwrap().contains(&fixture.url));
+    assert!(
+        !serde_json::to_string(&after)
+            .unwrap()
+            .contains("alpha calendar preference owner")
+    );
+    assert!(
+        !serde_json::to_string(&after)
+            .unwrap()
+            .contains(&fixture.url)
+    );
 }
 
 #[test]
@@ -154,7 +206,13 @@ fn corrupt_and_incompatible_cache_entries_do_not_become_hits() {
     let fixture = Fixture::new();
     fixture.seed(Some("old-revision"));
     assert_eq!(fixture.plan(&[])["snapshot_hit_inputs"], 0);
-    std::fs::write(fixture.root().join(".codanna/index/semantic/embedding-cache.json"), "not json").unwrap();
+    std::fs::write(
+        fixture
+            .root()
+            .join(".codanna/index/semantic/embedding-cache.json"),
+        "not json",
+    )
+    .unwrap();
     assert_eq!(fixture.plan(&[])["snapshot_miss_inputs"], 2);
     fixture.seed(None);
     fixture.configure(true, Some(3), "");
@@ -170,7 +228,10 @@ fn disabled_or_unknown_dimension_does_not_probe_or_pretend_to_know_reuse() {
     assert!(disabled["snapshot_hit_inputs"].is_null());
     fixture.configure(true, None, "");
     let unknown = fixture.plan(&[]);
-    assert_eq!(unknown["cache_lookup"], "remote_dimension_unknown_without_probe");
+    assert_eq!(
+        unknown["cache_lookup"],
+        "remote_dimension_unknown_without_probe"
+    );
     assert!(unknown["snapshot_hit_inputs"].is_null());
     assert_eq!(unknown["future_probe_may_cost_tokens"], true);
 }
@@ -191,8 +252,17 @@ fn invalid_roots_and_settings_fail_without_a_successful_empty_report() {
     let fixture = Fixture::new();
     assert!(!fixture.run(&["missing"]).status.success());
     let outside = tempfile::tempdir().unwrap();
-    assert!(!fixture.run(&[outside.path().to_str().unwrap()]).status.success());
-    std::fs::write(fixture.root().join(".codanna/settings.toml"), "not valid = [").unwrap();
+    assert!(
+        !fixture
+            .run(&[outside.path().to_str().unwrap()])
+            .status
+            .success()
+    );
+    std::fs::write(
+        fixture.root().join(".codanna/settings.toml"),
+        "not valid = [",
+    )
+    .unwrap();
     let output = fixture.run(&[]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
@@ -202,9 +272,9 @@ fn invalid_roots_and_settings_fail_without_a_successful_empty_report() {
 fn local_identity_stays_unknown_without_initializing_a_model() {
     let fixture = Fixture::new();
     let config = fixture.root().join(".codanna/settings.toml");
-    let text = std::fs::read_to_string(&config).unwrap().replace(
-        &format!("remote_url = {:?}\n", fixture.url), ""
-    );
+    let text = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(&format!("remote_url = {:?}\n", fixture.url), "");
     std::fs::write(config, text).unwrap();
     let report = fixture.plan(&[]);
     assert_eq!(report["backend"], "local");
@@ -216,7 +286,11 @@ fn local_identity_stays_unknown_without_initializing_a_model() {
 #[test]
 fn generic_grammar_files_are_partial_not_silently_downloaded() {
     let fixture = Fixture::new();
-    std::fs::write(fixture.root().join("src/module.lua"), "function calendar() return 1 end\n").unwrap();
+    std::fs::write(
+        fixture.root().join("src/module.lua"),
+        "function calendar() return 1 end\n",
+    )
+    .unwrap();
     let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(3));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
