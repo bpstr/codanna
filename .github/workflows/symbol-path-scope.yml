@@ -5,11 +5,14 @@ on:
     paths:
       - 'src/storage/tantivy/query.rs'
       - 'src/indexing/facade.rs'
+      - 'src/indexing/pipeline/stages/discover.rs'
+      - 'src/indexing/pipeline/stages/read.rs'
       - 'src/mcp/requests.rs'
       - 'src/mcp/tools/search.rs'
       - 'src/mcp/tools/context.rs'
       - 'src/cli/args.rs'
       - 'src/cli/commands/retrieve.rs'
+      - 'src/cli/commands/mcp.rs'
       - 'src/retrieve.rs'
       - 'tests/symbol_path_scope.rs'
       - '.github/workflows/symbol-path-scope.yml'
@@ -44,8 +47,12 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version
-            sha256sum src/storage/tantivy/query.rs tests/symbol_path_scope.rs
+            sha256sum src/storage/tantivy/query.rs src/indexing/pipeline/stages/discover.rs src/indexing/pipeline/stages/read.rs src/mcp/tools/context.rs tests/symbol_path_scope.rs
             cargo test --locked --test symbol_path_scope -- --nocapture
+            cargo test --locked --lib indexing::pipeline::stages::read::tests -- --nocapture
+            cargo test --locked --lib workspace_incremental_reads -- --nocapture
+            cargo test --locked --lib run_incremental_ -- --nocapture
+            cargo test --locked --lib pair_relocations_ -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/symbol-path-scope.log"
       - name: Check formatting
         run: cargo fmt --all -- --check
