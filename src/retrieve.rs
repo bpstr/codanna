@@ -661,28 +661,28 @@ pub fn retrieve_search_scoped(
 
     let search_results =
         match indexer.search_scoped(query, limit, kind_filter, module, language, path_prefix) {
-        Ok(results) => results,
-        Err(error) => {
-            let code = if matches!(&error, crate::IndexError::Storage(
+            Ok(results) => results,
+            Err(error) => {
+                let code = if matches!(&error, crate::IndexError::Storage(
                 crate::StorageError::InvalidFieldValue { field, .. }
             ) if field == "limit")
-            {
-                ResultCode::InvalidQuery
-            } else {
-                ResultCode::IndexError
-            };
-            if format == OutputFormat::Json {
-                let envelope: Envelope<()> =
-                    query_error_envelope(code, format!("Search failed: {error}"))
-                        .with_entity_type(EnvelopeEntityType::SearchResult)
-                        .with_query(query);
-                let _ = emit_envelope_json(&envelope, fields.as_ref());
-            } else {
-                eprintln!("Search failed: {error}");
+                {
+                    ResultCode::InvalidQuery
+                } else {
+                    ResultCode::IndexError
+                };
+                if format == OutputFormat::Json {
+                    let envelope: Envelope<()> =
+                        query_error_envelope(code, format!("Search failed: {error}"))
+                            .with_entity_type(EnvelopeEntityType::SearchResult)
+                            .with_query(query);
+                    let _ = emit_envelope_json(&envelope, fields.as_ref());
+                } else {
+                    eprintln!("Search failed: {error}");
+                }
+                return ExitCode::GeneralError;
             }
-            return ExitCode::GeneralError;
-        }
-    };
+        };
 
     // Transform search results to SymbolContext with relationships
     let results_with_context: Vec<SymbolContext> = search_results

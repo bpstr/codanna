@@ -83,8 +83,12 @@ fn subtree_scope_is_applied_before_top_k_and_broad_search_keeps_reference_code()
         .unwrap();
     assert_eq!(broad.len(), 5);
     assert!(
-        broad.iter().any(|hit| hit.file_path.starts_with("archive/"))
-            || broad.iter().any(|hit| hit.file_path.starts_with("reference/")),
+        broad
+            .iter()
+            .any(|hit| hit.file_path.starts_with("archive/"))
+            || broad
+                .iter()
+                .any(|hit| hit.file_path.starts_with("reference/")),
         "unscoped discovery must keep archive/reference code searchable"
     );
 
@@ -160,7 +164,13 @@ fn root_scope_matches_unscoped_results_and_escape_paths_are_rejected() {
         root.iter().map(|hit| hit.symbol_id).collect::<Vec<_>>()
     );
 
-    for invalid in ["", "../reference", "active/../reference", "/active", r"C:\active"] {
+    for invalid in [
+        "",
+        "../reference",
+        "active/../reference",
+        "/active",
+        r"C:\active",
+    ] {
         let error = fixture
             .index
             .search_scoped(
@@ -186,7 +196,9 @@ fn root_scope_matches_unscoped_results_and_escape_paths_are_rejected() {
 #[test]
 fn exact_same_name_lookup_remains_disambiguatable_outside_scoped_discovery() {
     let fixture = Fixture::new();
-    let calendars = fixture.index.find_symbols_by_name("Calendar", Some("typescript"));
+    let calendars = fixture
+        .index
+        .find_symbols_by_name("Calendar", Some("typescript"));
     assert_eq!(calendars.len(), 2);
     let paths = calendars
         .iter()

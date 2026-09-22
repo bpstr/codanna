@@ -143,8 +143,7 @@ impl DocumentIndex {
                 reason: "path prefix must be a non-empty workspace-relative path".into(),
             });
         }
-        if portable.starts_with('/')
-            || portable.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+        if portable.starts_with('/') || portable.as_bytes().get(1).is_some_and(|byte| *byte == b':')
         {
             return Err(StorageError::InvalidFieldValue {
                 field: "path_prefix".into(),
