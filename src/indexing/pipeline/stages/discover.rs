@@ -680,7 +680,10 @@ mod tests {
             .with_index(index);
         assert!(stage.run_incremental().unwrap().is_empty());
         fs::write(&absolute, "fn changed_workspace_owner() {}\n").unwrap();
-        assert_eq!(stage.run_incremental().unwrap().modified_files, vec![relative.clone()]);
+        assert_eq!(
+            stage.run_incremental().unwrap().modified_files,
+            vec![relative.clone()]
+        );
         fs::write(&absolute, original).unwrap();
         let renamed = PathBuf::from("src/renamed.rs");
         fs::rename(&absolute, root.join(&renamed)).unwrap();
