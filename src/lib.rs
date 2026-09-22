@@ -25,6 +25,8 @@ pub mod plugins;
 pub mod profiles;
 pub mod project_resolver;
 pub mod rebuild_plan;
+#[cfg(test)]
+mod rebuild_plan_pressure;
 pub mod relationship;
 pub mod retrieve;
 pub(crate) mod runtime;
