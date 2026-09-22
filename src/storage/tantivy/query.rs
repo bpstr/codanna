@@ -11,76 +11,15 @@ use tantivy::{
 use super::{DocumentIndex, SearchResult};
 
 const DISCOVERY_CANDIDATE_MULTIPLIER: usize = 16;
-const DISCOVERY_CANDIDATE_FLOOR: usize = 64;
+const DISCOVERY_CANDIDATE_FLOOR: usize = 128;
 const DISCOVERY_CANDIDATE_CAP: usize = 200;
 
 fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
-    if query.chars().any(|character| {
-        matches!(
-            character,
-            ':' | '"'
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '{'
-                | '}'
-                | '~'
-                | '*'
-                | '?'
-                | '\\'
-                | '/'
-                | '^'
-                | '+'
-        )
-    }) || query
-        .split_whitespace()
-        .any(|word| matches!(word, "AND" | "OR" | "NOT"))
-    {
-        return None;
-    }
-
-    const STOPWORDS: &[&str] = &[
-        "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to", "was",
-        "were", "what", "where", "which", "with",
-    ];
-
-    let mut terms = std::collections::BTreeSet::new();
-    for term in query
-        .split(|character: char| !character.is_alphanumeric() && character != '_')
-        .map(str::to_lowercase)
-        .filter(|term| term.len() >= 3)
-        .filter(|term| !STOPWORDS.contains(&term.as_str()))
-    {
-        terms.insert(term);
-        if terms.len() >= 32 {
-            break;
-        }
-    }
-
-    (terms.len() >= 2).then(|| terms.into_iter().collect())
+    super::linguistic_coverage::query_terms(query)
 }
 
 fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
-    let mut searchable = result.name.to_lowercase();
-    for value in [
-        result.doc_comment.as_deref(),
-        result.signature.as_deref(),
-        result.context.as_deref(),
-        Some(result.module_path.as_str()),
-        Some(result.file_path.as_str()),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        searchable.push(' ');
-        searchable.push_str(&value.to_lowercase());
-    }
-
-    terms
-        .iter()
-        .filter(|term| searchable.contains(&term[..]))
-        .count()
+    super::linguistic_coverage::coverage(result, terms)
 }
 
 pub(crate) fn discovery_term_coverage(
@@ -102,17 +41,9 @@ fn discovery_candidate_limit(limit: usize, enabled: bool) -> usize {
 }
 
 fn rerank_discovery_results(results: &mut Vec<SearchResult>, terms: &[String], limit: usize) {
-    results.sort_by(|left, right| {
-        result_term_coverage(right, terms)
-            .cmp(&result_term_coverage(left, terms))
-            .then_with(|| right.score.total_cmp(&left.score))
-            .then_with(|| left.file_path.cmp(&right.file_path))
-            .then_with(|| left.line.cmp(&right.line))
-            .then_with(|| left.column.cmp(&right.column))
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.symbol_id.value().cmp(&right.symbol_id.value()))
+    super::ranking_efficiency::sort_coverage_once(results, limit, |row| {
+        result_term_coverage(row, terms)
     });
-    results.truncate(limit);
 }
 
 /// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
@@ -135,83 +66,6 @@ pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
 }
 
 impl DocumentIndex {
-    fn normalize_path_prefix(path_prefix: &str) -> StorageResult<String> {
-        let portable = path_prefix.trim().replace('\\', "/");
-        if portable.is_empty() {
-            return Err(StorageError::InvalidFieldValue {
-                field: "path_prefix".into(),
-                reason: "path prefix must be a non-empty workspace-relative path".into(),
-            });
-        }
-        if portable.starts_with('/') || portable.as_bytes().get(1).is_some_and(|byte| *byte == b':')
-        {
-            return Err(StorageError::InvalidFieldValue {
-                field: "path_prefix".into(),
-                reason: "path prefix must be workspace-relative".into(),
-            });
-        }
-
-        let mut parts = Vec::new();
-        for part in portable.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    return Err(StorageError::InvalidFieldValue {
-                        field: "path_prefix".into(),
-                        reason: "path prefix cannot escape the workspace with '..'".into(),
-                    });
-                }
-                _ => parts.push(part),
-            }
-        }
-        Ok(parts.join("/"))
-    }
-
-    /// Resolve a portable workspace-relative subtree to the current file IDs.
-    /// The returned terms are applied before TopDocs collection.
-    fn file_scope_terms(&self, path_prefix: &str) -> StorageResult<Option<Vec<Term>>> {
-        let prefix = Self::normalize_path_prefix(path_prefix)?;
-        if prefix.is_empty() {
-            return Ok(None);
-        }
-        let prefix_with_separator = format!("{prefix}/");
-        let searcher = self.reader.searcher();
-        let query = TermQuery::new(
-            Term::from_field_text(self.schema.doc_type, "file_info"),
-            IndexRecordOption::Basic,
-        );
-        let mut addresses: Vec<_> = searcher
-            .search(&query, &DocSetCollector)?
-            .into_iter()
-            .collect();
-        addresses.sort_unstable();
-
-        let mut terms = Vec::new();
-        for address in addresses {
-            let doc: Document = searcher.doc(address)?;
-            let Some(raw_path) = doc
-                .get_first(self.schema.file_path)
-                .and_then(|value| value.as_str())
-            else {
-                continue;
-            };
-            let portable_path = self
-                .to_portable_file_path(raw_path)
-                .unwrap_or_else(|| raw_path.replace('\\', "/"));
-            if portable_path != prefix && !portable_path.starts_with(&prefix_with_separator) {
-                continue;
-            }
-            let Some(file_id) = doc
-                .get_first(self.schema.file_id)
-                .and_then(|value| value.as_u64())
-            else {
-                continue;
-            };
-            terms.push(Term::from_field_u64(self.schema.file_id, file_id));
-        }
-        Ok(Some(terms))
-    }
-
     /// Search returning every match: count-first, then an exact-limit drain.
     ///
     /// Replaces fixed `with_limit(N)` bounds that silently truncated dense
@@ -355,12 +209,11 @@ impl DocumentIndex {
         }
 
         if let Some(path_prefix) = path_prefix {
-            if let Some(terms) = self.file_scope_terms(path_prefix)? {
-                if terms.is_empty() {
-                    return Ok(Vec::new());
-                }
-                all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
+            let terms = self.file_scope_terms(&searcher, path_prefix)?;
+            if terms.is_empty() {
+                return Ok(Vec::new());
             }
+            all_clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
         }
 
         let final_query = BooleanQuery::new(all_clauses);

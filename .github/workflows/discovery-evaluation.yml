@@ -1,28 +1,24 @@
-name: Symbol ranking coverage
+name: Discovery efficiency and repository relevance
 on:
   pull_request:
-    branches: [main]
     paths:
-      - 'src/storage/tantivy/query.rs'
-      - 'src/storage/tantivy/mod.rs'
-      - 'src/storage/tantivy/ranking_diagnostics.rs'
-      - 'src/mcp/tools/search.rs'
-      - 'src/mcp/tools/context.rs'
-      - 'tests/symbol_ranking_regressions.rs'
-      - 'tests/symbol_ranking_runtime_holdout.rs'
-      - '.github/workflows/symbol-ranking-coverage.yml'
+      - 'src/storage/tantivy/**'
+      - 'tests/repository_task_relevance.rs'
+      - 'tests/fixtures/repository_task_sources/**'
+      - 'contributing/retrieval/evaluations/repository-tasks.json'
+      - '.github/workflows/discovery-evaluation.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: symbol-ranking-coverage-${{ github.event.pull_request.number || github.ref }}
+  group: discovery-evaluation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CARGO_TERM_COLOR: never
     steps:
@@ -37,26 +33,26 @@ jobs:
           cache-on-failure: true
       - name: Refresh native linker artifacts
         run: cargo clean -p ort-sys
-      - name: Run selected ranking contracts
+      - name: Measure frozen tasks and verify ranking compatibility
         shell: bash
         run: |
           set -euo pipefail
           {
             git rev-parse HEAD
-            rustc --version
-            sha256sum src/storage/tantivy/query.rs src/storage/tantivy/ranking_diagnostics.rs tests/symbol_ranking_regressions.rs tests/symbol_ranking_runtime_holdout.rs
+            rustc --version --verbose
+            sha256sum src/storage/tantivy/query.rs src/storage/tantivy/ranking_efficiency.rs tests/repository_task_relevance.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --test repository_task_relevance -- --nocapture
+            cargo test --locked --lib ranking_efficiency -- --nocapture
             cargo test --locked --lib ranking_diagnostics -- --nocapture
             cargo test --locked --test symbol_ranking_regressions --test symbol_ranking_runtime_holdout --test retrieval_ranking_regressions -- --nocapture
             cargo test --locked --test adversarial_regressions search_graph -- --nocapture
-          } 2>&1 | tee "$RUNNER_TEMP/symbol-ranking-coverage.log"
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check strict lints
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/discovery-evaluation.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: symbol-ranking-coverage
-          path: ${{ runner.temp }}/symbol-ranking-coverage.log
+          name: discovery-evaluation
+          path: ${{ runner.temp }}/discovery-evaluation.log
           retention-days: 14
           if-no-files-found: error
