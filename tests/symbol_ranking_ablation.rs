@@ -368,3 +368,48 @@ fn filters_apply_before_any_test_local_reranking() {
         "language filter must not be filled after ranking"
     );
 }
+
+
+#[test]
+fn candidate_pool_cost_is_measured_without_a_latency_gate() {
+    use std::time::Instant;
+
+    let fixture = Fixture::new();
+    let mut small_elapsed = std::time::Duration::ZERO;
+    let mut expanded_elapsed = std::time::Duration::ZERO;
+    let mut small_results = 0usize;
+    let mut expanded_results = 0usize;
+    let mut small_json_bytes = 0usize;
+    let mut expanded_json_bytes = 0usize;
+
+    // Repeated, deterministic local measurements are evidence about this fixture
+    // only. CI timing is deliberately not an acceptance threshold.
+    for _ in 0..10 {
+        for case in TOPIC_CASES {
+            let start = Instant::now();
+            let small = fixture.raw(case.query, 5);
+            small_elapsed += start.elapsed();
+            small_results += small.len();
+            small_json_bytes += serde_json::to_vec(&small).unwrap().len();
+
+            let start = Instant::now();
+            let expanded = fixture.raw(case.query, 128);
+            expanded_elapsed += start.elapsed();
+            expanded_results += expanded.len();
+            expanded_json_bytes += serde_json::to_vec(&expanded).unwrap().len();
+        }
+    }
+
+    println!(
+        "candidate_cost_fixture: queries={} limit5_results={} limit128_results={} limit5_json_bytes={} limit128_json_bytes={} limit5_elapsed_us={} limit128_elapsed_us={}",
+        TOPIC_CASES.len() * 10,
+        small_results,
+        expanded_results,
+        small_json_bytes,
+        expanded_json_bytes,
+        small_elapsed.as_micros(),
+        expanded_elapsed.as_micros(),
+    );
+    assert!(expanded_results >= small_results);
+    assert!(expanded_json_bytes >= small_json_bytes);
+}
