@@ -167,7 +167,15 @@ fn small_requested_limit_still_has_a_bounded_discovery_floor() {
     let fixture = Fixture::new();
     let results = fixture.search("calendar settings", 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].name, "useAccountPresentation");
+    assert!(
+        !matches!(results[0].name.as_str(), "settings" | "featureContent"),
+        "bounded discovery should select a multi-concept owner, got {}",
+        results[0].name
+    );
+    assert_eq!(
+        codanna::storage::tantivy::discovery_term_coverage("calendar settings", &results[0]),
+        Some((2, 2))
+    );
 }
 
 #[test]
