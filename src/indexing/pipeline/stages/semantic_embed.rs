@@ -153,12 +153,36 @@ impl SemanticEmbedStage {
             semantic.reuse_cached_embeddings(&items)
         };
         let mut stored = items.len() - missing.len();
+
+        // Collapse exact duplicate misses before provider/local-model inference.
+        // Preserve first-seen order so request ordering stays deterministic.
+        let mut group_indexes: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        let mut groups: Vec<(&str, Vec<(crate::SymbolId, &str)>)> = Vec::new();
+        for &(id, text, language) in &missing {
+            if let Some(&index) = group_indexes.get(text) {
+                groups[index].1.push((id, language));
+            } else {
+                let index = groups.len();
+                group_indexes.insert(text, index);
+                groups.push((text, vec![(id, language)]));
+            }
+        }
+        let unique_missing: Vec<_> = groups
+            .iter()
+            .map(|(text, targets)| (targets[0].0, *text, targets[0].1))
+            .collect();
+        let group_by_representative: std::collections::HashMap<_, _> = unique_missing
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _, _))| (*id, index))
+            .collect();
         let mut offset = 0;
 
         // Persist each bounded inference result before producing the next one.
         // This retains the memory bound while cache lookup remains snapshot-like
         // for the entire collector batch.
-        while offset < missing.len() {
+        while offset < unique_missing.len() {
             let memory = crate::memory::MemoryBudget::current();
             if memory.under_pressure() {
                 return Err(PipelineError::Parse {
@@ -172,8 +196,8 @@ impl SemanticEmbedStage {
                 });
             }
             let batch_size = memory.embedding_batch_size(64, accelerated);
-            let end = (offset + batch_size).min(missing.len());
-            let inference = &missing[offset..end];
+            let end = (offset + batch_size).min(unique_missing.len());
+            let inference = &unique_missing[offset..end];
 
             let embeddings =
                 self.pool
@@ -188,7 +212,13 @@ impl SemanticEmbedStage {
                     path: std::path::PathBuf::new(),
                     reason: "Failed to lock semantic search".to_string(),
                 })?;
-                stored += semantic.store_embeddings_with_inputs(embeddings, inference);
+                for (id, embedding, _) in embeddings {
+                    let Some(&group_index) = group_by_representative.get(&id) else {
+                        continue;
+                    };
+                    let (input, targets) = &groups[group_index];
+                    stored += semantic.store_shared_embedding(input, embedding, targets);
+                }
             }
             offset = end;
         }
