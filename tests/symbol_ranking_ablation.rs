@@ -369,7 +369,6 @@ fn filters_apply_before_any_test_local_reranking() {
     );
 }
 
-
 #[test]
 fn candidate_pool_cost_is_measured_without_a_latency_gate() {
     use std::time::Instant;
