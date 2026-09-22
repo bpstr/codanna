@@ -413,11 +413,16 @@ impl IndexFacade {
                     ));
                 }
                 Err(e) => {
-                    // Other errors (missing file, corrupt data) — warn and continue
-                    // without semantic search rather than blocking startup.
+                    // Retain old data for recovery, but never serve or republish
+                    // it after a failed reload. Lexical startup remains usable.
+                    self.semantic_incompatible = true;
                     tracing::warn!("Failed to load semantic search, continuing without it: {e}");
                 }
             }
+        } else if self.semantic_search.is_some() {
+            // A manifest removed after a previous load invalidates that loaded
+            // generation. A genuinely absent first-load store stays optional.
+            self.semantic_incompatible = true;
         }
         Ok(false)
     }
