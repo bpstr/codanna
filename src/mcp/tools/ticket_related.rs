@@ -115,7 +115,9 @@ impl RelatedCode {
                 output.push('\n');
             }
             if item.identity_text_shortened {
-                output.push_str("   Display identity shortened; resolve the symbol ID for full identity.\n");
+                output.push_str(
+                    "   Display identity shortened; resolve the symbol ID for full identity.\n",
+                );
             }
         }
         for probe in &self.probes {
@@ -138,7 +140,9 @@ impl RelatedCode {
                 self.omitted_targets
             ));
         }
-        output.push_str("One-hop indexed evidence only; source coverage and freshness are unknown.\n");
+        output.push_str(
+            "One-hop indexed evidence only; source coverage and freshness are unknown.\n",
+        );
         output
     }
 }
@@ -214,19 +218,30 @@ pub(super) fn collect(
                 probe.status = "missing_seed";
                 return Ok::<(), crate::storage::StorageError>(());
             };
-            let mut edges = view.relationships(&[id], false, &[RelationKind::Calls], Some(EDGES_PER_SEED))?;
+            let mut edges =
+                view.relationships(&[id], false, &[RelationKind::Calls], Some(EDGES_PER_SEED))?;
             probe.indexed_edges = Some(edges.len());
             edges.sort_by_key(|(_, target, relationship)| {
                 (
                     target.value(),
-                    relationship.metadata.as_ref().and_then(|metadata| metadata.line),
-                    relationship.metadata.as_ref().and_then(|metadata| metadata.column),
+                    relationship
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.line),
+                    relationship
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.column),
                 )
             });
             let mut target_ids: Vec<_> = edges.iter().map(|(_, target, _)| *target).collect();
             target_ids.sort_unstable_by_key(|id| id.value());
             target_ids.dedup();
-            let targets: BTreeMap<_, _> = view.symbols(&target_ids)?.into_iter().map(|symbol| (symbol.id.value(), symbol)).collect();
+            let targets: BTreeMap<_, _> = view
+                .symbols(&target_ids)?
+                .into_iter()
+                .map(|symbol| (symbol.id.value(), symbol))
+                .collect();
             for (_, target_id, relationship) in edges {
                 let Some(target) = targets.get(&target_id.value()) else {
                     probe.unhydrated_edges += 1;
@@ -235,7 +250,9 @@ pub(super) fn collect(
                 if excluded.contains(&target_id.value()) {
                     continue;
                 }
-                let related = found.entry(target_id.value()).or_insert_with(|| item(target));
+                let related = found
+                    .entry(target_id.value())
+                    .or_insert_with(|| item(target));
                 // Multiple call sites do not get extra relevance weight. One
                 // deterministic site is enough to explain each seed/target edge.
                 if related.via.iter().any(|via| via.seed_symbol_id == seed_id) {
@@ -243,15 +260,23 @@ pub(super) fn collect(
                 }
                 let seed_name = text(&seed.name, 256);
                 let seed_path = text(&seed.file_path, 2048);
-                related.identity_text_shortened |= seed_name != seed.name.as_ref() || seed_path != seed.file_path.as_ref();
+                related.identity_text_shortened |=
+                    seed_name != seed.name.as_ref() || seed_path != seed.file_path.as_ref();
                 related.via.push(Via {
                     seed_symbol_id: seed_id,
                     seed_rank: position + 1,
                     seed_name,
                     seed_file_path: seed_path,
                     relation: "Calls",
-                    call_line: relationship.metadata.as_ref().and_then(|metadata| metadata.line).map(|line| line.saturating_add(1)),
-                    call_column: relationship.metadata.as_ref().and_then(|metadata| metadata.column),
+                    call_line: relationship
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.line)
+                        .map(|line| line.saturating_add(1)),
+                    call_column: relationship
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.column),
                 });
             }
             if probe.unhydrated_edges > 0 {
@@ -275,7 +300,9 @@ pub(super) fn collect(
     }
     result.items = found.into_values().collect();
     result.items.sort_by(|left, right| {
-        left.via[0].seed_rank.cmp(&right.via[0].seed_rank)
+        left.via[0]
+            .seed_rank
+            .cmp(&right.via[0].seed_rank)
             .then_with(|| left.file_path.cmp(&right.file_path))
             .then_with(|| left.line.cmp(&right.line))
             .then_with(|| left.column.cmp(&right.column))
@@ -285,7 +312,11 @@ pub(super) fn collect(
     result.distinct_targets = result.items.len();
     result.omitted_targets = result.items.len().saturating_sub(MAX_RELATED);
     result.items.truncate(MAX_RELATED);
-    result.status = if result.probes.iter().any(|probe| probe.status != "completed_indexed_neighborhood") {
+    result.status = if result
+        .probes
+        .iter()
+        .any(|probe| probe.status != "completed_indexed_neighborhood")
+    {
         "partial"
     } else if result.items.is_empty() {
         "empty_indexed_neighborhoods"

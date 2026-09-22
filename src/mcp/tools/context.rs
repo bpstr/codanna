@@ -10,7 +10,7 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router};
 #[tool_router(router = context_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
     #[tool(
-        description = "Retrieve ticket-aware code context by fusing bounded lexical candidates, optional semantic candidates, and exact indexed identifiers mentioned in relevant documents. Semantic code queries and conversation recall default off. Separate evidence sections and source availability remain visible; no index is rebuilt."
+        description = "Retrieve ticket-aware code context by fusing bounded lexical candidates, optional semantic candidates, and exact indexed identifiers mentioned in relevant documents. Semantic code queries, conversation recall and related-code expansion default off. include_related_code adds bounded one-hop indexed Calls as separate evidence, not direct relevance scores. Separate evidence sections and source availability remain visible; no index is rebuilt."
     )]
     pub async fn search_ticket_context(
         &self,

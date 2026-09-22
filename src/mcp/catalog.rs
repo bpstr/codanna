@@ -31,6 +31,6 @@ tools! {
     SemanticSearchDocs => ("semantic_search_docs",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SemanticSearchWithContext => ("semantic_search_with_context",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SearchDocuments => ("search_documents",["query","collection","limit"],["query"],Some("query"),Read),
-    SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations"],["query"],Some("query"),Read),
+    SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations","include_related_code"],["query"],Some("query"),Read),
     SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix"],["query"],Some("query"),Read),
 }
