@@ -15,72 +15,11 @@ const DISCOVERY_CANDIDATE_FLOOR: usize = 128;
 const DISCOVERY_CANDIDATE_CAP: usize = 200;
 
 fn simple_discovery_terms(query: &str) -> Option<Vec<String>> {
-    if query.chars().any(|character| {
-        matches!(
-            character,
-            ':' | '"'
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '{'
-                | '}'
-                | '~'
-                | '*'
-                | '?'
-                | '\\'
-                | '/'
-                | '^'
-                | '+'
-        )
-    }) || query
-        .split_whitespace()
-        .any(|word| matches!(word, "AND" | "OR" | "NOT"))
-    {
-        return None;
-    }
-
-    const STOPWORDS: &[&str] = &[
-        "and", "are", "for", "from", "how", "into", "not", "the", "this", "that", "to", "was",
-        "were", "what", "where", "which", "with",
-    ];
-
-    let mut terms = std::collections::BTreeSet::new();
-    for term in query
-        .split(|character: char| !character.is_alphanumeric() && character != '_')
-        .map(str::to_lowercase)
-        .filter(|term| term.len() >= 3)
-        .filter(|term| !STOPWORDS.contains(&term.as_str()))
-    {
-        terms.insert(term);
-        if terms.len() >= 32 {
-            break;
-        }
-    }
-
-    (terms.len() >= 2).then(|| terms.into_iter().collect())
+    super::linguistic_coverage::query_terms(query)
 }
 
 fn result_term_coverage(result: &SearchResult, terms: &[String]) -> usize {
-    let mut searchable = result.name.to_lowercase();
-    for value in [
-        result.doc_comment.as_deref(),
-        result.signature.as_deref(),
-        result.context.as_deref(),
-        Some(result.module_path.as_str()),
-        Some(result.file_path.as_str()),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        searchable.push(' ');
-        searchable.push_str(&value.to_lowercase());
-    }
-
-    terms
-        .iter()
-        .filter(|term| searchable.contains(&term[..]))
-        .count()
+    super::linguistic_coverage::coverage(result, terms)
 }
 
 pub(crate) fn discovery_term_coverage(

@@ -26,16 +26,19 @@ jobs:
           cache-on-failure: true
       - name: Refresh native linker artifacts
         run: cargo clean -p ort-sys
-      - name: Record frozen judgments and measured alternatives
+      - name: Measure frozen questions and verify selected policy
         shell: bash
         run: |
           set -euo pipefail
           {
             git rev-parse HEAD
             rustc --version --verbose
-            sha256sum contributing/retrieval/evaluations/repository-tasks.json tests/repository_relevance_ablation.rs src/storage/tantivy/query.rs
-            cargo test --locked --test repository_relevance_ablation --test repository_task_relevance -- --nocapture
+            sha256sum contributing/retrieval/evaluations/repository-tasks.json src/storage/tantivy/query.rs src/storage/tantivy/linguistic_coverage.rs
+            cargo test --locked --lib linguistic_coverage -- --nocapture
+            cargo test --locked --test repository_relevance_ablation --test repository_task_relevance --test symbol_ranking_regressions --test symbol_ranking_runtime_holdout --test retrieval_ranking_regressions -- --nocapture
+            cargo test --locked --test adversarial_regressions search_graph -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/task-relevance-recovery.log"
+          python3 contributing/scripts/check-task-relevance-recovery.py "$RUNNER_TEMP/task-relevance-recovery.log"
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check strict lints

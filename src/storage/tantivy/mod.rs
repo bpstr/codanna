@@ -17,6 +17,7 @@ use tantivy::{
 
 mod codec;
 mod graph;
+mod linguistic_coverage;
 mod query;
 #[cfg(test)]
 mod ranking_diagnostics;
