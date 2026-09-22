@@ -1,9 +1,9 @@
 //! Broader T06 lexical evaluation: 21 labeled topic queries across domains and languages.
 //! The selected reranker remains test-local on this investigation branch.
 
+use codanna::Settings;
 use codanna::indexing::facade::IndexFacade;
 use codanna::storage::SearchResult;
-use codanna::Settings;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,28 +18,154 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    Case { id: "calendar-settings", path: "calendar/presentation.ts", name: "useAccountPresentation", doc: "Calendar settings account first day week preferences.", query: "calendar settings account first day week preferences" },
-    Case { id: "integration-binding", path: "integration/binding.ts", name: "createIntegrationBinding", doc: "Integration binding creation GitHub subscription development activity eligible webhook targets.", query: "integration binding creation github subscription development activity eligible webhook targets" },
-    Case { id: "workspace-preferences", path: "workspace/preferences.ts", name: "resolveWorkspacePreferences", doc: "Workspace default locale timezone calendar settings inheritance.", query: "workspace default locale timezone calendar settings inheritance" },
-    Case { id: "billing-proration", path: "billing/proration.ts", name: "previewPlanChange", doc: "Subscription billing proration invoice preview plan change.", query: "subscription billing proration invoice preview plan change" },
-    Case { id: "notification-digest", path: "notifications/digest.ts", name: "buildNotificationDigest", doc: "Notification digest unread mention email preference delivery.", query: "notification digest unread mention email preference delivery" },
-    Case { id: "search-generation", path: "search/rebuild.ts", name: "rebuildSearchGeneration", doc: "Rebuild search index stale document generation replacement.", query: "rebuild search index stale document generation replacement" },
-    Case { id: "project-access", path: "permissions/access.ts", name: "resolveProjectAccess", doc: "Workspace role permission inherited project access policy.", query: "workspace role permission inherited project access policy" },
-    Case { id: "multipart-upload", path: "uploads/multipart.ts", name: "uploadMultipartAttachment", doc: "Multipart attachment upload checksum retry storage completion.", query: "multipart attachment upload checksum retry storage completion" },
-    Case { id: "dependency-cycle", path: "tasks/dependencies.ts", name: "validateTaskDependencies", doc: "Task dependency cycle blocker scheduling validation.", query: "task dependency cycle blocker scheduling validation" },
-    Case { id: "rate-limit", path: "api/rate_limit.ts", name: "enforceRequestQuota", doc: "API rate limit request quota retry after response.", query: "api rate limit request quota retry after response" },
-    Case { id: "tool-latency", path: "observability/tool_latency.ts", name: "recordToolLatency", doc: "Trace latency span tool call first token timing.", query: "trace latency span tool call first token timing" },
-    Case { id: "cache-invalidation", path: "cache/workspace.ts", name: "invalidateWorkspaceSettingsCache", doc: "Redis cache invalidation workspace settings version refresh.", query: "redis cache invalidation workspace settings version refresh" },
-    Case { id: "offline-mutations", path: "mobile/offline.ts", name: "reconcileOfflineMutations", doc: "Offline sync optimistic mutation queue conflict reconciliation.", query: "offline sync optimistic mutation queue conflict reconciliation" },
-    Case { id: "agent-approval", path: "agents/approval.ts", name: "requireToolApproval", doc: "Tool approval human loop mutation confirmation policy.", query: "tool approval human loop mutation confirmation policy" },
+    Case {
+        id: "calendar-settings",
+        path: "calendar/presentation.ts",
+        name: "useAccountPresentation",
+        doc: "Calendar settings account first day week preferences.",
+        query: "calendar settings account first day week preferences",
+    },
+    Case {
+        id: "integration-binding",
+        path: "integration/binding.ts",
+        name: "createIntegrationBinding",
+        doc: "Integration binding creation GitHub subscription development activity eligible webhook targets.",
+        query: "integration binding creation github subscription development activity eligible webhook targets",
+    },
+    Case {
+        id: "workspace-preferences",
+        path: "workspace/preferences.ts",
+        name: "resolveWorkspacePreferences",
+        doc: "Workspace default locale timezone calendar settings inheritance.",
+        query: "workspace default locale timezone calendar settings inheritance",
+    },
+    Case {
+        id: "billing-proration",
+        path: "billing/proration.ts",
+        name: "previewPlanChange",
+        doc: "Subscription billing proration invoice preview plan change.",
+        query: "subscription billing proration invoice preview plan change",
+    },
+    Case {
+        id: "notification-digest",
+        path: "notifications/digest.ts",
+        name: "buildNotificationDigest",
+        doc: "Notification digest unread mention email preference delivery.",
+        query: "notification digest unread mention email preference delivery",
+    },
+    Case {
+        id: "search-generation",
+        path: "search/rebuild.ts",
+        name: "rebuildSearchGeneration",
+        doc: "Rebuild search index stale document generation replacement.",
+        query: "rebuild search index stale document generation replacement",
+    },
+    Case {
+        id: "project-access",
+        path: "permissions/access.ts",
+        name: "resolveProjectAccess",
+        doc: "Workspace role permission inherited project access policy.",
+        query: "workspace role permission inherited project access policy",
+    },
+    Case {
+        id: "multipart-upload",
+        path: "uploads/multipart.ts",
+        name: "uploadMultipartAttachment",
+        doc: "Multipart attachment upload checksum retry storage completion.",
+        query: "multipart attachment upload checksum retry storage completion",
+    },
+    Case {
+        id: "dependency-cycle",
+        path: "tasks/dependencies.ts",
+        name: "validateTaskDependencies",
+        doc: "Task dependency cycle blocker scheduling validation.",
+        query: "task dependency cycle blocker scheduling validation",
+    },
+    Case {
+        id: "rate-limit",
+        path: "api/rate_limit.ts",
+        name: "enforceRequestQuota",
+        doc: "API rate limit request quota retry after response.",
+        query: "api rate limit request quota retry after response",
+    },
+    Case {
+        id: "tool-latency",
+        path: "observability/tool_latency.ts",
+        name: "recordToolLatency",
+        doc: "Trace latency span tool call first token timing.",
+        query: "trace latency span tool call first token timing",
+    },
+    Case {
+        id: "cache-invalidation",
+        path: "cache/workspace.ts",
+        name: "invalidateWorkspaceSettingsCache",
+        doc: "Redis cache invalidation workspace settings version refresh.",
+        query: "redis cache invalidation workspace settings version refresh",
+    },
+    Case {
+        id: "offline-mutations",
+        path: "mobile/offline.ts",
+        name: "reconcileOfflineMutations",
+        doc: "Offline sync optimistic mutation queue conflict reconciliation.",
+        query: "offline sync optimistic mutation queue conflict reconciliation",
+    },
+    Case {
+        id: "agent-approval",
+        path: "agents/approval.ts",
+        name: "requireToolApproval",
+        doc: "Tool approval human loop mutation confirmation policy.",
+        query: "tool approval human loop mutation confirmation policy",
+    },
     // Holdout starts here (one third of the corpus).
-    Case { id: "session-rotation", path: "auth/session.rs", name: "refresh_session_token", doc: "Refresh session token rotation expiry authentication security.", query: "refresh session token rotation expiry authentication security" },
-    Case { id: "request-origin", path: "security/origin.rs", name: "validate_request_origin", doc: "CSRF origin cookie same site request validation security.", query: "csrf origin cookie same site request validation security" },
-    Case { id: "realtime-replay", path: "realtime/replay.go", name: "ReplayRealtimeEvents", doc: "Websocket reconnect missed event cursor replay realtime delivery.", query: "websocket reconnect missed event cursor replay realtime delivery" },
-    Case { id: "transaction-retry", path: "database/retry.go", name: "RetrySerializableTransaction", doc: "Transaction retry serialization deadlock database backoff.", query: "transaction retry serialization deadlock database backoff" },
-    Case { id: "deadline-timezone", path: "calendar/deadline.rs", name: "localize_calendar_deadline", doc: "Timezone daylight saving calendar deadline localization.", query: "timezone daylight saving calendar deadline localization" },
-    Case { id: "project-route", path: "routes/project.go", name: "LoadProjectRoute", doc: "Route loader workspace project redirect permission navigation.", query: "route loader workspace project redirect permission navigation" },
-    Case { id: "task-export", path: "exports/tasks.ts", name: "exportTasksCsv", doc: "CSV export task columns assignee status filter.", query: "csv export task columns assignee status filter" },
+    Case {
+        id: "session-rotation",
+        path: "auth/session.rs",
+        name: "refresh_session_token",
+        doc: "Refresh session token rotation expiry authentication security.",
+        query: "refresh session token rotation expiry authentication security",
+    },
+    Case {
+        id: "request-origin",
+        path: "security/origin.rs",
+        name: "validate_request_origin",
+        doc: "CSRF origin cookie same site request validation security.",
+        query: "csrf origin cookie same site request validation security",
+    },
+    Case {
+        id: "realtime-replay",
+        path: "realtime/replay.go",
+        name: "ReplayRealtimeEvents",
+        doc: "Websocket reconnect missed event cursor replay realtime delivery.",
+        query: "websocket reconnect missed event cursor replay realtime delivery",
+    },
+    Case {
+        id: "transaction-retry",
+        path: "database/retry.go",
+        name: "RetrySerializableTransaction",
+        doc: "Transaction retry serialization deadlock database backoff.",
+        query: "transaction retry serialization deadlock database backoff",
+    },
+    Case {
+        id: "deadline-timezone",
+        path: "calendar/deadline.rs",
+        name: "localize_calendar_deadline",
+        doc: "Timezone daylight saving calendar deadline localization.",
+        query: "timezone daylight saving calendar deadline localization",
+    },
+    Case {
+        id: "project-route",
+        path: "routes/project.go",
+        name: "LoadProjectRoute",
+        doc: "Route loader workspace project redirect permission navigation.",
+        query: "route loader workspace project redirect permission navigation",
+    },
+    Case {
+        id: "task-export",
+        path: "exports/tasks.ts",
+        name: "exportTasksCsv",
+        doc: "CSV export task columns assignee status filter.",
+        query: "csv export task columns assignee status filter",
+    },
 ];
 
 const HOLDOUT_START: usize = 14;
@@ -107,7 +233,10 @@ fn write_case(root: &Path, case: Case) {
     } else if case.path.ends_with(".go") {
         format!("// {}\nfunc {}() {{}}\n", case.doc, case.name)
     } else {
-        format!("/** {} */\nexport function {}() {{ return 1; }}\n", case.doc, case.name)
+        format!(
+            "/** {} */\nexport function {}() {{ return 1; }}\n",
+            case.doc, case.name
+        )
     };
     std::fs::write(path, source).unwrap();
 }
@@ -225,7 +354,10 @@ fn broader_tuning_and_holdout_metrics_meet_the_proposed_t06_floor() {
         r1_all.0 as f64 / CASES.len() as f64 >= 0.90,
         "R1 Hit@5 must meet the proposed 0.90 floor"
     );
-    assert!(r1_all.1 >= 0.75, "R1 MRR@5 must meet the proposed 0.75 floor");
+    assert!(
+        r1_all.1 >= 0.75,
+        "R1 MRR@5 must meet the proposed 0.75 floor"
+    );
     assert!(
         r1_holdout.0 as f64 / (CASES.len() - HOLDOUT_START) as f64 >= 0.85,
         "holdout Hit@5 must not collapse"
@@ -245,6 +377,9 @@ fn cross_language_identifier_controls_remain_exact() {
         "exportTasksCsv",
     ] {
         let results = fixture.raw(name, 5);
-        assert_eq!(results.first().map(|result| result.name.as_str()), Some(name));
+        assert_eq!(
+            results.first().map(|result| result.name.as_str()),
+            Some(name)
+        );
     }
 }
