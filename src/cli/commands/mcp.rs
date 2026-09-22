@@ -1113,6 +1113,11 @@ pub async fn run(
                     .and_then(|m| m.get("lang"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                let path_prefix = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("path_prefix"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 server
                     .search_symbols(Parameters(SearchSymbolsRequest {
                         query: query.to_string(),
@@ -1120,6 +1125,7 @@ pub async fn run(
                         kind,
                         module,
                         lang,
+                        path_prefix,
                     }))
                     .await
             }
@@ -1228,6 +1234,11 @@ pub async fn run(
                     .and_then(|m| m.get("collection"))
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
+                let code_path_prefix = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("code_path_prefix"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 server
                     .search_context(Parameters(SearchContextRequest {
                         query,
@@ -1235,6 +1246,7 @@ pub async fn run(
                         document_limit: limit("document_limit"),
                         conversation_limit: limit("conversation_limit"),
                         collection,
+                        code_path_prefix,
                     }))
                     .await
             }
