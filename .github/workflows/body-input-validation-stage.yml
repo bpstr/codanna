@@ -29,7 +29,7 @@ jobs:
           cache-on-failure: true
       - name: Refresh native linker artifacts
         run: cargo clean -p ort-sys
-      - name: Apply the two source-reviewed compilation fixes
+      - name: Apply reviewed compilation and disabled-search repairs
         shell: bash
         run: |
           python3 - <<'PY'
@@ -48,6 +48,15 @@ jobs:
               text = path.read_text()
               assert text.count(old) == 1, name
               path.write_text(text.replace(old, new))
+          name = 'src/mcp/tools/search.rs'
+          actual = subprocess.check_output(['git','hash-object',name], text=True).strip()
+          assert actual == 'd7659fac48ab71e51136f00d6139950c6eae3b9a', actual
+          path = pathlib.Path(name)
+          text = path.read_text()
+          old = 'Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.'
+          new = 'Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.'
+          assert text.count(old) == 2
+          path.write_text(text.replace(old, new))
           PY
           cargo fmt --all
           git diff --check
@@ -58,8 +67,8 @@ jobs:
           {
             git rev-parse HEAD
             rustc --version --verbose
-            sha256sum tests/repository_body_inputs.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs contributing/retrieval/evaluations/repository-tasks.json
-            cargo test --locked --test repository_body_inputs -- --nocapture
+            sha256sum tests/repository_body_inputs.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs src/mcp/tools/search.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --test repository_body_inputs --test semantic_fallback_contracts -- --nocapture
             cargo test --locked --lib symbol_representation -- --nocapture
             cargo test --locked --lib semantic::journal::tests -- --nocapture
             cargo test --locked --lib semantic_coverage -- --nocapture
@@ -73,7 +82,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, urllib.request
-          names = ['src/semantic/journal.rs', 'src/indexing/facade_retrieval_tests.rs', 'tests/repository_body_inputs.rs']
+          names = ['src/semantic/journal.rs', 'src/indexing/facade_retrieval_tests.rs', 'src/mcp/tools/search.rs', 'tests/repository_body_inputs.rs', 'tests/semantic_fallback_contracts.rs']
           manifest = {'staged_head': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(), 'files': {}}
           for name in names:
               data = pathlib.Path(name).read_bytes()
