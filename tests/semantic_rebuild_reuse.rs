@@ -421,3 +421,6 @@ fn duplicate_missing_inputs_are_embedded_once_per_collector_batch() {
 
 #[path = "support/body_rebuild_cache_cases.rs"]
 mod body_rebuild_cache;
+
+#[path = "support/retrieval_body_cases.rs"]
+mod retrieval_body;
