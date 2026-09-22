@@ -46,7 +46,7 @@ impl CodeIntelligenceServer {
                 Ok(results) => {
                     for (i, result) in results.iter().enumerate() {
                         output.push_str(&format!(
-                            "{}. {} ({:?}) at {}:{} [lexical candidate score {:.2}]\n",
+                            "{}. {} ({:?}) at {}:{} [score {:.2}; raw lexical candidate]\n",
                             i + 1,
                             result.name,
                             result.kind,
