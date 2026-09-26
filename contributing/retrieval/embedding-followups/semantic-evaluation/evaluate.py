@@ -274,10 +274,15 @@ def normalize_response(envelope: dict, returncode: int, query: dict,
         value = nonempty(item.get('source_path'), 'source_path')
         absolute = Path(value)
         if absolute.is_absolute():
-            try:
-                value = absolute.relative_to(workspace.resolve()).as_posix()
-            except ValueError:
+            # macOS exposes temporary roots through /var -> /private/var.
+            # Resolve only the workspace ancestor, preserving the relative
+            # spelling so contained_file still rejects source-level symlinks.
+            root = workspace.resolve()
+            ancestor = next((parent for parent in absolute.parents
+                             if parent.resolve() == root), None)
+            if ancestor is None:
                 fail(f'Foreign result path: {value}')
+            value = absolute.relative_to(ancestor).as_posix()
         path = contained_file(workspace, value)
         relative = path.relative_to(workspace.resolve()).as_posix()
         if relative not in sources or sha256(path) != sources[relative]:

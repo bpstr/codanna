@@ -48,8 +48,9 @@ impl LexicalCoverage {
     }
 }
 
-/// Preserve relevance ordering while preventing repeated sources and sections
-/// from exhausting the budget. Relax quotas only to fill a sparse result set.
+/// Take the best eligible passage from each source before adding more sections.
+/// The caller bounds semantic eligibility by cosine before this selection.
+/// Relax quotas only to fill a sparse result set or a single-document query.
 pub(super) fn diversify(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
     if limit == 0 {
         return Vec::new();
@@ -59,17 +60,18 @@ pub(super) fn diversify(results: Vec<SearchResult>, limit: usize) -> Vec<SearchR
     let mut retained = HashSet::new();
     let mut sources = HashMap::new();
     let mut sections = HashSet::new();
-    for pass in 0..3 {
+    for pass in 0..4 {
         for (index, result) in results.iter().enumerate() {
             if retained.contains(&index) {
                 continue;
             }
             let source = (&result.collection, &result.source_path);
             let section = (source, &result.heading_context);
-            if pass < 2 && sources.get(&source).copied().unwrap_or(0) >= per_source {
+            let source_limit = if pass == 0 { 1 } else { per_source };
+            if pass < 3 && sources.get(&source).copied().unwrap_or(0) >= source_limit {
                 continue;
             }
-            if pass == 0 && sections.contains(&section) {
+            if pass < 2 && sections.contains(&section) {
                 continue;
             }
             retained.insert(index);
