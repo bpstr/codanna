@@ -98,37 +98,6 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
     use codanna::mcp::CodeIntelligenceServer;
     use rmcp::handler::server::wrapper::Parameters;
 
-    let direct_before = direct["code"]["reader_generation_before"].as_u64().unwrap();
-    let direct_after = direct["code"]["reader_generation_after"].as_u64().unwrap();
-    let omit_skipped_facets = direct_before != direct_after
-        && direct["code"]["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|item| item["facets"] == json!([]))
-        && direct["code"]["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| {
-                warning
-                    == "Code reader changed; graph enrichment and coverage are unavailable for this request"
-            });
-    let mut expected_items = direct["code"]["items"].clone();
-    if omit_skipped_facets {
-        // This CLI reader cannot be reused. Its explicit drift correctly omits
-        // facets; compare every other field against the stable in-process query.
-        for item in expected_items.as_array_mut().unwrap() {
-            assert_eq!(item["facets"], json!([]));
-            item.as_object_mut().unwrap().remove("facets");
-        }
-        println!(
-            "body_direct_generation_drift={}",
-            json!({"before":direct_before, "after":direct_after,
-                "warnings":direct["code"]["warnings"]})
-        );
-    }
-
     let index_path = workspace.root().join(".codanna/index");
     let before = snapshot(&index_path);
     let mut settings = Settings {
@@ -177,24 +146,7 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
                     result["code"]["reader_generation_before"].as_u64().unwrap(),
                     result["code"]["reader_generation_after"].as_u64().unwrap()
                 );
-                let mut actual_items = result["code"]["items"].clone();
-                for item in actual_items.as_array_mut().unwrap() {
-                    for (facet, value) in [
-                        ("kind", "Function"),
-                        ("language", "rust"),
-                        ("visibility", "Public"),
-                    ] {
-                        assert!(
-                            item["facets"].as_array().unwrap().iter().any(|entry| {
-                                entry["facet"] == facet && entry["value"] == value
-                            })
-                        );
-                    }
-                    if omit_skipped_facets {
-                        item.as_object_mut().unwrap().remove("facets");
-                    }
-                }
-                assert_eq!(actual_items, expected_items);
+                ticket_evidence::assert_same_dispatch_items(&result, direct);
                 assert_eq!(related["items"].as_array().unwrap().len(), 1);
                 assert_eq!(related["items"][0]["name"], "beta_worker");
                 assert_eq!(
@@ -371,7 +323,7 @@ fn retrieval_body_segments_return_parents_and_failed_load_preserves_lexical_evid
         }),
     );
     assert_eq!(mismatch["code"]["semantic_status"], "unavailable");
-    assert_eq!(mismatch["code"]["items"], lexical["code"]["items"]);
+    ticket_evidence::assert_same_dispatch_items(&mismatch, &lexical);
     assert!(
         endpoint.take_inputs().is_empty(),
         "source-policy mismatch must precede provider initialization"
@@ -390,7 +342,7 @@ fn retrieval_body_segments_return_parents_and_failed_load_preserves_lexical_evid
         }),
     );
     assert_eq!(corrupt["code"]["semantic_status"], "unavailable");
-    assert_eq!(corrupt["code"]["items"], lexical["code"]["items"]);
+    ticket_evidence::assert_same_dispatch_items(&corrupt, &lexical);
     assert!(
         endpoint.take_inputs().is_empty(),
         "corrupt index must not trigger provider initialization or rebuilding"
