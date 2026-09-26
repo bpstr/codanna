@@ -1,0 +1,40 @@
+Source commit: 189facea026d8fff512b4504883a71879a8c2814
+CI job: https://github.com/bpstr/codanna/actions/runs/36246880279/job/108417603844
+Commands: cargo test --locked --no-fail-fast; cargo test --locked --all-features --no-fail-fast
+Excerpt: fourteen feature regressions and five comparison guards (deduplicated across configurations/targets).
+
+test indexing::facade::evidence_v1_diagnostics::evidence_v1_reports_policy_mismatch_without_initializing_backend ... ok
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_facets_admit_candidates_without_prose_matches ... ok
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_persistent_links_survive_previews_and_reject_stale_sources ... ok
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_profiles_report_coverage_and_observed_facets ... ok
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_scoped_semantic_unavailable_is_not_unsupported ... ok
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_typed_reverse_expansion_preserves_scope_and_reference_kind ... ok
+test mcp::tools::ticket_related_tests::evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches ... ok
+test retrieval::profile::owner_tests::evidence_v1_private_callers_do_not_displace_direct_owner_candidate ... ok
+test retrieval::profile::tests::evidence_v1_coverage_pages_reach_every_bounded_candidate_and_reject_changes ... ok
+test retrieval::profile::tests::evidence_v1_missing_facet_is_unknown_and_strict_filters_are_explicit ... ok
+test semantic::symbol_representation_tests::evidence_v1_scoped_prefilter_recovers_parent_below_global_top_k ... ok
+test symbol_representation::evidence_v1_tests::evidence_v1_middle_source_is_retained_without_growing_budget ... ok
+test symbol_representation::evidence_v1_tests::evidence_v1_middle_source_preserves_unicode_ranges ... ok
+test symbol_representation::tests::evidence_v1_body_v2_keeps_middle_in_final_embedding_inputs ... ok
+test ticket_evidence::tests::explicit_drift_can_omit_facets_on_either_side ... ok
+test ticket_evidence::tests::empty_results_never_count_as_preserved_evidence - should panic ... ok
+test ticket_evidence::tests::explicit_drift_never_hides_score_changes - should panic ... ok
+test ticket_evidence::tests::missing_warning_never_justifies_empty_facets - should panic ... ok
+test ticket_evidence::tests::stable_reader_never_justifies_empty_facets - should panic ... ok
+
+Summed per-target executions:
+{
+  "default_features": {
+    "passed": 2600,
+    "failed": 0,
+    "ignored": 62,
+    "targets": 59
+  },
+  "all_features": {
+    "passed": 2602,
+    "failed": 0,
+    "ignored": 62,
+    "targets": 59
+  }
+}

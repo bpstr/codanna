@@ -1,0 +1,267 @@
+{
+  "date": "2026-09-26",
+  "baseline_commit": "4c70ac20aa788697206e5a04ed8938582cf4016c",
+  "source_commit": "189facea026d8fff512b4504883a71879a8c2814",
+  "production_src_tree": "2e6ff81f4a5ac8db2fa7f7445e7c5275c35e0fda",
+  "pull_request": "https://github.com/bpstr/codanna/pull/69",
+  "evidence_directory": "/Users/bpstr/codanna-evidence-v1-20260926",
+  "limits": [
+    "Deterministic fixtures and prepared loopback transports only; no paid inference",
+    "No live-model relevance or latency claim",
+    "Coverage is bounded candidate coverage, never repository completeness",
+    "No production index rebuild or configuration change"
+  ],
+  "runs": [
+    {
+      "name": "baseline_new_regressions",
+      "passed": 0,
+      "failed": 2,
+      "outcome": "expected_failure",
+      "log": "before.txt"
+    },
+    {
+      "name": "intermediate_focused_regressions",
+      "passed": 12,
+      "failed": 0,
+      "outcome": "passed",
+      "log": "after-expanded-3.txt"
+    },
+    {
+      "name": "final_feature_regressions_all_feature_library",
+      "passed": 14,
+      "failed": 0,
+      "outcome": "passed",
+      "source_commit": "af7389795f8576ee26e0518be6d3875e173d5db5",
+      "log": "ci-reliability-corrected.txt",
+      "url": "https://github.com/bpstr/codanna/actions/runs/36244682203/job/108411567567"
+    },
+    {
+      "name": "comparison_helper_guards",
+      "passed": 5,
+      "failed": 0,
+      "outcome": "passed",
+      "source_commit": "189facea026d8fff512b4504883a71879a8c2814",
+      "log": "fixture-guard-tests.txt",
+      "command": "rustc --edition=2024 --test tests/support/ticket_evidence.rs --extern serde_json=<cached rlib> -L dependency=target/debug/deps; run test executable",
+      "environment": "env -i with HOME and PATH only"
+    },
+    {
+      "name": "local_quick_gate",
+      "outcome": "passed_before_final_test_fixes",
+      "command": "./contributing/scripts/quick-check.sh",
+      "log": "quick-check.txt"
+    },
+    {
+      "name": "local_full_gate",
+      "outcome": "interrupted_during_test_compilation",
+      "passed_stages": [
+        "format",
+        "strict_all_target_all_feature_clippy",
+        "no_default_features"
+      ],
+      "command": "./contributing/scripts/full-test.sh",
+      "logs": [
+        "full-test-interrupted.txt",
+        "full-test.txt"
+      ],
+      "environment": "env -i; one Cargo job; incremental disabled; Cargo and Hugging Face offline; installed Rust 1.97.1; toolchain update suppressed"
+    },
+    {
+      "name": "ci_full_suite",
+      "outcome": "passed",
+      "source_commit": "78c43b164e43c76551370571e564aba5d4845355",
+      "production_tree_identical_to_source_commit": true,
+      "command": "default and all-feature cargo test --locked --no-fail-fast; CLI help checks; strict cargo doc",
+      "counts": {
+        "default_features": {
+          "passed": 2590,
+          "failed": 0,
+          "ignored": 62,
+          "targets": 59
+        },
+        "all_features": {
+          "passed": 2592,
+          "failed": 0,
+          "ignored": 62,
+          "targets": 59
+        }
+      },
+      "log": "ci-full-passed.txt",
+      "url": "https://github.com/bpstr/codanna/actions/runs/36245801161/job/108414841042"
+    },
+    {
+      "name": "final_test_helper_integration",
+      "outcome": "passed",
+      "source_commit": "189facea026d8fff512b4504883a71879a8c2814",
+      "url": "https://github.com/bpstr/codanna/actions/runs/36246880279/job/108417603844",
+      "counts": {
+        "default_features": {
+          "passed": 2600,
+          "failed": 0,
+          "ignored": 62,
+          "targets": 59
+        },
+        "all_features": {
+          "passed": 2602,
+          "failed": 0,
+          "ignored": 62,
+          "targets": 59
+        }
+      },
+      "log": "ci-full-final.txt",
+      "completed_checks": 22,
+      "skipped_checks": 2
+    }
+  ],
+  "rust_file_sha256": {
+    "src/indexing/facade.rs": "ad89e78b685b7ad41e485c884c2e0c896cf00222dbca60a59ce1e8bdbc693030",
+    "src/indexing/pipeline/stages/collect.rs": "17200576380d25993cfeb26295b003082558696cd48e7beeca5ad2dbb1390a17",
+    "src/indexing/pipeline/stages/parse.rs": "9303e0f6bb07da45a2bc934875ace72cfe051b29a85d798a6aa930d12d074a35",
+    "src/lib.rs": "7c24f7384489e548946694c25f330db21c3ebf0071044064c1f56e2e39d191d7",
+    "src/mcp/catalog.rs": "63427361aeef884377ad63d55c73af13493e1dd58877ab1ce7b89069aca9990d",
+    "src/mcp/tools/context.rs": "3652affada9ddd8ffbcfd8554fd38a6cc1282c1f910734ee6f57fcdfbdf8c818",
+    "src/mcp/tools/search.rs": "a5cba88d0ea0f9dc8070c30a7fc0baa8783a762b1621cd155d7369bc79e5ff8b",
+    "src/mcp/tools/ticket_context.rs": "6803a133894816ad1e4fb1293e2bf88192c22f49b1b0c1ef23eb636621478d0a",
+    "src/mcp/tools/ticket_related_tests.rs": "d69c60bf88ac3ab56b0ff651c51bf5fe45e8b759776c105de3b0e7d2cd77d2aa",
+    "src/rebuild_plan.rs": "f371143b96effc00d2982b1d6a2be86851d241d78fcf063a43a3f4d972b46b62",
+    "src/retrieval/expansion.rs": "460c71087541979bf9947a07ff1898812bbcb9540ec55f017afe9fcbf9a53aaf",
+    "src/retrieval/links.rs": "32ebef9d17e8df57afd0c1a6d4489203d534779c223bea028ac573140aa95594",
+    "src/retrieval/mod.rs": "479d22d22ab6432617f5181791dd12b2b4c7728f8ad028423984defed2fe881a",
+    "src/retrieval/profile.rs": "e5c1795045c2feeb40eb42e02d2009c5f49f26e727141bda3881575cc527e11d",
+    "src/semantic/simple.rs": "e77a0ebb0f8007aaecf82b852fb03997ecae9a19a69ebf6552e87a0bb6faac09",
+    "src/semantic/symbol_representation_tests.rs": "16ea5f4b45ac1ea0fb1e6d801ea59ed97ac15fb971c632eb56786075b8f70f93",
+    "src/storage/tantivy/graph_scope.rs": "ac783c999ec4488afeedb8a340d4bbdce3004c06915713a8ebb239de6b08c302",
+    "src/symbol_representation.rs": "f68206ca15f0031c12c8ba5b64fb1d39fb2e6fa5623b2a566091ed32e26295af",
+    "tests/scoped_ticket_related.rs": "58dca7686f0aea11596394bf0307ea6cab88ea845931312de71b27b9c595108f",
+    "tests/semantic_rebuild_reuse.rs": "f0eac0de9a154d6c642be986f27327a96af3197662db4ee1a235655e688bb08b",
+    "tests/support/retrieval_body_cases.rs": "4cfd3b359b521e62cfb17a9705f7cf674b6afb2f2c69f55fa55c2031857681de",
+    "tests/support/ticket_evidence.rs": "57c60eebd15ea72c536741d61dd063bd161b5cc6c6266a7ccaa4d748d825901e",
+    "tests/ticket_related_cli.rs": "82549f4a8044c06f756d021364c28b6cfc56ece669951b91274e2650525bf0a2",
+    "tests/ticket_related_relevance.rs": "6a5cf6e4255a2689d1d3e5206ed3d47864f208d5741ef8260135fc329f1c727b"
+  },
+  "raw_log_sha256": {
+    "after-expanded-2.txt": {
+      "sha256": "0b59c77a66abecc563ab0189c85f2bd48a2c47f0e70408994b2d3d8afc9cd120",
+      "bytes": 1957
+    },
+    "after-expanded-3.txt": {
+      "sha256": "fe01ff3ae54bc506afdcd06e6fe94a3a7fa49d107de3939fa619c0cdf73d8e2e",
+      "bytes": 1707
+    },
+    "after-expanded.txt": {
+      "sha256": "0def536b88f84364d1216eaf9d89680847f45f22e675f43b6e7137fbffe88453",
+      "bytes": 5618
+    },
+    "after-initial.txt": {
+      "sha256": "b99a1289388ceef03b74346da4c784814b05a628f966218e4e5c6d7f8857c81b",
+      "bytes": 1125
+    },
+    "before.txt": {
+      "sha256": "06572c775156fedc8012b43c88a6174b5b36a90f1b744bbc3c5824c570e24b91",
+      "bytes": 1738
+    },
+    "check.txt": {
+      "sha256": "7b8f468ba0ecc41c90906d5b9957f5ac4d1459e9ee942eac0d4ec2bc6a94d81a",
+      "bytes": 135
+    },
+    "ci-contract-failure-2.txt": {
+      "sha256": "208e41a2ce4d84a7ac3999b7e39fe20616bbe24a5319fbcd7020056e8202189b",
+      "bytes": 230523
+    },
+    "ci-contract-failure-3.txt": {
+      "sha256": "ed702b6c09a8e9fee4ae3de425dd25dea2fea20c8885c6ff3f06887932debfac",
+      "bytes": 233673
+    },
+    "ci-contract-failure.txt": {
+      "sha256": "b1c3c1e29a8a8c743d7c2b484ff39d15fed6077af1ca353c2cf1e75439c3a40f",
+      "bytes": 233713
+    },
+    "ci-full-final.txt": {
+      "sha256": "a3338b5c8a0dd7a9889998154257dddda3a21968b727b24d7499f9e9be7f89b4",
+      "bytes": 703071
+    },
+    "ci-full-first.txt": {
+      "sha256": "e629a736d32e31673d873a44feaaa82e5dab48995d42cda069becfce77477555",
+      "bytes": 387134
+    },
+    "ci-full-passed.txt": {
+      "sha256": "8554b9f8136941fbf4a123a57917cd8b679c7546549844612e2f1da85799e56d",
+      "bytes": 700552
+    },
+    "ci-full-superseded.txt": {
+      "sha256": "7d10cf85ae26feb9755d7b19e30b0cb0dc1de43807e17f8ff3dc7e852a2fdbe1",
+      "bytes": 366798
+    },
+    "ci-reliability-corrected.txt": {
+      "sha256": "ee805db0b533151ca6e4a7a6858c27162c18739f1b85b4e60a73b1f633e12eaa",
+      "bytes": 271410
+    },
+    "ci-reliability.txt": {
+      "sha256": "71783b18787ca71cb9cc2652aeb177403211c410b53fd722fd74540f2982aa8a",
+      "bytes": 365487
+    },
+    "cleanup-final-open-files.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cleanup-helper-open-files.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "cleanup-open-files.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "fixture-guard-tests.txt": {
+      "sha256": "5b804328451b783653e60194779f7b0d612487f7021fdb860491f28b2a708f50",
+      "bytes": 491
+    },
+    "format-initial.txt": {
+      "sha256": "0751e255531b1d833b80312a76304dc19bf74e0720a77de9f502aae995ff1030",
+      "bytes": 660
+    },
+    "full-test-interrupted.txt": {
+      "sha256": "c743212af5d3753febd5933c199270c4a589e40c8f49e8eb0856fe64b5b7760e",
+      "bytes": 47363
+    },
+    "full-test.txt": {
+      "sha256": "7989d92e398fd156cf6bc398e3ac539cc813422eb86c2d21642bf2fd2389eb05",
+      "bytes": 59534
+    },
+    "quick-check.txt": {
+      "sha256": "6404bc47e3c8a98012597c3274d36ea7539edcad42e0bac346aa6cfcf8b4c239",
+      "bytes": 805
+    }
+  },
+  "cleanup": [
+    {
+      "manifest": "cleanup-first.json",
+      "sha256": "b1fb8ad35069f22bc83b7f4f417d07ff0aa0192cf02e1eaf030d0464f99f1752",
+      "removed_files": 1192,
+      "logical_bytes": 4253491570,
+      "free_before_bytes": 12127453184,
+      "free_after_bytes": 14741127168
+    },
+    {
+      "manifest": "cleanup-final.json",
+      "sha256": "26d69e7c2a6150f49333f1f7f25bd500745c55ec2a598623b4118ac8e6483035",
+      "removed_files": 1792,
+      "logical_bytes": 3894156647,
+      "free_before_bytes": 16272109568,
+      "free_after_bytes": 19802902528
+    },
+    {
+      "manifest": "cleanup-helper.json",
+      "sha256": "431101826245ac166983917d09a95b025d40e8540b56fec8fe1519012de8e153",
+      "removed_files": 1,
+      "logical_bytes": 1390040,
+      "free_before_bytes": 30519939072,
+      "free_after_bytes": 30521323520
+    }
+  ],
+  "remaining_free_bytes": 22983110656,
+  "ci_check_manifest": {
+    "path": "ci-final-checks.json",
+    "sha256": "5e5cdbeec15257e7f7f509d36bf33b9fb7b9548bd3cb149330b84bda333d4991"
+  }
+}

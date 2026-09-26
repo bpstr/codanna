@@ -1,0 +1,70 @@
+{
+  "basis": "Deterministic fixtures; not live-model relevance or repository completeness",
+  "baseline_commit": "4c70ac20aa788697206e5a04ed8938582cf4016c",
+  "implementation_commit": "f577f65400a457f98124a76bcf6afb00010a3c22",
+  "measurements": [
+    {
+      "case": "scoped_parent_recall",
+      "before": {
+        "target_in_global_top_32": false
+      },
+      "after": {
+        "target_in_scoped_top_k": true,
+        "rank": 1
+      },
+      "fixture": "One target below 40 stronger out-of-scope parents; fixed vectors",
+      "test": "evidence_v1_scoped_prefilter_recovers_parent_below_global_top_k"
+    },
+    {
+      "case": "middle_source_retention",
+      "before": {
+        "middle_marker_in_retained_source": false
+      },
+      "after": {
+        "middle_marker_in_retained_source": true,
+        "middle_marker_in_embedding_inputs_separate_fixture": true
+      },
+      "limits": {
+        "source_bytes_per_symbol": 16384,
+        "segments_per_symbol": 8
+      },
+      "tests": [
+        "evidence_v1_middle_source_is_retained_without_growing_budget",
+        "evidence_v1_body_v2_keeps_middle_in_final_embedding_inputs"
+      ]
+    },
+    {
+      "case": "paged_candidate_coverage",
+      "before": {
+        "visible_candidates": 10
+      },
+      "after": {
+        "visible_candidates": 19,
+        "pages": 2
+      },
+      "repository_complete": false,
+      "test": "evidence_v1_coverage_pages_reach_every_bounded_candidate_and_reject_changes"
+    },
+    {
+      "case": "incoming_consumer_discovery",
+      "before": {
+        "direct_query_items": 1
+      },
+      "after": {
+        "coverage_candidates": 18,
+        "incoming_consumers": 17
+      },
+      "test": "evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches"
+    },
+    {
+      "case": "persistent_document_link",
+      "before": {
+        "candidate_from_preview_anchor": false
+      },
+      "after": {
+        "candidate_from_persistent_explicit_link": true
+      },
+      "test": "evidence_v1_persistent_links_survive_previews_and_reject_stale_sources"
+    }
+  ]
+}
