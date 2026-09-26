@@ -480,6 +480,27 @@ fn semantic_diversity_recovers_close_positive_sources_without_weak_fill() {
 }
 
 #[test]
+fn semantic_diversity_prefers_new_sources_before_second_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = enable_fixed_embeddings(index(
+        temp.path(),
+        &[
+            ("strong.md", "# First\n\nnorth first section.\n\n# Second\n\nnorth second section.\n".into()),
+            ("a.md", "complement evidence a".into()),
+            ("b.md", "complement evidence b".into()),
+            ("c.md", "operations evidence c".into()),
+            ("d.md", "operations evidence d".into()),
+            ("weak.md", "weak evidence".into()),
+        ],
+    ));
+    let hits = store.search(query("north", 5)).unwrap();
+    assert_eq!(hits.len(), 5);
+    assert_eq!(hits[0].similarity, 1.0);
+    assert_eq!(hits.iter().map(|hit| &hit.source_path).collect::<HashSet<_>>().len(), 5);
+    assert!(hits.iter().all(|hit| hit.similarity >= 0.9));
+}
+
+#[test]
 fn semantic_nonpositive_cutoff_does_not_expand_to_worse_vectors() {
     let temp = tempfile::tempdir().unwrap();
     let mut store = enable_fixed_embeddings(index(

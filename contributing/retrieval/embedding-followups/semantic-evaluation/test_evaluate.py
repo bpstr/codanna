@@ -245,6 +245,18 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.normalize(original)
 
+    def test_workspace_parent_alias_preserves_results_without_allowing_source_symlinks(self):
+        alias = self.out.parent / 'alias'
+        alias.symlink_to(self.out.resolve(), target_is_directory=True)
+        envelope = self.response()
+        envelope['data'][0]['source_path'] = str(alias / 'workspace' / self.source)
+        self.assertEqual(self.normalize(envelope)[0]['path'], self.source)
+        link = self.out / 'workspace/docs/linked.md'
+        link.symlink_to((self.out / 'workspace' / self.source).resolve())
+        envelope['data'][0]['source_path'] = str(alias / 'workspace/docs/linked.md')
+        with self.assertRaises(ValueError):
+            self.normalize(envelope)
+
     def test_bad_utf8_span_duplicate_chunks_and_foreign_collections_are_rejected(self):
         for change in ('range', 'duplicate', 'collection', 'query', 'budget'):
             envelope = self.response()
