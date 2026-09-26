@@ -1,5 +1,9 @@
 # Local retrieval acceptance workspace
 
+The [Assign calendar investigation](calendar-investigation/evidence.md) consolidates
+real-workspace retrieval findings and a [proposed action plan](calendar-investigation/action-plan.md).
+It is a documentation-only intake; its implementation tasks and evaluations remain open.
+
 A small, deliberately awkward application that **Codanna itself indexes**. This is
 an acceptance specification and local evaluation harness, not a claim that current
 retrieval meets the proposed minimums. The follow-up
