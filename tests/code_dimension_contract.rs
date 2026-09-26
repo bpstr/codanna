@@ -62,6 +62,8 @@ impl Drop for Endpoint {
     }
 }
 fn respond(mut stream: TcpStream, dimension: usize, recorded: &Mutex<Vec<String>>) {
+    // Accepted sockets can inherit nonblocking mode on macOS.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
