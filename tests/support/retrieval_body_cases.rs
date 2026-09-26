@@ -98,6 +98,37 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
     use codanna::mcp::CodeIntelligenceServer;
     use rmcp::handler::server::wrapper::Parameters;
 
+    let direct_before = direct["code"]["reader_generation_before"].as_u64().unwrap();
+    let direct_after = direct["code"]["reader_generation_after"].as_u64().unwrap();
+    let omit_skipped_facets = direct_before != direct_after
+        && direct["code"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["facets"] == json!([]))
+        && direct["code"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning
+                    == "Code reader changed; graph enrichment and coverage are unavailable for this request"
+            });
+    let mut expected_items = direct["code"]["items"].clone();
+    if omit_skipped_facets {
+        // This CLI reader cannot be reused. Its explicit drift correctly omits
+        // facets; compare every other field against the stable in-process query.
+        for item in expected_items.as_array_mut().unwrap() {
+            assert_eq!(item["facets"], json!([]));
+            item.as_object_mut().unwrap().remove("facets");
+        }
+        println!(
+            "body_direct_generation_drift={}",
+            json!({"before":direct_before, "after":direct_after,
+                "warnings":direct["code"]["warnings"]})
+        );
+    }
+
     let index_path = workspace.root().join(".codanna/index");
     let before = snapshot(&index_path);
     let mut settings = Settings {
@@ -130,7 +161,6 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
                     .unwrap();
                 assert_ne!(response.is_error, Some(true));
                 let result = response.structured_content.unwrap();
-                assert_eq!(result["code"]["items"], direct["code"]["items"]);
                 assert_eq!(result["code"]["semantic_status"], "unavailable");
                 let related = &result["code"]["related_code"];
                 let status = related["status"].as_str().unwrap();
@@ -143,6 +173,28 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
                     continue;
                 }
                 assert_eq!(status, "completed_bounded");
+                assert_eq!(
+                    result["code"]["reader_generation_before"].as_u64().unwrap(),
+                    result["code"]["reader_generation_after"].as_u64().unwrap()
+                );
+                let mut actual_items = result["code"]["items"].clone();
+                for item in actual_items.as_array_mut().unwrap() {
+                    for (facet, value) in [
+                        ("kind", "Function"),
+                        ("language", "rust"),
+                        ("visibility", "Public"),
+                    ] {
+                        assert!(
+                            item["facets"].as_array().unwrap().iter().any(|entry| {
+                                entry["facet"] == facet && entry["value"] == value
+                            })
+                        );
+                    }
+                    if omit_skipped_facets {
+                        item.as_object_mut().unwrap().remove("facets");
+                    }
+                }
+                assert_eq!(actual_items, expected_items);
                 assert_eq!(related["items"].as_array().unwrap().len(), 1);
                 assert_eq!(related["items"][0]["name"], "beta_worker");
                 assert_eq!(
