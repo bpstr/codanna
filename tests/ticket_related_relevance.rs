@@ -41,7 +41,7 @@ fn rank(items: &Value, name: &str, path: &str) -> Option<usize> {
 }
 
 // The index reader may process a delayed reload from the initial fixture commit.
-// The runtime correctly rejects related evidence when that happens mid-query.
+// The runtime correctly rejects graph/facet evidence when that happens mid-query.
 // Retry only that explicit state, with a hard cap and a recorded event. Never
 // retry missing owners, empty pools, graph errors, budget errors or failed tests.
 // This is a test measurement policy, not an automatic retry in the product.
@@ -62,19 +62,40 @@ async fn stable_pair(server: &CodeIntelligenceServer, value: &Value) -> (Value, 
             .unwrap();
         assert_ne!(response.is_error, Some(true));
         let expanded = response.structured_content.unwrap();
+        let direct_before = direct["code"]["reader_generation_before"].as_u64();
+        let direct_after = direct["code"]["reader_generation_after"].as_u64();
+        let expanded_before = expanded["code"]["reader_generation_before"].as_u64();
+        let expanded_after = expanded["code"]["reader_generation_after"].as_u64();
+        assert!(
+            [direct_before, direct_after, expanded_before, expanded_after]
+                .iter()
+                .all(Option::is_some),
+            "the indexed fixture must report concrete reader generations"
+        );
         let related = &expanded["code"]["related_code"];
-        if matches!(
+        let related_changed = matches!(
             related["status"].as_str(),
             Some("not_run_generation_mismatch" | "discarded_generation_changed")
-        ) {
+        );
+        if related_changed {
             assert_eq!(
                 related["items"],
                 json!([]),
                 "changed generations must not leak related identities"
             );
+        }
+        if direct_before != direct_after
+            || expanded_before != expanded_after
+            || direct_after != expanded_before
+            || related_changed
+        {
             println!(
                 "ticket_related_generation_retry={}",
-                json!({"query":value["query"], "attempt":attempt + 1, "related":related})
+                json!({"query":value["query"], "attempt":attempt + 1,
+                    "direct_before":direct_before, "direct_after":direct_after,
+                    "expanded_before":expanded_before, "expanded_after":expanded_after,
+                    "direct_warnings":direct["code"]["warnings"],
+                    "expanded_warnings":expanded["code"]["warnings"], "related":related})
             );
             continue;
         }
