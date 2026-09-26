@@ -94,6 +94,75 @@ fn assert_query_only(endpoint: &Endpoint) {
     );
 }
 
+fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
+    use codanna::mcp::CodeIntelligenceServer;
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let index_path = workspace.root().join(".codanna/index");
+    let before = snapshot(&index_path);
+    let mut settings = Settings {
+        index_path: index_path.clone(),
+        workspace_root: Some(workspace.root().to_path_buf()),
+        ..Default::default()
+    };
+    settings.semantic_search.enabled = false;
+    let facade = IndexPersistence::new(index_path.clone())
+        .load_facade_lite(Arc::new(settings))
+        .unwrap();
+    let server = CodeIntelligenceServer::new(facade);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            // Reuse this reader: a new CLI process would restart Tantivy's
+            // initial metadata-watch notification on every retry.
+            for attempt in 0..3 {
+                let response = server
+                    .search_ticket_context(Parameters(
+                        serde_json::from_value(json!({
+                            "query": QUERY, "code_limit": 1, "include_related_code": true,
+                            "include_semantic_code": true, "code_path_prefix": "src/lib.rs"
+                        }))
+                        .unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_ne!(response.is_error, Some(true));
+                let result = response.structured_content.unwrap();
+                assert_eq!(result["code"]["items"], direct["code"]["items"]);
+                assert_eq!(
+                    result["code"]["semantic_status"],
+                    "not_run_scoped_semantic_unsupported"
+                );
+                let related = &result["code"]["related_code"];
+                let status = related["status"].as_str().unwrap();
+                if matches!(
+                    status,
+                    "not_run_generation_mismatch" | "discarded_generation_changed"
+                ) {
+                    assert!(related["items"].as_array().unwrap().is_empty());
+                    println!("body_related_generation_retry={attempt} status={status}");
+                    continue;
+                }
+                assert_eq!(status, "completed_bounded");
+                assert_eq!(related["items"].as_array().unwrap().len(), 1);
+                assert_eq!(related["items"][0]["name"], "beta_worker");
+                assert_eq!(
+                    related["items"][0]["via"][0]["seed_symbol_id"],
+                    result["code"]["items"][0]["symbol_id"]
+                );
+                return;
+            }
+            panic!("Body-index reader did not stabilize within three attempts");
+        });
+    assert_eq!(
+        snapshot(&index_path),
+        before,
+        "in-process query wrote the index"
+    );
+}
+
 #[test]
 fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
     let endpoint = Endpoint::start(2);
@@ -131,14 +200,19 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
         scoped["code"]["semantic_status"],
         "not_run_scoped_semantic_unsupported"
     );
-    assert_eq!(
-        scoped["code"]["related_code"]["status"],
-        "completed_bounded"
-    );
-    assert_eq!(
-        scoped["code"]["related_code"]["items"][0]["name"],
-        "beta_worker"
-    );
+    let related = &scoped["code"]["related_code"];
+    match related["status"].as_str().unwrap() {
+        "completed_bounded" => assert_eq!(related["items"][0]["name"], "beta_worker"),
+        "not_run_generation_mismatch" | "discarded_generation_changed" => {
+            // Startup can reload unchanged segments. The CLI must discard
+            // related evidence rather than mix reader generations.
+            assert!(related["items"].as_array().unwrap().is_empty());
+            assert!(related["reader_generation_before"].is_u64());
+            assert!(related["reader_generation_after"].is_u64());
+        }
+        status => panic!("Unexpected scoped related status: {status}"),
+    }
+    assert_body_related_in_process(&workspace, &scoped_direct);
     assert!(
         endpoint.take_inputs().is_empty(),
         "unsupported scoped semantics contacted a provider"

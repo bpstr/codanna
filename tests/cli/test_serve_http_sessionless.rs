@@ -174,10 +174,12 @@ fn http_request(
             Ok(0) => break,
             Ok(n) => {
                 raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw);
-                // One JSON-RPC response per POST: stop once a data frame
-                // (SSE) or a JSON body with a result/error has arrived.
-                if text.contains("\"result\"") || text.contains("\"error\"") {
+                // A TCP read or HTTP chunk may end inside JSON. Stop only
+                // after decoding transfer framing and a complete payload.
+                if let Some((_, _, body)) = decode_http_response(&raw)
+                    && let Some(payload) = try_response_payload(&body)
+                    && (payload.get("result").is_some() || payload.get("error").is_some())
+                {
                     break;
                 }
             }
@@ -185,17 +187,50 @@ fn http_request(
         }
     }
 
-    let text = String::from_utf8_lossy(&raw).to_string();
-    let Some((head, body)) = text.split_once("\r\n\r\n") else {
-        return (0, String::new(), text);
-    };
+    decode_http_response(&raw)
+        .unwrap_or_else(|| (0, String::new(), String::from_utf8_lossy(&raw).into_owned()))
+}
+
+/// Decode complete HTTP chunks before looking for SSE/JSON boundaries. An
+/// unfinished chunk remains buffered for the next TCP read.
+fn decode_http_response(raw: &[u8]) -> Option<(u16, String, String)> {
+    let boundary = raw.windows(4).position(|bytes| bytes == b"\r\n\r\n")?;
+    let head = String::from_utf8_lossy(&raw[..boundary]).into_owned();
     let status = head
         .lines()
         .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    (status, head.to_string(), body.to_string())
+    let body = &raw[boundary + 4..];
+    let chunked = header_value(&head, "transfer-encoding").is_some_and(|value| {
+        value
+            .split(',')
+            .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+    });
+    let decoded = if chunked {
+        let mut decoded = Vec::new();
+        let mut remaining = body;
+        while let Some(end) = remaining.windows(2).position(|bytes| bytes == b"\r\n") {
+            let size_line = std::str::from_utf8(&remaining[..end]).expect("ASCII chunk size");
+            let size = usize::from_str_radix(size_line.split(';').next().unwrap().trim(), 16)
+                .expect("valid HTTP chunk size");
+            if size == 0 {
+                break;
+            }
+            remaining = &remaining[end + 2..];
+            if remaining.len() < size + 2 {
+                break;
+            }
+            assert_eq!(&remaining[size..size + 2], b"\r\n", "HTTP chunk terminator");
+            decoded.extend_from_slice(&remaining[..size]);
+            remaining = &remaining[size + 2..];
+        }
+        decoded
+    } else {
+        body.to_vec()
+    };
+    Some((status, head, String::from_utf8_lossy(&decoded).into_owned()))
 }
 
 /// ASCII-case-insensitive header lookup preserving the value's case.
@@ -222,22 +257,65 @@ fn mcp_headers<'a>(method: &'a str, extra: &[(&'a str, &'a str)]) -> Vec<(&'a st
 
 /// Extract the first JSON-RPC payload from a response body that may be
 /// SSE-framed (`data: {...}`) or plain JSON.
+fn try_response_payload(body: &str) -> Option<Value> {
+    if let Ok(payload) = serde_json::from_str(body) {
+        return Some(payload);
+    }
+    // Only complete SSE events count. Empty data events and comments may
+    // precede the JSON-RPC message; HTTP chunks do not define event boundaries.
+    let normalized = body.replace("\r\n", "\n");
+    for event in normalized
+        .split("\n\n")
+        .take(normalized.matches("\n\n").count())
+    {
+        let data = event
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("data:")
+                    .map(|value| value.strip_prefix(' ').unwrap_or(value))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let Ok(payload) = serde_json::from_str(&data) {
+            return Some(payload);
+        }
+    }
+    None
+}
+
 fn response_payload(body: &str) -> Value {
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("data: ") {
-            if let Ok(v) = serde_json::from_str(rest) {
-                return v;
-            }
+    try_response_payload(body)
+        .unwrap_or_else(|| panic!("no JSON-RPC payload in response body:\n{body}"))
+}
+
+#[test]
+fn response_reader_reassembles_json_split_across_http_chunks() {
+    let chunks: &[&[u8]] = &[
+        b"data: \n\n",
+        b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"res",
+        b"ult\":{\"tools\":[]}}\n\n",
+    ];
+    let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    for (index, chunk) in chunks.iter().enumerate() {
+        raw.extend_from_slice(format!("{:x};fixture=yes\r\n", chunk.len()).as_bytes());
+        // A partial TCP read must not be mistaken for a complete payload.
+        raw.extend_from_slice(&chunk[..chunk.len() - 1]);
+        let (_, _, body) = decode_http_response(&raw).unwrap();
+        assert!(try_response_payload(&body).is_none());
+        raw.extend_from_slice(&chunk[chunk.len() - 1..]);
+        raw.extend_from_slice(b"\r\n");
+        let (_, _, body) = decode_http_response(&raw).unwrap();
+        if index < chunks.len() - 1 {
+            assert!(try_response_payload(&body).is_none());
         }
     }
-    for line in body.lines() {
-        if line.trim_start().starts_with('{') {
-            if let Ok(v) = serde_json::from_str(line.trim_start()) {
-                return v;
-            }
-        }
-    }
-    panic!("no JSON-RPC payload in response body:\n{body}");
+    raw.extend_from_slice(b"0\r\n\r\n");
+    let (status, _, body) = decode_http_response(&raw).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(
+        response_payload(&body),
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
+    );
 }
 
 fn stateless_meta() -> Value {

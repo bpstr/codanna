@@ -170,6 +170,9 @@ const CASES: &[Case] = &[
 
 const HOLDOUT_START: usize = 14;
 
+#[path = "support/raw_symbol_ranking.rs"]
+mod raw_symbol_ranking;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     index: IndexFacade,
@@ -221,7 +224,7 @@ impl Fixture {
     }
 
     fn raw(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        self.index.search(query, limit, None, None, None).unwrap()
+        raw_symbol_ranking::raw_search(&self.index, query, limit, None)
     }
 }
 

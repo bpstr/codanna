@@ -9,6 +9,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
+#[path = "support/raw_symbol_ranking.rs"]
+mod raw_symbol_ranking;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     index: IndexFacade,
@@ -106,9 +109,7 @@ impl Fixture {
     }
 
     fn raw(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        self.index
-            .search(query, limit, None, None, Some("typescript"))
-            .unwrap()
+        raw_symbol_ranking::raw_search(&self.index, query, limit, Some("typescript"))
     }
 }
 
@@ -381,18 +382,24 @@ fn candidate_pool_cost_is_measured_without_a_latency_gate() {
     let mut small_json_bytes = 0usize;
     let mut expanded_json_bytes = 0usize;
 
-    // Repeated, deterministic local measurements are evidence about this fixture
-    // only. CI timing is deliberately not an acceptance threshold.
+    // Measure the production candidate path, not the complete raw-score drain
+    // used by the historical ablations. Timing is fixture evidence, not a gate.
     for _ in 0..10 {
         for case in TOPIC_CASES {
             let start = Instant::now();
-            let small = fixture.raw(case.query, 5);
+            let small = fixture
+                .index
+                .search(case.query, 5, None, None, Some("typescript"))
+                .unwrap();
             small_elapsed += start.elapsed();
             small_results += small.len();
             small_json_bytes += serde_json::to_vec(&small).unwrap().len();
 
             let start = Instant::now();
-            let expanded = fixture.raw(case.query, 128);
+            let expanded = fixture
+                .index
+                .search(case.query, 128, None, None, Some("typescript"))
+                .unwrap();
             expanded_elapsed += start.elapsed();
             expanded_results += expanded.len();
             expanded_json_bytes += serde_json::to_vec(&expanded).unwrap().len();
@@ -400,7 +407,7 @@ fn candidate_pool_cost_is_measured_without_a_latency_gate() {
     }
 
     println!(
-        "candidate_cost_fixture: queries={} limit5_results={} limit128_results={} limit5_json_bytes={} limit128_json_bytes={} limit5_elapsed_us={} limit128_elapsed_us={}",
+        "production_candidate_cost_fixture: queries={} limit5_results={} limit128_results={} limit5_json_bytes={} limit128_json_bytes={} limit5_elapsed_us={} limit128_elapsed_us={}",
         TOPIC_CASES.len() * 10,
         small_results,
         expanded_results,
