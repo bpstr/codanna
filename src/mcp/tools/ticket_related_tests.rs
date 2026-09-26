@@ -11,6 +11,14 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn fixture(count: u32, edges: &[(u32, u32)]) -> (tempfile::TempDir, IndexFacade) {
+    fixture_with_public_symbol(count, edges, None)
+}
+
+fn fixture_with_public_symbol(
+    count: u32,
+    edges: &[(u32, u32)],
+    public_symbol: Option<u32>,
+) -> (tempfile::TempDir, IndexFacade) {
     let temp = tempfile::tempdir().unwrap();
     let mut settings = Settings {
         index_path: temp.path().join("index"),
@@ -33,6 +41,9 @@ fn fixture(count: u32, edges: &[(u32, u32)]) -> (tempfile::TempDir, IndexFacade)
             FileId::new(1).unwrap(),
             Range::new(id, 0, id, 20),
         );
+        if public_symbol == Some(id) {
+            symbol.visibility = crate::Visibility::Public;
+        }
         if id == 1 {
             symbol.doc_comment = Some("conversation timeout request handler".into());
         }
@@ -237,17 +248,8 @@ async fn ticket_related_sidecar_preserves_direct_items_and_default_response_shap
 
 #[tokio::test]
 async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches() {
-    let (_temp, index) = fixture(18, &(2..=18).map(|id| (id, 1)).collect::<Vec<_>>());
-    let storage = index.document_index();
-    let mut owner = index
-        .get_all_symbols()
-        .into_iter()
-        .find(|s| s.id.value() == 2)
-        .unwrap();
-    owner.visibility = crate::Visibility::Public;
-    storage.start_batch().unwrap();
-    storage.index_symbol(&owner, "src/handlers.rs").unwrap();
-    storage.commit_batch().unwrap();
+    let (_temp, index) =
+        fixture_with_public_symbol(18, &(2..=18).map(|id| (id, 1)).collect::<Vec<_>>(), Some(2));
     let server = CodeIntelligenceServer::new(index);
     let baseline = server
         .search_ticket_context(Parameters(
@@ -288,7 +290,7 @@ async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches()
         .unwrap()
         .structured_content
         .unwrap();
-    assert_ne!(owner["code"]["items"][0]["name"], "requestHandler");
+    assert_eq!(owner["code"]["items"][0]["name"], "implementation2");
     assert_eq!(
         owner["code"]["items"][0]["relationships"][0]["direction"],
         "incoming"
