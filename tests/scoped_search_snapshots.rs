@@ -31,8 +31,9 @@ fn register(index: &DocumentIndex, id: u32, path: &Path, name: &str) {
 
 fn fixture() -> (tempfile::TempDir, DocumentIndex) {
     let temp = tempfile::tempdir().unwrap();
-    let workspace = temp.path().join("workspace");
-    let external = temp.path().join("external");
+    let root = temp.path().canonicalize().unwrap();
+    let workspace = root.join("workspace");
+    let external = root.join("external");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&external).unwrap();
     let settings = Settings {

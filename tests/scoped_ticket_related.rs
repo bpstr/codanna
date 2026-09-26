@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 fn fixture(dense: bool) -> (tempfile::TempDir, CodeIntelligenceServer) {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("workspace");
+    let root = temp.path().canonicalize().unwrap().join("workspace");
     std::fs::create_dir_all(&root).unwrap();
     let mut settings = Settings {
         workspace_root: Some(root.clone()),
