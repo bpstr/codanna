@@ -230,6 +230,14 @@ async fn main() {
         return;
     }
 
+    if matches!(cli.command, Commands::EmbeddingInfo) {
+        println!(
+            "Compiled embedding providers: {}\nDefault: cpu\nSelect with CODANNA_EMBED_PROVIDER=cpu|auto|coreml|cuda\nStrict registration: CODANNA_EMBED_PROVIDER_STRICT=1\nCompiled capability does not verify session registration or GPU execution.",
+            codanna::embedding_runtime::compiled_embedding_providers().join(", ")
+        );
+        return;
+    }
+
     // Workspace management is metadata-only. Selection must precede even the
     // legacy auto-init/config-fallback paths, not merely precede tool dispatch.
     if let Commands::Workspace { action } = &cli.command {
@@ -256,7 +264,10 @@ async fn main() {
         Err(error) => exit_workspace_command(Err(error)),
     }
 
-    codanna::embedding_runtime::configure_embedding_runtime();
+    if let Err(error) = codanna::embedding_runtime::configure_embedding_runtime() {
+        eprintln!("codanna: {error}");
+        std::process::exit(2);
+    }
 
     // For index command, auto-initialize if needed (but not when using --config)
     if matches!(cli.command, Commands::Index { .. }) && cli.config.is_none() {
@@ -1041,7 +1052,7 @@ async fn main() {
             codanna::cli::commands::profile::run(action);
         }
 
-        Commands::Completions { .. } | Commands::Workspace { .. } => {
+        Commands::Completions { .. } | Commands::Workspace { .. } | Commands::EmbeddingInfo => {
             unreachable!("handled before configuration loading")
         }
     }

@@ -199,6 +199,16 @@ mod tests {
     }
 
     #[test]
+    fn sixteen_gib_hosts_bound_accelerated_sessions_and_batches() {
+        let idle = MemoryBudget::from_values(16 * GIB, 12 * GIB, 100 * MIB);
+        assert_eq!(idle.embedding_instances(8, true), 4);
+        assert_eq!(idle.embedding_batch_size(64, true), 32);
+        let busy = MemoryBudget::from_values(16 * GIB, 3 * GIB, 100 * MIB);
+        assert_eq!(busy.embedding_instances(8, true), 1);
+        assert_eq!(busy.embedding_batch_size(64, true), 16);
+    }
+
+    #[test]
     fn idle_thirty_two_gib_host_can_use_requested_parallelism() {
         let budget = MemoryBudget::from_values(32 * GIB, 24 * GIB, 100 * MIB);
         assert_eq!(budget.embedding_instances(3, false), 3);
