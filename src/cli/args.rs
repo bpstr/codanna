@@ -726,6 +726,10 @@ pub enum RetrieveQuery {
         #[arg(short, long)]
         module: Option<String>,
 
+        /// Limit symbol discovery to a workspace-relative path/subtree.
+        #[arg(long)]
+        path_prefix: Option<String>,
+
         /// Output in JSON format
         #[arg(long)]
         json: bool,

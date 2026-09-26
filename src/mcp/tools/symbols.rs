@@ -236,7 +236,7 @@ impl CodeIntelligenceServer {
                     }
 
                     if !has_relationships && symbol.kind == crate::SymbolKind::Function {
-                        result.push_str("No direct callers found\n");
+                        result.push_str("No resolved indexed direct callers found\n");
                     }
                 } else {
                     // Fallback to basic info
@@ -284,7 +284,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Get functions that a given function CALLS (invokes with parentheses).\n\nShows: function_name() → what it calls\nDoes NOT show: Type usage, component rendering, or who calls this function.\n\nUse analyze_impact for: Type dependencies, component usage (JSX), or reverse lookups."
+        description = "Get resolved indexed functions that a given function CALLS (invokes with parentheses).\n\nShows: function_name() → what it calls\nDoes NOT show: Type usage, component rendering, or who calls this function.\n\nUse analyze_impact for: Type dependencies, component usage (JSX), or reverse lookups."
     )]
     pub async fn get_calls(
         &self,
@@ -295,7 +295,7 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         crate::runtime::read(&self.facade, move |indexer| {
             // Resolution policy is shared with the CLI JSON path via the
-            // service layer; text renderings stay byte-identical.
+            // service layer; MCP adds an explicit graph-evidence boundary.
             let (symbol, identifier) =
                 match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
                     SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
@@ -329,14 +329,15 @@ impl CodeIntelligenceServer {
                 .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
 
             if all_called_with_metadata.is_empty() {
-                let mut output = format!("{identifier} doesn't call any functions");
+                let mut output =
+                    format!("No resolved indexed Calls edges found from {identifier}.");
                 // Add guidance for no results
                 if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "get_calls", 0) {
                     output.push_str("\n\n---\nGuidance: ");
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                return Ok(graph_evidence_result(output, "get_calls", &symbol, 0, 1));
             }
 
             let result_count = all_called_with_metadata.len();
@@ -383,14 +384,20 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+            Ok(graph_evidence_result(
+                result,
+                "get_calls",
+                &symbol,
+                result_count,
+                1,
+            ))
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(
-        description = "Find functions that CALL a given function (invoke it with parentheses).\n\nShows: what calls → function_name()\nDoes NOT show: Type references, component rendering, or what this function calls.\n\nUse analyze_impact for: Complete dependency graph including type usage and composition."
+        description = "Find resolved indexed functions that CALL a given function (invoke it with parentheses).\n\nShows: what calls → function_name()\nDoes NOT show: Type references, component rendering, or what this function calls.\n\nUse analyze_impact for: Indexed dependencies including type usage and composition. Source coverage is not guaranteed."
     )]
     pub async fn find_callers(
         &self,
@@ -434,7 +441,7 @@ impl CodeIntelligenceServer {
                 .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
 
             if all_callers_with_metadata.is_empty() {
-                let mut output = format!("No functions call {identifier}");
+                let mut output = format!("No resolved indexed Calls edges found to {identifier}.");
                 // Add guidance for no results
                 if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "find_callers", 0)
                 {
@@ -442,7 +449,7 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                return Ok(graph_evidence_result(output, "find_callers", &symbol, 0, 1));
             }
 
             // Build structured text response with rich metadata
@@ -493,7 +500,13 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+            Ok(graph_evidence_result(
+                result,
+                "find_callers",
+                &symbol,
+                result_count,
+                1,
+            ))
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -548,7 +561,7 @@ impl CodeIntelligenceServer {
                 .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
 
             if impacted.is_empty() {
-                let mut output = format!("No symbols would be impacted by changing {identifier}");
+                let mut output = format!("No resolved indexed dependents found for {identifier} within depth {max_depth}.");
                 // Add guidance for no results
                 if let Some(guidance) =
                     generate_mcp_guidance(indexer.settings(), "analyze_impact", 0)
@@ -557,7 +570,7 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                return Ok(graph_evidence_result(output, "analyze_impact", &symbol, 0, max_depth));
             }
 
             let mut result = format!("Analyzing impact of changing: {identifier}\n");
@@ -652,7 +665,7 @@ impl CodeIntelligenceServer {
 
             let impact_count = impacted.len();
             result.push_str(&format!(
-            "Total impact: {impact_count} symbol(s) would be affected (max depth: {max_depth})\n"
+            "Indexed dependents: {impact_count} symbol(s) found (max depth: {max_depth})\n"
         ));
 
             // Group by symbol kind
@@ -688,11 +701,49 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+            Ok(graph_evidence_result(result, "analyze_impact", &symbol, impact_count, max_depth))
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
+}
+
+/// Qualify successful graph queries without confusing execution with source coverage.
+/// Lookup failures, ambiguity, and graph errors keep their existing response paths.
+fn graph_evidence_result(
+    mut output: String,
+    operation: &str,
+    symbol: &Symbol,
+    returned: usize,
+    max_depth: u32,
+) -> CallToolResult {
+    output.push_str(
+        "\n\nGraph evidence: resolved indexed relationships only. Index generation, \
+         freshness, and source coverage are unknown. External or unresolved calls \
+         and runtime effects may be absent from these results.\n",
+    );
+    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+    response.structured_content = Some(serde_json::json!({
+        "graph": {
+            "schema_version": 1,
+            "operation": operation,
+            "status": if returned == 0 { "empty" } else { "resolved" },
+            "query_status": "completed",
+            "scope": "resolved_indexed_relationships",
+            "source_coverage": "unknown",
+            "freshness": "unknown",
+            "index_generation": null,
+            "max_depth": max_depth,
+            "returned": returned,
+            "target": {
+                "symbol_id": symbol.id.value(),
+                "name": symbol.name.to_string(),
+                "file_path": symbol.file_path.to_string(),
+                "line": symbol.range.start_line + 1
+            }
+        }
+    }));
+    response
 }
 
 /// Member summary for the Defines card line, counted per kind.

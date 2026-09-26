@@ -27,9 +27,10 @@ tools! {
     FindCallers => ("find_callers",["function_name","symbol_id"],["function_name","symbol_id"],Some("function_name"),Read),
     AnalyzeImpact => ("analyze_impact",["symbol_name","symbol_id","max_depth","depth"],["symbol_name","symbol_id"],Some("symbol_name"),Read),
     GetIndexInfo => ("get_index_info",[],[],None,Read),
-    SearchSymbols => ("search_symbols",["query","limit","kind","module","lang"],["query"],Some("query"),Read),
+    SearchSymbols => ("search_symbols",["query","limit","kind","module","lang","path_prefix"],["query"],Some("query"),Read),
     SemanticSearchDocs => ("semantic_search_docs",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SemanticSearchWithContext => ("semantic_search_with_context",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SearchDocuments => ("search_documents",["query","collection","limit"],["query"],Some("query"),Read),
-    SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection"],["query"],Some("query"),Read),
+    SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations","include_related_code"],["query"],Some("query"),Read),
+    SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix"],["query"],Some("query"),Read),
 }

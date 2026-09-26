@@ -1,0 +1,56 @@
+name: Symbol ranking ablation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/storage/tantivy/**'
+      - 'src/indexing/facade.rs'
+      - 'src/mcp/tools/search.rs'
+      - 'tests/symbol_ranking_ablation.rs'
+      - 'tests/symbol_ranking_holdout.rs'
+      - '.github/workflows/symbol-ranking-ablation.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: symbol-ranking-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  ablation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Run deterministic symbol-ranking ablations
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/storage/tantivy/query.rs tests/symbol_ranking_ablation.rs
+            cargo test --locked --test symbol_ranking_ablation --test symbol_ranking_holdout -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/symbol-ranking-ablation.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: symbol-ranking-ablation
+          path: ${{ runner.temp }}/symbol-ranking-ablation.log
+          retention-days: 14
+          if-no-files-found: error

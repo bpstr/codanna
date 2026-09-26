@@ -1,0 +1,54 @@
+name: Body input validation
+on:
+  pull_request:
+    branches: [feature/symbol-body-representation]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: body-input-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify committed source capture and persistence contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum tests/repository_body_inputs.rs tests/semantic_fallback_contracts.rs src/semantic/journal.rs src/indexing/facade_retrieval_tests.rs src/mcp/tools/search.rs src/semantic/simple.rs src/symbol_representation.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --test repository_body_inputs --test semantic_fallback_contracts -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
+            cargo test --locked --lib semantic::journal::tests -- --nocapture
+            cargo test --locked --lib semantic_coverage -- --nocapture
+            cargo test --locked --lib unavailable_semantic_query -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/body-input-validation.log"
+          python3 contributing/scripts/check-body-input-validation.py "$RUNNER_TEMP/body-input-validation.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: body-input-validation
+          path: ${{ runner.temp }}/body-input-validation.log
+          retention-days: 14
+          if-no-files-found: error

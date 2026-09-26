@@ -1,7 +1,10 @@
 //! Deterministic query regressions with explicitly injected local embeddings.
 use super::*;
 use crate::mcp::service::{FindSymbolTarget, page_symbols, try_resolve_find_symbol_target};
-use crate::mcp::{CodeIntelligenceServer, FindSymbolRequest, SemanticSearchWithContextRequest};
+use crate::mcp::{
+    CodeIntelligenceServer, FindSymbolRequest, GetIndexInfoRequest, SemanticSearchRequest,
+    SemanticSearchWithContextRequest,
+};
 use crate::{Range, ScopeContext};
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -374,4 +377,209 @@ async fn reference_context_surfaces_remain_distinct_from_calls() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("Referenced by: 1 symbol(s)"));
+}
+
+#[test]
+fn semantic_coverage_distinguishes_eligibility_missing_and_orphan_vectors() {
+    let (_temp, mut facade) = fixture();
+    let index = facade.document_index();
+    index.start_batch().unwrap();
+
+    let mut eligible_with_vector = named_symbol(1, "eligible_with_vector", SymbolKind::Function);
+    eligible_with_vector.doc_comment = Some("calendar preference documentation".into());
+    let mut eligible_without_vector =
+        named_symbol(2, "eligible_without_vector", SymbolKind::Function);
+    eligible_without_vector.doc_comment = Some("workspace settings documentation".into());
+    let ineligible = named_symbol(3, "ineligible", SymbolKind::Function);
+    for symbol in [&eligible_with_vector, &eligible_without_vector, &ineligible] {
+        index.index_symbol(symbol, "coverage.rs").unwrap();
+    }
+    index.commit_batch().unwrap();
+
+    let identity = serde_json::json!({
+        "backend": "remote",
+        "model": "fixture",
+        "endpoint_sha256": "fixture-digest",
+        "model_revision": null,
+        "input_policy": "complete-input-v2:utf8-byte-budget-proxy:8192",
+    })
+    .to_string();
+    let mut semantic = SimpleSemanticSearch::new_empty(2, "fixture");
+    semantic.set_embedding_identity(identity).unwrap();
+    semantic.store_embeddings(vec![
+        (eligible_with_vector.id, vec![1.0, 0.0], "rust".into()),
+        (SymbolId::new(99).unwrap(), vec![0.0, 1.0], "rust".into()),
+    ]);
+    facade.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+
+    let symbols = facade.get_all_symbols();
+    let status = facade.semantic_coverage_status(&symbols);
+    assert_eq!(status.state, "live");
+    assert_eq!(status.total_symbols, 3);
+    assert_eq!(status.eligible_symbols, 2);
+    assert_eq!(status.vector_count, Some(2));
+    assert_eq!(status.eligible_with_vector, Some(1));
+    assert_eq!(status.eligible_without_vector, Some(1));
+    assert_eq!(status.vector_without_current_symbol, Some(1));
+    assert_eq!(status.skipped_symbols, None);
+    assert_eq!(status.pending_symbols, None);
+    assert_eq!(
+        status.embedding_input_policy.as_deref(),
+        Some("complete-input-v2:utf8-byte-budget-proxy:8192")
+    );
+    assert!(status.embedding_identity_sha256.is_some());
+    assert_eq!(status.vector_code_generation, None);
+    assert_eq!(status.generation_alignment, "unknown_untracked");
+    assert_eq!(status.freshness, "unknown");
+}
+
+#[tokio::test]
+async fn index_info_structures_semantic_coverage_without_initializing_a_provider() {
+    let (_temp, mut facade) = fixture();
+    let index = facade.document_index();
+    index.start_batch().unwrap();
+    let mut documented = named_symbol(1, "documented", SymbolKind::Function);
+    documented.doc_comment = Some("documented symbol".into());
+    index.index_symbol(&documented, "coverage.rs").unwrap();
+    index
+        .index_symbol(
+            &named_symbol(2, "plain", SymbolKind::Function),
+            "coverage.rs",
+        )
+        .unwrap();
+    index.commit_batch().unwrap();
+
+    let mut metadata = crate::semantic::SemanticMetadata::new_remote("fixture".into(), 2, 1);
+    metadata.embedding_identity = Some(
+        serde_json::json!({
+            "backend": "remote",
+            "model": "fixture",
+            "endpoint_sha256": "fixture-digest",
+            "model_revision": null,
+            "input_policy": "complete-input-v2:utf8-byte-budget-proxy:8192",
+        })
+        .to_string(),
+    );
+    facade.semantic_metadata_snapshot = Some(metadata);
+
+    let server = CodeIntelligenceServer::new(facade);
+    let response = server
+        .get_index_info(Parameters(GetIndexInfoRequest {}))
+        .await
+        .unwrap();
+    assert_ne!(response.is_error, Some(true));
+    let structured = response.structured_content.expect("structured index info");
+    assert_eq!(structured["index"]["symbols"], 2);
+    assert_eq!(structured["semantic"]["state"], "metadata_only");
+    assert_eq!(structured["semantic"]["eligible_symbols"], 1);
+    assert_eq!(structured["semantic"]["vector_count"], 1);
+    assert!(structured["semantic"]["eligible_with_vector"].is_null());
+    assert!(structured["semantic"]["eligible_without_vector"].is_null());
+    assert!(structured["semantic"]["vector_code_generation"].is_null());
+    assert_eq!(
+        structured["semantic"]["generation_alignment"],
+        "unknown_untracked"
+    );
+
+    let text = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Source eligibility policy: doc_comment_present_v1"));
+    assert!(text.contains("Eligible symbols: 1"));
+    assert!(text.contains("Eligible with vector: unknown"));
+    assert!(text.contains("Generation alignment: unknown_untracked"));
+}
+
+#[test]
+fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
+    let (_temp, facade) = fixture();
+    let status = facade.semantic_coverage_status(&[]);
+    assert_eq!(status.state, "disabled");
+    assert_eq!(status.vector_count, None);
+    assert_eq!(status.eligible_with_vector, None);
+    assert_eq!(status.vector_code_generation, None);
+}
+
+#[tokio::test]
+async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() {
+    let (_temp, facade) = fixture();
+    let server = CodeIntelligenceServer::new(facade);
+    let response = server
+        .semantic_search_docs(Parameters(SemanticSearchRequest {
+            query: "calendar settings".into(),
+            limit: 5,
+            threshold: None,
+            lang: None,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(response.is_error, Some(true));
+    let text = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("No code or semantic index rebuild was attempted"));
+    assert!(text.contains("search_symbols") && text.contains("search_context"));
+}
+
+#[test]
+fn symbol_representation_policy_mismatch_blocks_query_before_provider_initialization() {
+    for body_on_disk in [false, true] {
+        let (temp, mut facade) = fixture();
+        Arc::make_mut(&mut facade.settings)
+            .semantic_search
+            .code_representation = if body_on_disk {
+            crate::symbol_representation::CodeEmbeddingPolicy::DocComment
+        } else {
+            crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+        };
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        let identity = if body_on_disk {
+            crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+                .bind_identity("{}".into())
+        } else {
+            "{}".into()
+        };
+        search.set_embedding_identity(identity).unwrap();
+        search.store_embeddings(vec![(
+            SymbolId::new(1).unwrap(),
+            vec![1.0, 0.0],
+            "rust".into(),
+        )]);
+        let path = temp.path().join("policy-fixture");
+        search.save(&path).unwrap();
+        assert!(facade.load_semantic_search(&path).is_err());
+        assert!(facade.is_semantic_incompatible());
+        assert!(facade.embedding_pool.get().is_none());
+        assert!(facade.prepare_semantic_query().is_err());
+        assert!(facade.embedding_pool.get().is_none());
+    }
+}
+
+#[test]
+fn symbol_representation_eligibility_reports_meaningful_undocumented_symbols() {
+    let (_temp, mut facade) = fixture();
+    Arc::make_mut(&mut facade.settings)
+        .semantic_search
+        .code_representation = crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1;
+    let function = named_symbol(1, "handler", SymbolKind::Function);
+    let local = named_symbol(2, "local", SymbolKind::Variable).with_doc("documented local");
+    let status = facade.semantic_coverage_status(&[function, local]);
+    assert_eq!(status.eligible_symbols, 1);
+    assert_eq!(
+        status.source_input_policy,
+        crate::symbol_representation::SOURCE_POLICY_ID
+    );
+    assert_eq!(status.freshness, "unknown");
 }

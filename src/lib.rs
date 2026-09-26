@@ -24,12 +24,16 @@ pub mod parsing;
 pub mod plugins;
 pub mod profiles;
 pub mod project_resolver;
+pub mod rebuild_plan;
+#[cfg(test)]
+mod rebuild_plan_pressure;
 pub mod relationship;
 pub mod retrieve;
 pub(crate) mod runtime;
 pub mod semantic;
 pub mod storage;
 pub mod symbol;
+pub mod symbol_representation;
 pub mod types;
 pub mod utils;
 pub mod vector;

@@ -1,0 +1,113 @@
+name: Retrieval body qualification
+on:
+  pull_request:
+    branches: [fix/code-embedding-dimensions]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'contributing/scripts/**'
+      - 'contributing/retrieval/**'
+      - '.github/workflows/retrieval-body-qualification.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: retrieval-body-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Run combined process and relevance contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/indexing/facade.rs src/mcp/tools/ticket_context.rs src/semantic/simple.rs tests/semantic_reload_retention.rs tests/support/retrieval_body_cases.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --test semantic_reload_retention --test semantic_rebuild_reuse --test code_dimension_contract --test index_plan_cli --test body_index_plan_cli --test scoped_ticket_related --test ticket_related_relevance --test repository_task_relevance --test scoped_search_snapshots --test symbol_path_scope --test symbol_scope_cli --test ticket_related_cli --test symbol_ranking_regressions --test symbol_ranking_runtime_holdout -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/retrieval-body-process.log"
+      - name: Validate unchanged frozen outcomes
+        run: python3 contributing/scripts/check-scoped-ticket-relevance.py "$RUNNER_TEMP/retrieval-body-process.log" | tee "$RUNNER_TEMP/retrieval-body-summary.json"
+      - name: Run shared library and compatibility contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          {
+            for filter in ticket_related ticket_code_fusion scoped_graph scope_snapshot scope_inventory scope_cache linguistic_coverage ranking_efficiency rebuild_plan::tests symbol_representation semantic::journal::tests code_dimension_contract; do
+              safe_filter="${filter//:/-}"
+              cargo test --locked --lib "$filter" -- --list > "$RUNNER_TEMP/selected-$safe_filter.txt"
+              grep -Eq ': test$' "$RUNNER_TEMP/selected-$safe_filter.txt"
+              cargo test --locked --lib "$filter" -- --nocapture
+            done
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/retrieval-body-library.log"
+      - name: Check formatting and strict lints
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-body-contracts
+          path: |
+            ${{ runner.temp }}/retrieval-body-*.log
+            ${{ runner.temp }}/retrieval-body-summary.json
+            ${{ runner.temp }}/selected-*.txt
+          retention-days: 14
+          if-no-files-found: error
+  full-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Execute repository release gate on the combined tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CODANNA_EMBED_URL CODANNA_EMBED_DIM CODANNA_EMBED_MODEL CODANNA_EMBED_API_KEY
+          {
+            git rev-parse HEAD
+            bash contributing/scripts/full-test.sh
+          } 2>&1 | tee "$RUNNER_TEMP/retrieval-body-full-gate.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-body-full-gate
+          path: ${{ runner.temp }}/retrieval-body-full-gate.log
+          retention-days: 14
+          if-no-files-found: error

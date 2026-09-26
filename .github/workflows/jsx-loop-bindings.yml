@@ -1,0 +1,65 @@
+name: JSX loop binding contracts
+on:
+  pull_request:
+    branches: [main, fix/jsx-owner-resolution]
+    paths:
+      - 'src/parsing/**'
+      - 'src/indexing/**'
+      - 'tests/jsx_loop_bindings.rs'
+      - '.github/workflows/jsx-loop-bindings.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: jsx-loops-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Run deterministic loop and neighboring reference contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/parsing/references.rs tests/jsx_loop_bindings.rs
+            cargo test --locked --test jsx_loop_bindings --test jsx_impact_regressions --test jsx_owner_columns --test callback_references --no-fail-fast -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/jsx-loop-bindings.log"
+      - name: Check formatting
+        if: always()
+        shell: bash
+        run: |
+          cargo fmt --all -- --check > "$RUNNER_TEMP/jsx-loop-format.log" 2>&1
+      - name: Check strict lints
+        shell: bash
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Retain formatted fixture for review
+        if: always()
+        shell: bash
+        run: |
+          cargo fmt --all
+          cp tests/jsx_loop_bindings.rs "$RUNNER_TEMP/jsx_loop_bindings.rs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jsx-loop-bindings
+          path: |
+            ${{ runner.temp }}/jsx-loop-*.log
+            ${{ runner.temp }}/jsx_loop_bindings.rs
+          retention-days: 14

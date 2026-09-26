@@ -1,0 +1,57 @@
+name: Semantic coverage status
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/indexing/facade.rs'
+      - 'src/indexing/facade_retrieval_tests.rs'
+      - 'src/semantic/simple.rs'
+      - 'src/mcp/tools/search.rs'
+      - 'contributing/retrieval/semantic-coverage-status.md'
+      - '.github/workflows/semantic-coverage-status.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: semantic-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Run semantic coverage contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/indexing/facade.rs src/semantic/simple.rs src/mcp/tools/search.rs
+            cargo test --locked --lib semantic_coverage -- --nocapture
+            cargo test --locked --lib index_info_structures_semantic_coverage -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/semantic-coverage-status.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semantic-coverage-status
+          path: ${{ runner.temp }}/semantic-coverage-status.log
+          retention-days: 14
+          if-no-files-found: error

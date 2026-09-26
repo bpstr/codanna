@@ -21,45 +21,95 @@ impl CodeIntelligenceServer {
         Parameters(_params): Parameters<GetIndexInfoRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::runtime::read(&self.facade, move |indexer| {
-        let symbol_count = indexer.symbol_count();
-        let file_count = indexer.file_count();
-        let relationship_count = indexer.relationship_count();
+            let symbols = indexer.get_all_symbols();
+            let symbol_count = symbols.len();
+            let file_count = indexer.file_count();
+            let relationship_count = indexer.relationship_count();
 
-        // One shared assembly for kind and language counts (both renderings
-        // consume facade::symbol_stats)
-        let (kind_counts, language_counts) = indexer.symbol_stats();
+            let mut kind_counts = std::collections::BTreeMap::new();
+            let mut language_counts = std::collections::BTreeMap::new();
+            for symbol in &symbols {
+                *kind_counts.entry(format!("{:?}", symbol.kind)).or_insert(0usize) += 1;
+                if let Some(language) = symbol.language_id.as_ref() {
+                    *language_counts
+                        .entry(language.as_str().to_string())
+                        .or_insert(0usize) += 1;
+                }
+            }
 
-        let mut kinds_display = String::new();
-        for (kind, count) in &kind_counts {
-            kinds_display.push_str(&format!("\n  - {kind}s: {count}"));
-        }
+            let mut kinds_display = String::new();
+            for (kind, count) in &kind_counts {
+                kinds_display.push_str(&format!("\n  - {kind}s: {count}"));
+            }
+            let mut languages_display = String::new();
+            for (language, count) in &language_counts {
+                languages_display.push_str(&format!("\n  - {language}: {count}"));
+            }
 
-        let mut languages_display = String::new();
-        for (lang, count) in &language_counts {
-            languages_display.push_str(&format!("\n  - {lang}: {count}"));
-        }
+            let semantic = indexer.semantic_coverage_status(&symbols);
+            let metadata = indexer.get_semantic_metadata();
+            let display = |value: Option<usize>| {
+                value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
+            let model = semantic.model_name.as_deref().unwrap_or("unknown");
+            let dimension = semantic
+                .dimension
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let input_policy = semantic
+                .embedding_input_policy
+                .as_deref()
+                .unwrap_or("unknown");
+            let timestamp_info = metadata.as_ref().map_or_else(
+                String::new,
+                |metadata| {
+                    format!(
+                        "\n  - Created: {}\n  - Updated: {}",
+                        format_relative_time(metadata.created_at),
+                        format_relative_time(metadata.updated_at)
+                    )
+                },
+            );
+            let semantic_info = format!(
+                "\n\nSemantic Search:\n  - Status: {}\n  - Model: {}\n  - Dimensions: {}\n  - Source eligibility policy: {}\n  - Eligible symbols: {}\n  - Vectors: {}\n  - Eligible with vector: {}\n  - Eligible without vector: {}\n  - Orphan vectors: {}\n  - Skipped symbols: unknown\n  - Pending symbols: unknown\n  - Embedding input policy: {}\n  - Code generation: {}\n  - Vector code generation: unknown\n  - Generation alignment: {}\n  - Freshness: {}{}",
+                semantic.state,
+                model,
+                dimension,
+                semantic.source_input_policy,
+                semantic.eligible_symbols,
+                display(semantic.vector_count),
+                display(semantic.eligible_with_vector),
+                display(semantic.eligible_without_vector),
+                display(semantic.vector_without_current_symbol),
+                input_policy,
+                semantic.code_generation,
+                semantic.generation_alignment,
+                semantic.freshness,
+                timestamp_info,
+            );
 
-        // Get semantic search info
-        let semantic_info = if let Some(metadata) = indexer.get_semantic_metadata() {
-            let live_count = indexer.semantic_search_embedding_count();
-            format!(
-                "\n\nSemantic Search:\n  - Status: Enabled\n  - Model: {}\n  - Embeddings: {}\n  - Dimensions: {}\n  - Created: {}\n  - Updated: {}",
-                metadata.model_name,
-                live_count,
-                metadata.dimension,
-                format_relative_time(metadata.created_at),
-                format_relative_time(metadata.updated_at)
-            )
-        } else {
-            "\n\nSemantic Search:\n  - Status: Disabled".to_string()
-        };
+            let result = format!(
+                "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}\n\nLanguages:{languages_display}{semantic_info}"
+            );
 
-        let result = format!(
-            "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}\n\nLanguages:{languages_display}{semantic_info}"
-        );
-
-        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
-        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
+            let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+            response.structured_content = Some(serde_json::json!({
+                "index": {
+                    "symbols": symbol_count,
+                    "files": file_count,
+                    "relationships": relationship_count,
+                    "code_generation": semantic.code_generation,
+                    "symbol_kinds": kind_counts,
+                    "languages": language_counts,
+                },
+                "semantic": semantic,
+            }));
+            Ok(response)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(description = "Search documentation using natural language semantic search")]
@@ -75,7 +125,7 @@ impl CodeIntelligenceServer {
         crate::mcp::requests::validate_search_limit(limit)?;
         if let Err(error) = self.prepare_semantic_query().await {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {error}"
+                "Semantic search failed: {error}\nNo code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery."
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
@@ -100,7 +150,7 @@ impl CodeIntelligenceServer {
                 .unwrap_or_else(|_| "unknown".to_string());
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
+                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
                     .display(),
                 symbol_count,
@@ -209,7 +259,7 @@ impl CodeIntelligenceServer {
         crate::mcp::requests::validate_search_limit(limit)?;
         if let Err(error) = self.prepare_semantic_query().await {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {error}"
+                "Semantic search failed: {error}\nNo code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery."
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
@@ -227,7 +277,7 @@ impl CodeIntelligenceServer {
             let vectors_exist = semantic_path.join("metadata.json").exists();
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
+                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
                     .display(),
                 indexer.has_semantic_search(),
@@ -762,6 +812,7 @@ impl CodeIntelligenceServer {
             kind,
             module,
             lang,
+            path_prefix,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
@@ -778,12 +829,13 @@ impl CodeIntelligenceServer {
                 }
             };
 
-            match indexer.search(
+            match indexer.search_scoped(
                 &query,
                 limit as usize,
                 kind_filter,
                 module.as_deref(),
                 lang.as_deref(),
+                path_prefix.as_deref(),
             ) {
                 Ok(results) => {
                     if results.is_empty() {
@@ -831,7 +883,17 @@ impl CodeIntelligenceServer {
                             result.push_str(&format!("   Signature: {sig}\n"));
                         }
 
-                        result.push_str(&format!("   Score: {:.2}\n", search_result.score));
+                        result.push_str(&format!(
+                            "   Score: {:.2} (raw lexical candidate score)\n",
+                            search_result.score
+                        ));
+                        if let Some((matched, total)) =
+                            crate::storage::tantivy::discovery_term_coverage(&query, search_result)
+                        {
+                            result.push_str(&format!(
+                                "   Distinct query-term coverage: {matched}/{total}\n"
+                            ));
+                        }
                         result.push('\n');
                     }
 

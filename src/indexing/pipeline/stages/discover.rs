@@ -67,6 +67,16 @@ impl DiscoverStage {
         }
     }
 
+    /// Resolve a stored key for filesystem I/O, not for index lookup. Incremental
+    /// results must retain their relative identity even when the server's cwd is
+    /// outside the configured workspace.
+    fn source_path(&self, path: &Path) -> PathBuf {
+        match self.workspace_root.as_deref() {
+            Some(root) if path.is_relative() => root.join(path),
+            _ => path.to_path_buf(),
+        }
+    }
+
     /// Run the discover stage, sending paths to the provided channel.
     ///
     /// Returns the number of files discovered. Any filesystem traversal error
@@ -245,7 +255,7 @@ impl DiscoverStage {
             }
             let mut new_hashed = Vec::new();
             for path in &result.new_files {
-                match fs::read_to_string(path) {
+                match fs::read_to_string(self.source_path(path)) {
                     Ok(content) => new_hashed.push((path.clone(), calculate_hash(&content))),
                     Err(e) => {
                         // Unreadable now means unpairable now; the file is
@@ -360,7 +370,8 @@ impl DiscoverStage {
         // Nanosecond precision preserves ordinary edits within one second.
         // Second-valued legacy registrations cannot compare equal and therefore
         // go through the content hash path after the format transition.
-        let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
+        let source_path = self.source_path(path);
+        let current_mtime = crate::indexing::file_info::get_file_mtime(&source_path).unwrap_or(0);
         let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -377,8 +388,8 @@ impl DiscoverStage {
         }
 
         // mtime changed or unknown - verify with hash (requires file read)
-        let content = fs::read_to_string(path).map_err(|e| PipelineError::FileRead {
-            path: path.to_path_buf(),
+        let content = fs::read_to_string(&source_path).map_err(|e| PipelineError::FileRead {
+            path: source_path.clone(),
             source: e,
         })?;
         let current_hash = calculate_hash(&content);
@@ -499,22 +510,25 @@ mod tests {
 
     #[test]
     fn test_discover_respects_gitignore() {
-        let (sender, receiver) = bounded(1000);
-
-        let stage = DiscoverStage::new(".", 4);
-        let _count = stage.run(sender);
-
-        let paths: Vec<PathBuf> = receiver.iter().collect();
-
-        // Should not include target/ directory contents
-        for path in &paths {
-            let path_str = path.to_string_lossy();
-            assert!(
-                !path_str.contains("target/debug") && !path_str.contains("target/release"),
-                "Should not include target/ contents: {}",
-                path.display()
-            );
+        // A fixed workspace keeps this test independent of repository growth.
+        // Drain concurrently: discovery sends through a bounded channel.
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        for directory in ["src", "target/debug", "target/release"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+            fs::write(root.join(directory).join("fixture.rs"), "fn fixture() {}\n").unwrap();
         }
+        let (sender, receiver) = bounded(1);
+        let stage = DiscoverStage::new(&root, 4);
+        let (count, paths) = std::thread::scope(|scope| {
+            let consumer = scope.spawn(|| receiver.iter().collect::<Vec<PathBuf>>());
+            let count = stage.run(sender).unwrap();
+            (count, consumer.join().unwrap())
+        });
+
+        assert_eq!(count, 1);
+        assert_eq!(paths, vec![root.join("src/fixture.rs")]);
     }
 
     #[test]
@@ -646,6 +660,40 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
+    }
+
+    #[test]
+    fn workspace_incremental_reads_preserve_modified_and_renamed_keys() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let settings = crate::config::Settings {
+            workspace_root: Some(root.clone()),
+            ..Default::default()
+        };
+        let index = Arc::new(DocumentIndex::new(root.join("index"), &settings).unwrap());
+        let relative = PathBuf::from("src/owned.rs");
+        let absolute = root.join(&relative);
+        let original = "fn workspace_owner() {}\n";
+        fs::write(&absolute, original).unwrap();
+        register_file(&index, &relative, original, 0);
+        let stage = DiscoverStage::new(&src, 1)
+            .with_workspace_root(Some(root.clone()))
+            .with_index(index);
+        assert!(stage.run_incremental().unwrap().is_empty());
+        fs::write(&absolute, "fn changed_workspace_owner() {}\n").unwrap();
+        assert_eq!(
+            stage.run_incremental().unwrap().modified_files,
+            vec![relative.clone()]
+        );
+        fs::write(&absolute, original).unwrap();
+        let renamed = PathBuf::from("src/renamed.rs");
+        fs::rename(&absolute, root.join(&renamed)).unwrap();
+        let result = stage.run_incremental().unwrap();
+        assert_eq!(result.renamed_files, vec![(relative, renamed)]);
+        assert!(result.new_files.is_empty());
+        assert!(result.deleted_files.is_empty());
     }
 
     #[test]

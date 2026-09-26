@@ -114,6 +114,15 @@ impl ServerHandler for Reader {
             result.structured_content = Some(serde_json::json!({"freshness":state}));
             return Ok(result.into());
         }
+        if request.name == "search_ticket_context" {
+            let parameters =
+                serde_json::from_value::<crate::mcp::tools::ticket_context::TicketContextRequest>(
+                    serde_json::json!(request.arguments.clone().unwrap_or_default()),
+                )
+                .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+            crate::mcp::tools::ticket_context::validate(&parameters)
+                .map_err(|error| ErrorData::invalid_params(error, None))?;
+        }
         if matches!(
             request.name.as_ref(),
             "semantic_search_docs" | "semantic_search_with_context"
@@ -140,7 +149,10 @@ impl ServerHandler for Reader {
                 .map_err(super::internal)?;
         }
         let mut server = self.code.clone();
-        if matches!(request.name.as_ref(), "search_context" | "search_documents") {
+        if matches!(
+            request.name.as_ref(),
+            "search_context" | "search_documents" | "search_ticket_context"
+        ) {
             let settings = self.settings.clone();
             let documents = self
                 .documents

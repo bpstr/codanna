@@ -84,6 +84,34 @@ impl SyncStats {
     }
 }
 
+/// Read-only semantic coverage/freshness diagnostics.
+///
+/// Counts distinguish source eligibility from actual vector presence. A missing
+/// generation contract is represented as unknown rather than inferred from
+/// timestamps or the current reader generation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SemanticCoverageStatus {
+    pub state: &'static str,
+    pub total_symbols: usize,
+    pub eligible_symbols: usize,
+    pub source_input_policy: &'static str,
+    pub vector_count: Option<usize>,
+    pub eligible_with_vector: Option<usize>,
+    pub eligible_without_vector: Option<usize>,
+    pub vector_without_current_symbol: Option<usize>,
+    pub skipped_symbols: Option<usize>,
+    pub pending_symbols: Option<usize>,
+    pub model_name: Option<String>,
+    pub backend: Option<&'static str>,
+    pub dimension: Option<usize>,
+    pub embedding_identity_sha256: Option<String>,
+    pub embedding_input_policy: Option<String>,
+    pub code_generation: u64,
+    pub vector_code_generation: Option<u64>,
+    pub generation_alignment: &'static str,
+    pub freshness: &'static str,
+}
+
 /// IndexFacade - Unified interface for code intelligence operations
 ///
 /// This facade wraps DocumentIndex (for queries) and Pipeline (for indexing),
@@ -208,10 +236,18 @@ impl IndexFacade {
 
     /// Enable semantic search with the configured model.
     pub fn enable_semantic_search(&mut self) -> FacadeResult<()> {
+        let backend =
+            crate::semantic::build_code_embedding_backend(&self.settings.semantic_search)?;
+        self.enable_semantic_search_with_backend(backend)
+    }
+
+    fn enable_semantic_search_with_backend(
+        &mut self,
+        backend: EmbeddingBackend,
+    ) -> FacadeResult<()> {
+        crate::semantic::validate_code_embedding_dimension(backend.dimensions())?;
         let semantic_path = self.index_base.join("semantic");
         std::fs::create_dir_all(&semantic_path)?;
-
-        let backend = build_embedding_backend(&self.settings.semantic_search)?;
         let backend = Arc::new(backend);
 
         // The backend is the sole model owner for both indexing and queries.
@@ -229,8 +265,16 @@ impl IndexFacade {
             SimpleSemanticSearch::new_empty_local(backend.dimensions(), model)
         };
         semantic.set_embedding_identity(
-            backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+            self.settings
+                .semantic_search
+                .code_representation
+                .bind_identity(
+                    backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+                ),
         )?;
+        // --force recreates symbol IDs, not embedding input meaning. Reuse only
+        // exact inputs scoped to this backend identity; never old ID mappings.
+        semantic.restore_rebuild_cache(&semantic_path);
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
         self.semantic_metadata_snapshot = self.get_semantic_metadata();
@@ -297,6 +341,22 @@ impl IndexFacade {
             let load_result = SimpleSemanticSearch::load_without_model(path);
             match load_result {
                 Ok(semantic) => {
+                    if !self
+                        .settings
+                        .semantic_search
+                        .code_representation
+                        .accepts_recorded_identity(
+                            semantic
+                                .metadata()
+                                .and_then(|metadata| metadata.embedding_identity.as_deref()),
+                        )
+                    {
+                        self.semantic_incompatible = true;
+                        return Err(IndexError::SemanticSearch(SemanticSearchError::StorageError {
+                            message: "Semantic source representation differs from the configured policy".into(),
+                            suggestion: "Preserve the existing index and explicitly rebuild with codanna index <path> --force; queries never migrate source inputs".into(),
+                        }));
+                    }
                     // A hot reload can replace the persisted vector generation
                     // while this facade already owns a query backend.
                     if let Some(backend) = self.embedding_pool.get() {
@@ -310,8 +370,13 @@ impl IndexFacade {
                                 },
                             ));
                         }
-                        let identity = backend
-                            .identity(self.settings.semantic_search.model_revision.as_deref());
+                        let identity =
+                            self.settings
+                                .semantic_search
+                                .code_representation
+                                .bind_identity(backend.identity(
+                                    self.settings.semantic_search.model_revision.as_deref(),
+                                ));
                         if let Err(error) = semantic.validate_embedding_identity(&identity) {
                             self.semantic_incompatible = true;
                             return Err(IndexError::SemanticSearch(error));
@@ -348,11 +413,16 @@ impl IndexFacade {
                     ));
                 }
                 Err(e) => {
-                    // Other errors (missing file, corrupt data) — warn and continue
-                    // without semantic search rather than blocking startup.
+                    // Retain old data for recovery, but never serve or republish
+                    // it after a failed reload. Lexical startup remains usable.
+                    self.semantic_incompatible = true;
                     tracing::warn!("Failed to load semantic search, continuing without it: {e}");
                 }
             }
+        } else if self.semantic_search.is_some() {
+            // A manifest removed after a previous load invalidates that loaded
+            // generation. A genuinely absent first-load store stays optional.
+            self.semantic_incompatible = true;
         }
         Ok(false)
     }
@@ -376,8 +446,26 @@ impl IndexFacade {
         self.check_semantic_state()?;
         let backend = match self.embedding_pool.get() {
             Some(backend) => Arc::clone(backend),
-            None => Arc::new(build_embedding_backend(&self.settings.semantic_search)?),
+            None => Arc::new(crate::semantic::build_code_embedding_backend(
+                &self.settings.semantic_search,
+            )?),
         };
+        self.bind_embedding_backend(backend)
+    }
+
+    /// Reuse CLI preflight's backend rather than repeating a possibly paid probe.
+    /// A loaded generation still has to match dimensions and the complete identity.
+    pub fn install_prepared_code_backend(&mut self, backend: EmbeddingBackend) -> FacadeResult<()> {
+        self.check_semantic_state()?;
+        if self.semantic_search.is_none() {
+            self.enable_semantic_search_with_backend(backend)
+        } else {
+            self.bind_embedding_backend(Arc::new(backend))
+        }
+    }
+
+    fn bind_embedding_backend(&mut self, backend: Arc<EmbeddingBackend>) -> FacadeResult<()> {
+        crate::semantic::validate_code_embedding_dimension(backend.dimensions())?;
         if let Some(semantic) = &self.semantic_search {
             let mut semantic = semantic.lock().map_err(|_| IndexError::lock_error())?;
             let backend_dim = backend.dimensions();
@@ -396,13 +484,19 @@ impl IndexFacade {
                 ));
             }
 
-            let identity =
-                backend.identity(self.settings.semantic_search.model_revision.as_deref());
+            let identity = self
+                .settings
+                .semantic_search
+                .code_representation
+                .bind_identity(
+                    backend.identity(self.settings.semantic_search.model_revision.as_deref()),
+                );
             if let Err(error) = semantic.set_embedding_identity(identity) {
                 self.semantic_incompatible = true;
                 return Err(IndexError::SemanticSearch(error));
             }
         }
+        let _ = self.embedding_pool.take();
         let _ = self.embedding_pool.set(backend);
         tracing::debug!("Initialized embedding backend on first semantic operation");
         Ok(())
@@ -440,6 +534,119 @@ impl IndexFacade {
             .as_ref()
             .and_then(|s| s.lock().ok().and_then(|sem| sem.metadata().cloned()))
             .or_else(|| self.semantic_metadata_snapshot.clone())
+    }
+
+    /// Describe semantic source eligibility and vector presence without loading a
+    /// model, contacting a provider, or mutating either index.
+    pub fn semantic_coverage_status(&self, symbols: &[Symbol]) -> SemanticCoverageStatus {
+        let metadata = self.get_semantic_metadata();
+        let total_symbols = symbols.len();
+        let eligible_ids: HashSet<_> = symbols
+            .iter()
+            .filter(|symbol| {
+                self.settings
+                    .semantic_search
+                    .code_representation
+                    .eligible(symbol.kind, symbol.doc_comment.is_some())
+            })
+            .map(|symbol| symbol.id)
+            .collect();
+        let current_ids: HashSet<_> = symbols.iter().map(|symbol| symbol.id).collect();
+
+        let identity = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.embedding_identity.as_deref());
+        let embedding_input_policy = identity.and_then(|identity| {
+            serde_json::from_str::<serde_json::Value>(identity)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("input_policy")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+        });
+        let embedding_identity_sha256 = identity.map(crate::indexing::calculate_hash);
+
+        let mut state = if self.semantic_incompatible {
+            "incompatible"
+        } else if self.semantic_search.is_some() {
+            "live"
+        } else if metadata.is_some() {
+            "metadata_only"
+        } else {
+            "disabled"
+        };
+        let mut vector_count = metadata
+            .as_ref()
+            .map(|metadata| metadata.embedding_count + metadata.segment_embedding_count);
+        let mut eligible_with_vector = None;
+        let mut eligible_without_vector = None;
+        let mut vector_without_current_symbol = None;
+
+        if let Some(semantic) = &self.semantic_search {
+            match semantic.lock() {
+                Ok(semantic) => {
+                    let vector_ids = semantic.embedding_ids();
+                    vector_count = Some(semantic.vector_count());
+                    let with_vector = vector_ids
+                        .iter()
+                        .filter(|id| eligible_ids.contains(id))
+                        .count();
+                    eligible_with_vector = Some(with_vector);
+                    eligible_without_vector = Some(eligible_ids.len().saturating_sub(with_vector));
+                    vector_without_current_symbol = Some(
+                        vector_ids
+                            .iter()
+                            .filter(|id| !current_ids.contains(id))
+                            .count(),
+                    );
+                }
+                Err(_) => {
+                    state = "unavailable";
+                    vector_count = None;
+                }
+            }
+        }
+
+        SemanticCoverageStatus {
+            state,
+            total_symbols,
+            eligible_symbols: eligible_ids.len(),
+            source_input_policy: self
+                .settings
+                .semantic_search
+                .code_representation
+                .source_policy(),
+            vector_count,
+            eligible_with_vector,
+            eligible_without_vector,
+            vector_without_current_symbol,
+            // Current persistence does not distinguish a missing eligible vector
+            // as skipped versus pending. Keep both unknown instead of inventing
+            // a split from the aggregate difference above.
+            skipped_symbols: None,
+            pending_symbols: None,
+            model_name: metadata
+                .as_ref()
+                .map(|metadata| metadata.model_name.clone()),
+            backend: metadata.as_ref().map(|metadata| {
+                if metadata.is_remote() {
+                    "remote"
+                } else {
+                    "local"
+                }
+            }),
+            dimension: metadata.as_ref().map(|metadata| metadata.dimension),
+            embedding_identity_sha256,
+            embedding_input_policy,
+            code_generation: self.document_index.generation(),
+            // Semantic metadata does not currently persist a corresponding code
+            // generation. Timestamp proximity is not sufficient evidence.
+            vector_code_generation: None,
+            generation_alignment: "unknown_untracked",
+            freshness: "unknown",
+        }
     }
 
     // =========================================================================
@@ -937,8 +1144,34 @@ impl IndexFacade {
         module_filter: Option<&str>,
         language_filter: Option<&str>,
     ) -> FacadeResult<Vec<SearchResult>> {
+        self.search_scoped(
+            query,
+            limit,
+            kind_filter,
+            module_filter,
+            language_filter,
+            None,
+        )
+    }
+
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        kind_filter: Option<SymbolKind>,
+        module_filter: Option<&str>,
+        language_filter: Option<&str>,
+        path_prefix: Option<&str>,
+    ) -> FacadeResult<Vec<SearchResult>> {
         self.document_index
-            .search(query, limit, kind_filter, module_filter, language_filter)
+            .search_scoped(
+                query,
+                limit,
+                kind_filter,
+                module_filter,
+                language_filter,
+                path_prefix,
+            )
             .map_err(Into::into)
     }
 

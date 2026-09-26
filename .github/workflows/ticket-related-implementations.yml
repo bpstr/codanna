@@ -1,0 +1,70 @@
+name: Ticket related implementations
+on:
+  push:
+    branches: [feature/ticket-related-implementations]
+  pull_request:
+    branches: [feature/ticket-code-fusion]
+    paths:
+      - 'src/mcp/**'
+      - 'src/storage/tantivy/**'
+      - 'src/cli/commands/mcp.rs'
+      - 'tests/ticket_related*.rs'
+      - 'tests/fixtures/repository_task_sources/**'
+      - 'contributing/retrieval/evaluations/repository-tasks.json'
+      - 'contributing/retrieval/ticket-related-implementations*.md'
+      - '.github/workflows/ticket-related-implementations.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ticket-related-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify committed related-code contracts and frozen relevance
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/mcp/tools/ticket_related.rs src/mcp/tools/ticket_context.rs src/mcp/tools/ticket_related_tests.rs tests/ticket_related_cli.rs tests/ticket_related_relevance.rs contributing/retrieval/evaluations/repository-tasks.json
+            cargo test --locked --lib ticket_related -- --list | tee "$RUNNER_TEMP/related-selected.txt"
+            grep -Eq '^mcp::tools::ticket_related_tests::.*: test$' "$RUNNER_TEMP/related-selected.txt"
+            cargo test --locked --lib ticket_related -- --nocapture
+            cargo test --locked --test ticket_related_relevance --test ticket_related_cli -- --nocapture
+            cargo test --locked --lib ticket_code_fusion -- --nocapture
+            cargo test --locked --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+            cargo fmt --all -- --check
+            cargo clippy --locked --all-targets --all-features -- -D warnings
+          } 2>&1 | tee "$RUNNER_TEMP/ticket-related-implementations.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ticket-related-implementations
+          path: |
+            ${{ runner.temp }}/ticket-related-implementations.log
+            ${{ runner.temp }}/related-selected.txt
+          retention-days: 14
+          if-no-files-found: error

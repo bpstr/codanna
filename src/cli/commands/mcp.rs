@@ -353,6 +353,22 @@ pub async fn run(
     }
     let arguments = arguments;
 
+    let ticket_context_request = if tool_kind == ToolKind::SearchTicketContext {
+        let request =
+            serde_json::from_value::<crate::mcp::tools::ticket_context::TicketContextRequest>(
+                serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+            )
+            .unwrap_or_else(|error| {
+                exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+            });
+        if let Err(error) = crate::mcp::tools::ticket_context::validate(&request) {
+            exit_invalid_args(&tool, error, tool_param_spec(&tool).0, json);
+        }
+        Some(request)
+    } else {
+        None
+    };
+
     // Share typed defaults and validation with the actual MCP handler. The
     // CLI-only symbol_id alias has already supplied the name string above.
     let find_symbol_request = if tool_kind == ToolKind::FindSymbol {
@@ -367,6 +383,23 @@ pub async fn run(
     } else {
         None
     };
+
+    // Use the same typed request validation in JSON collection and text
+    // dispatch. A malformed optional scope must not turn into an omitted filter.
+    let typed_validation = match tool_kind {
+        ToolKind::SearchSymbols => serde_json::from_value::<crate::mcp::SearchSymbolsRequest>(
+            serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+        )
+        .map(|_| ()),
+        ToolKind::SearchContext => serde_json::from_value::<crate::mcp::SearchContextRequest>(
+            serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+        )
+        .map(|_| ()),
+        _ => Ok(()),
+    };
+    if let Err(error) = typed_validation {
+        exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json);
+    }
 
     // Semantic snapshots intentionally load without constructing a second
     // query model. Direct CLI invocations do not pass through the workspace
@@ -627,8 +660,28 @@ pub async fn run(
                 }
             };
 
-            match facade.search(q, limit as usize, kind_filter, module, language) {
+            let path_prefix = arguments
+                .as_ref()
+                .and_then(|m| m.get("path_prefix"))
+                .and_then(|v| v.as_str());
+            match facade.search_scoped(
+                q,
+                limit as usize,
+                kind_filter,
+                module,
+                language,
+                path_prefix,
+            ) {
                 Ok(results) => Some(results),
+                Err(crate::IndexError::Storage(crate::StorageError::InvalidFieldValue {
+                    field,
+                    reason,
+                })) if field == "path_prefix" => exit_invalid_args(
+                    &tool,
+                    &format!("path_prefix: {reason}"),
+                    tool_param_spec(&tool).0,
+                    json,
+                ),
                 Err(e) => exit_index_error(EntityType::SearchResult, q, e),
             }
         } else {
@@ -802,7 +855,10 @@ pub async fn run(
 
     // Only load document store for tools that need it.
     // This is expensive (~1s to load ML model) so we skip it for other tools
-    let needs_document_store = matches!(tool.as_str(), "search_documents" | "search_context");
+    let needs_document_store = matches!(
+        tool.as_str(),
+        "search_documents" | "search_context" | "search_ticket_context"
+    );
     let document_store = if needs_document_store {
         crate::documents::load_from_settings(config)
     } else {
@@ -984,7 +1040,11 @@ pub async fn run(
     // JSON mode already collected everything above through the shared
     // service layer — one execution per invocation. The JSON emit arms
     // below use only pre-collected data; handler dispatch is text-only.
-    let result = if json && tool_kind != ToolKind::SearchContext {
+    let result = if json
+        && !matches!(
+            tool_kind,
+            ToolKind::SearchContext | ToolKind::SearchTicketContext
+        ) {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
         match tool_kind {
@@ -1113,6 +1173,11 @@ pub async fn run(
                     .and_then(|m| m.get("lang"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                let path_prefix = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("path_prefix"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 server
                     .search_symbols(Parameters(SearchSymbolsRequest {
                         query: query.to_string(),
@@ -1120,6 +1185,7 @@ pub async fn run(
                         kind,
                         module,
                         lang,
+                        path_prefix,
                     }))
                     .await
             }
@@ -1209,6 +1275,13 @@ pub async fn run(
                     }))
                     .await
             }
+            ToolKind::SearchTicketContext => {
+                server
+                    .search_ticket_context(Parameters(
+                        ticket_context_request.expect("ticket context request validated upstream"),
+                    ))
+                    .await
+            }
             ToolKind::SearchContext => {
                 let query = arguments
                     .as_ref()
@@ -1228,6 +1301,11 @@ pub async fn run(
                     .and_then(|m| m.get("collection"))
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
+                let code_path_prefix = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("code_path_prefix"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 server
                     .search_context(Parameters(SearchContextRequest {
                         query,
@@ -1235,6 +1313,7 @@ pub async fn run(
                         document_limit: limit("document_limit"),
                         conversation_limit: limit("conversation_limit"),
                         collection,
+                        code_path_prefix,
                     }))
                     .await
             }
@@ -1244,7 +1323,19 @@ pub async fn run(
     // Print result
     match result {
         Ok(call_result) => {
-            if json && tool == "search_context" {
+            if json && tool == "search_ticket_context" {
+                use crate::io::envelope::{EntityType, Envelope};
+                let data = call_result
+                    .structured_content
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({"content": call_result.content}));
+                let envelope = Envelope::success(data)
+                    .with_entity_type(EntityType::SearchResult)
+                    .with_message(
+                        "Bounded ticket context retrieval completed; scores are not confidence",
+                    );
+                println!("{}", render_envelope_json(&envelope, fields.as_ref()));
+            } else if json && tool == "search_context" {
                 use crate::io::envelope::{EntityType, Envelope};
                 let text = call_result
                     .content
@@ -1260,6 +1351,13 @@ pub async fn run(
                     .and_then(|m| m.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                if call_result.is_error == Some(true) {
+                    let envelope: Envelope<()> =
+                        Envelope::error(crate::io::envelope::ResultCode::InvalidQuery, text)
+                            .with_entity_type(EntityType::SearchResult)
+                            .with_query(query);
+                    emit_envelope_and_exit(envelope);
+                }
                 let envelope = Envelope::success(serde_json::json!({"text": text}))
                     .with_entity_type(EntityType::SearchResult)
                     .with_query(query)
@@ -1838,6 +1936,11 @@ pub async fn run(
                             eprintln!("Warning: Non-text content returned");
                         }
                     }
+                }
+                if call_result.is_error == Some(true)
+                    && matches!(tool_kind, ToolKind::SearchSymbols | ToolKind::SearchContext)
+                {
+                    std::process::exit(2);
                 }
                 if text_exit != 0 {
                     std::process::exit(text_exit);

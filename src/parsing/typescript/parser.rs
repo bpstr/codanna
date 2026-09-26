@@ -2577,44 +2577,56 @@ impl TypeScriptParser {
         }
     }
 
-    /// Track JSX component usage relationships
-    fn track_jsx_component_usage(&mut self, node: Node, code: &str) {
-        let component_name = match node.kind() {
-            "jsx_element" => {
-                // For <Component>...</Component>, get name from opening element
-                node.child_by_field_name("open_tag")
-                    .and_then(|tag| tag.child_by_field_name("name"))
-                    .map(|name| &code[name.byte_range()])
-            }
-            "jsx_self_closing_element" => {
-                // For <Component />, get name directly
-                node.child_by_field_name("name")
-                    .map(|name| &code[name.byte_range()])
-            }
-            _ => None,
+    /// Extract component values, not intrinsic tags. A member expression is a
+    /// value even when its namespace or final property is lowercase.
+    fn jsx_component_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        let name = match node.kind() {
+            "jsx_element" => node
+                .child_by_field_name("open_tag")?
+                .child_by_field_name("name")?,
+            "jsx_self_closing_element" => node.child_by_field_name("name")?,
+            _ => return None,
         };
+        let text = &code[name.byte_range()];
+        (name.kind() == "member_expression"
+            || text.chars().next().is_some_and(|c| c.is_uppercase()))
+        .then_some(text)
+    }
 
-        tracing::debug!("[typescript] JSX component_name extracted: {component_name:?}");
-
-        if let Some(component_name) = component_name {
-            // Filter out HTML elements (lowercase) - only track React components (uppercase)
-            if component_name
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_uppercase())
-            {
-                // Track this as a component usage from current context
-                if let Some(current_fn) = self.context.current_function() {
-                    tracing::debug!(
-                        "[typescript] tracking JSX usage: {current_fn} uses {component_name}"
-                    );
-                    self.component_usages
-                        .push((current_fn.to_string(), component_name.to_string()));
-                }
-            } else {
-                tracing::debug!("[typescript] skipping lowercase JSX element: {component_name}");
-            }
+    /// Track JSX component usage relationships during symbol extraction.
+    fn track_jsx_component_usage(&mut self, node: Node, code: &str) {
+        if let Some(component) = Self::jsx_component_name(node, code)
+            && let Some(owner) = self.context.current_function()
+        {
+            self.component_usages
+                .push((owner.to_owned(), component.to_owned()));
         }
+    }
+
+    /// A locally rebound namespace is not the imported module. Object-member
+    /// inference is deliberately not guessed from a same-named global symbol.
+    fn jsx_namespace_is_rebound(mut node: Node, root: &str, code: &str) -> bool {
+        while let Some(parent) = node.parent() {
+            if parent.kind() == "statement_block" {
+                for declaration in parent.named_children(&mut parent.walk()) {
+                    if !matches!(
+                        declaration.kind(),
+                        "lexical_declaration" | "variable_declaration"
+                    ) {
+                        continue;
+                    }
+                    for binding in declaration.named_children(&mut declaration.walk()) {
+                        if binding.child_by_field_name("name").is_some_and(|name| {
+                            name.kind() == "identifier" && &code[name.byte_range()] == root
+                        }) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            node = parent;
+        }
+        false
     }
 
     fn extract_function_name<'a>(node: &tree_sitter::Node, code: &'a str) -> Option<&'a str> {
@@ -2653,67 +2665,51 @@ impl TypeScriptParser {
         }
     }
 
-    /// Extract JSX component usages recursively
-    /// Tracks function context and collects JSX component uses
+    /// Extract JSX Uses with the same named-arrow/wrapper owners as symbol
+    /// extraction. Anonymous callbacks retain the enclosing owner as before.
     fn extract_jsx_uses_recursive<'a>(
+        &self,
         node: &Node,
         code: &'a str,
         current_fn: Option<&'a str>,
         uses: &mut Vec<(&'a str, &'a str, Range)>,
-    ) -> Option<&'a str> {
-        // Track current function context
-        let func_context = if node.kind() == "function_declaration"
-            || node.kind() == "generator_function_declaration"
-            || node.kind() == "arrow_function"
-        {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                Some(&code[name_node.byte_range()])
-            } else {
-                current_fn
-            }
-        } else {
-            current_fn
+    ) {
+        let func_context = match node.kind() {
+            "arrow_function" => node
+                .parent()
+                .filter(|parent| parent.kind() == "variable_declarator")
+                .and_then(|parent| parent.child_by_field_name("name"))
+                .filter(|name| name.kind() == "identifier")
+                .map(|name| &code[name.byte_range()])
+                .or_else(|| self.wrapper_declarator_name(node, code))
+                .or(current_fn),
+            "function_declaration" | "generator_function_declaration" | "method_definition" => node
+                .child_by_field_name("name")
+                .map(|name| &code[name.byte_range()])
+                .or(current_fn),
+            _ => current_fn,
         };
 
-        // Extract JSX component usage
-        if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {
-            let component_name = match node.kind() {
-                "jsx_element" => node
-                    .child_by_field_name("open_tag")
-                    .and_then(|tag| tag.child_by_field_name("name"))
-                    .map(|name| &code[name.byte_range()]),
-                "jsx_self_closing_element" => node
-                    .child_by_field_name("name")
-                    .map(|name| &code[name.byte_range()]),
-                _ => None,
-            };
-
-            if let Some(component_name) = component_name {
-                // Only track uppercase components (React convention)
-                if component_name
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_uppercase())
-                {
-                    if let Some(fn_name) = func_context {
-                        let range = Range {
-                            start_line: node.start_position().row as u32,
-                            start_column: node.start_position().column as u32,
-                            end_line: node.end_position().row as u32,
-                            end_column: node.end_position().column as u32,
-                        };
-                        uses.push((fn_name, component_name, range));
-                    }
-                }
+        if let Some(component) = Self::jsx_component_name(*node, code)
+            && let Some(owner) = func_context
+        {
+            let root = component.split('.').next().unwrap_or(component);
+            let shadowed = crate::parsing::references::has_unresolved_binding(*node, root, code)
+                || (component.contains('.') && Self::jsx_namespace_is_rebound(*node, root, code));
+            if !shadowed {
+                let range = Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u32,
+                    node.end_position().row as u32,
+                    node.end_position().column as u32,
+                );
+                uses.push((owner, component, range));
             }
         }
 
-        // Recurse to children with current context
         for child in node.children(&mut node.walk()) {
-            Self::extract_jsx_uses_recursive(&child, code, func_context, uses);
+            self.extract_jsx_uses_recursive(&child, code, func_context, uses);
         }
-
-        func_context
     }
 }
 
@@ -2867,7 +2863,7 @@ impl LanguageParser for TypeScriptParser {
         self.extract_type_uses_recursive(&root, code, &mut uses);
 
         // Extract JSX component usages during find_uses traversal
-        Self::extract_jsx_uses_recursive(&root, code, None, &mut uses);
+        self.extract_jsx_uses_recursive(&root, code, None, &mut uses);
 
         uses
     }

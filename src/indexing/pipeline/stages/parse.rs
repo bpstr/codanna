@@ -193,13 +193,15 @@ pub fn parse_file_with_root(
     let language_id = detect_language(&content.path, settings)?;
 
     if !is_registered_language(language_id)? {
-        return generic_pack::parse(
+        let mut parsed = generic_pack::parse(
             content.path,
             content.hash,
             &content.content,
             language_id,
             module_root,
-        );
+        )?;
+        attach_symbol_sources(&mut parsed, &content.content, settings, module_root);
+        return Ok(parsed);
     }
 
     PARSER_CACHE.with(|cache| {
@@ -309,7 +311,7 @@ fn parse_with_parser(
     // This-barrier spans feed the lexical-this walk in Phase 2
     let this_barrier_spans = parser.find_this_barrier_spans(&content.content);
 
-    Ok(ParsedFile {
+    let mut parsed = ParsedFile {
         path: content.path,
         content_hash: content.hash,
         language_id,
@@ -320,7 +322,27 @@ fn parse_with_parser(
         raw_relationships,
         variable_bindings,
         this_barrier_spans,
-    })
+    };
+    attach_symbol_sources(&mut parsed, &content.content, settings, module_root);
+    Ok(parsed)
+}
+
+fn attach_symbol_sources(
+    parsed: &mut ParsedFile,
+    source: &str,
+    settings: &Settings,
+    module_root: Option<&Path>,
+) {
+    if settings.semantic_search.enabled
+        && settings.semantic_search.code_representation
+            == crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+    {
+        crate::symbol_representation::capture(
+            parsed,
+            source,
+            settings.workspace_root.as_deref().or(module_root),
+        );
+    }
 }
 
 /// Create the language behavior for a registered language.
@@ -514,13 +536,19 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
 
     // Type usage - range is the usage site
     for (context, used_type, usage_range) in parser.find_uses(content) {
-        relationships.push(RawRelationship::new(
-            context,
-            usage_range, // from_range = usage context (triggers fallback)
-            used_type,
-            usage_range, // to_range = where type is used
-            crate::RelationKind::Uses,
-        ));
+        relationships.push(
+            RawRelationship::new(
+                context,
+                usage_range, // from_range = usage context (triggers fallback)
+                used_type,
+                usage_range, // to_range = where type/component is used
+                crate::RelationKind::Uses,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(usage_range.start_line, usage_range.start_column),
+            ),
+        );
     }
 
     for reference in parser.find_references(content) {

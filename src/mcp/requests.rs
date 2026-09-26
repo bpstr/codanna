@@ -40,14 +40,42 @@ fn deserialize_depth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::E
     Ok(value)
 }
 
-fn deserialize_context_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
-    let value = u32::deserialize(d)?;
+pub(crate) fn validate_context_limit(
+    field: &str,
+    value: u32,
+) -> Result<(), rmcp::model::ErrorData> {
     if (1..=MAX_CONTEXT_LIMIT).contains(&value) {
-        return Ok(value);
+        return Ok(());
     }
-    Err(serde::de::Error::custom(format!(
-        "context limit must be between 1 and {MAX_CONTEXT_LIMIT}"
-    )))
+    Err(rmcp::model::ErrorData::invalid_params(
+        format!("{field} must be an integer between 1 and {MAX_CONTEXT_LIMIT}; received {value}"),
+        None,
+    ))
+}
+
+fn deserialize_context_limit<'de, D: serde::Deserializer<'de>>(
+    d: D,
+    field: &'static str,
+) -> Result<u32, D::Error> {
+    let value = u32::deserialize(d).map_err(|error| {
+        <D::Error as serde::de::Error>::custom(format!(
+            "{field} must be an integer between 1 and {MAX_CONTEXT_LIMIT}: {error}"
+        ))
+    })?;
+    validate_context_limit(field, value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+fn deserialize_code_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    deserialize_context_limit(d, "code_limit")
+}
+
+fn deserialize_document_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    deserialize_context_limit(d, "document_limit")
+}
+
+fn deserialize_conversation_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    deserialize_context_limit(d, "conversation_limit")
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -133,6 +161,9 @@ pub struct SearchSymbolsRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Limit symbol discovery to this workspace-relative path/subtree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -229,27 +260,30 @@ pub struct SearchContextRequest {
     /// Maximum code-symbol matches (default: 5, max: 10).
     #[serde(
         default = "default_context_limit",
-        deserialize_with = "deserialize_context_limit"
+        deserialize_with = "deserialize_code_limit"
     )]
     #[schemars(range(min = 1, max = 10))]
     pub code_limit: u32,
     /// Maximum document chunks (default: 5, max: 10).
     #[serde(
         default = "default_context_limit",
-        deserialize_with = "deserialize_context_limit"
+        deserialize_with = "deserialize_document_limit"
     )]
     #[schemars(range(min = 1, max = 10))]
     pub document_limit: u32,
     /// Maximum conversation messages (default: 5, max: 10).
     #[serde(
         default = "default_context_limit",
-        deserialize_with = "deserialize_context_limit"
+        deserialize_with = "deserialize_conversation_limit"
     )]
     #[schemars(range(min = 1, max = 10))]
     pub conversation_limit: u32,
     /// Optional document collection filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Optional workspace-relative subtree applied to the code-symbol section only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_path_prefix: Option<String>,
 }
 
 fn default_depth() -> u32 {

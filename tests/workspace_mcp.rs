@@ -838,3 +838,72 @@ async fn hardening_workspace_mcp_root_change_rejects_queued_old_continuation() {
         .expect("session shutdown deadline")
         .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ticket_code_fusion_workspace_router_preserves_structured_evidence() {
+    let fixture = Fixture::indexed();
+    let client = connect((), &fixture.home, &fixture.a).await;
+    let tools = client.list_tools(Default::default()).await.unwrap();
+    assert!(
+        tools
+            .tools
+            .iter()
+            .any(|tool| tool.name == "search_ticket_context")
+    );
+    ready(&client, json!({"query": "shared_symbol"})).await;
+    let response = call(
+        &client,
+        "search_ticket_context",
+        json!({
+            "query": "shared_symbol", "code_path_prefix": "src", "code_limit": 1,
+        }),
+    )
+    .await;
+    let wrapper = response.structured_content.unwrap();
+    let data = &wrapper["result"];
+    assert_eq!(data["retrieval"], "ticket-rank-fusion-v1", "{wrapper}");
+    assert_eq!(data["code"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(data["code"]["semantic_status"], "not_requested");
+    assert_eq!(data["graph"]["query_status"], "not_run");
+    client.cancel().await.unwrap();
+}
+
+#[test]
+fn ticket_code_fusion_cli_json_keeps_evidence_and_rejects_invalid_limits() {
+    let fixture = Fixture::indexed();
+    let output = command(&fixture.home, &fixture.a)
+        .args([
+            "mcp",
+            "search_ticket_context",
+            "query:shared_symbol",
+            "code_limit:1",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        envelope["data"]["retrieval"], "ticket-rank-fusion-v1",
+        "{envelope}"
+    );
+    assert_eq!(
+        envelope["data"]["code"]["items"].as_array().unwrap().len(),
+        1
+    );
+    let invalid = command(&fixture.home, &fixture.a)
+        .args([
+            "mcp",
+            "search_ticket_context",
+            "query:shared_symbol",
+            "code_limit:0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+}

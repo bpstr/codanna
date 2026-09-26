@@ -1,0 +1,85 @@
+name: Ticket code fusion
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'contributing/retrieval/**'
+      - '.github/workflows/ticket-code-fusion.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ticket-code-fusion-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    if: github.repository == 'bpstr/codanna'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Capture exact tracked source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/fusion-source-sha.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/fusion-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fusion-source
+          path: |
+            ${{ runner.temp }}/fusion-source.tar.gz
+            ${{ runner.temp }}/fusion-source-sha.txt
+          retention-days: 7
+          if-no-files-found: error
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo clean -p ort-sys
+      - name: Run deterministic contracts with nonempty selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            cargo test --locked --lib ticket_code_fusion -- --list | tee "$RUNNER_TEMP/fusion-unit-tests.txt"
+            grep -Eq '^mcp::tools::ticket_context::ticket_code_fusion::.*: test$' "$RUNNER_TEMP/fusion-unit-tests.txt"
+            cargo test --locked --lib ticket_code_fusion -- --nocapture
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --list | tee "$RUNNER_TEMP/fusion-client-tests.txt"
+            grep -Eq '^ticket_code_fusion_.*: test$' "$RUNNER_TEMP/fusion-client-tests.txt"
+            cargo test --locked --test workspace_mcp ticket_code_fusion -- --nocapture
+            cargo test --locked --test symbol_path_scope --test symbol_scope_cli -- --nocapture
+            cargo test --locked --lib indexing::pipeline::stages::read::tests -- --nocapture
+            cargo test --locked --lib workspace_incremental_reads -- --nocapture
+            cargo test --locked --lib run_incremental_ -- --nocapture
+            cargo test --locked --lib pair_relocations_ -- --nocapture
+            cargo test --locked --lib hardening_final_tool_catalog_matches_generated_schemas_and_guidance -- --nocapture
+            cargo test --locked --lib search_context_defaults_and_limits_are_bounded -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/ticket-code-fusion.log"
+      - run: cargo fmt --all -- --check
+      - name: Check strict lints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/ticket-code-fusion-lints.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ticket-code-fusion-results
+          path: |
+            ${{ runner.temp }}/ticket-code-fusion.log
+            ${{ runner.temp }}/ticket-code-fusion-lints.log
+            ${{ runner.temp }}/fusion-unit-tests.txt
+            ${{ runner.temp }}/fusion-client-tests.txt
+          retention-days: 14
+          if-no-files-found: warn

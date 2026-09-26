@@ -195,6 +195,10 @@ pub struct McpConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SemanticSearchConfig {
+    /// Explicit source-input policy. Body representations require a force rebuild.
+    #[serde(default)]
+    pub code_representation: crate::symbol_representation::CodeEmbeddingPolicy,
+
     /// Enable semantic search
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -388,6 +392,7 @@ impl Default for McpConfig {
 impl Default for SemanticSearchConfig {
     fn default() -> Self {
         Self {
+            code_representation: Default::default(),
             enabled: true, // Enabled by default for better code intelligence
             model: default_embedding_model(),
             threshold: default_similarity_threshold(),
@@ -553,7 +558,19 @@ impl Settings {
         let path = path.as_ref().to_path_buf();
         let detected_root = path.parent().and_then(|config_dir| {
             (config_dir.file_name()?.to_str()? == crate::init::local_dir_name())
-                .then(|| config_dir.parent().map(PathBuf::from))
+                .then(|| {
+                    config_dir.parent().map(|root| {
+                        // A bare .codanna/settings.toml has an empty lexical
+                        // parent. Treat it as the current directory so the
+                        // usual canonicalization resolves the same workspace
+                        // as an absolute --config path and the offline planner.
+                        if root.as_os_str().is_empty() {
+                            PathBuf::from(".")
+                        } else {
+                            root.to_path_buf()
+                        }
+                    })
+                })
                 .flatten()
         });
         Figment::new()

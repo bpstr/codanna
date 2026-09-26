@@ -42,6 +42,10 @@ pub struct SemanticMetadata {
     /// Number of embeddings stored
     pub embedding_count: usize,
 
+    /// Additional independently searchable body segments (parent vectors excluded).
+    #[serde(default)]
+    pub segment_embedding_count: usize,
+
     /// Unix timestamp when created
     pub created_at: u64,
 
@@ -65,6 +69,7 @@ impl SemanticMetadata {
             embedding_identity: None,
             dimension,
             embedding_count,
+            segment_embedding_count: 0,
             created_at: now,
             updated_at: now,
             version: Self::CURRENT_VERSION,
@@ -80,6 +85,7 @@ impl SemanticMetadata {
             embedding_identity: None,
             dimension,
             embedding_count,
+            segment_embedding_count: 0,
             created_at: now,
             updated_at: now,
             version: Self::CURRENT_VERSION,
@@ -170,12 +176,11 @@ impl SemanticMetadata {
             })?;
 
         // Check version compatibility
-        if metadata.version > Self::CURRENT_VERSION {
+        if metadata.version > 4 {
             return Err(SemanticSearchError::StorageError {
                 message: format!(
                     "Metadata version {} is newer than supported version {}",
-                    metadata.version,
-                    Self::CURRENT_VERSION
+                    metadata.version, 4
                 ),
                 suggestion: "Update the code to support the newer metadata format".to_string(),
             });

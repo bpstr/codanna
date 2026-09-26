@@ -12,6 +12,9 @@ use tantivy::{
     schema::{IndexRecordOption, Value},
 };
 
+#[path = "graph_scope.rs"]
+mod endpoint_scope;
+
 pub type GraphEdge = (SymbolId, SymbolId, Relationship);
 #[derive(Debug)]
 pub struct RelationshipPage {

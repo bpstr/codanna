@@ -1,0 +1,64 @@
+name: Body cache reuse contracts
+on:
+  pull_request:
+    branches: [feature/body-aware-rebuild-plan]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: body-cache-reuse-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Verify committed planner and rebuild parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            sha256sum src/config/mod.rs src/indexing/pipeline/stages/semantic_embed.rs src/semantic/simple.rs src/indexing/facade.rs src/rebuild_plan.rs tests/semantic_rebuild_reuse.rs tests/support/body_rebuild_cache_cases.rs
+            cargo test --locked --test semantic_rebuild_reuse --test index_plan_cli --test body_index_plan_cli -- --nocapture
+            cargo test --locked --lib rebuild_plan::tests -- --list | tee "$RUNNER_TEMP/body-cache-plan-tests.txt"
+            grep -Eq '^rebuild_plan::tests::.*: test$' "$RUNNER_TEMP/body-cache-plan-tests.txt"
+            cargo test --locked --lib rebuild_plan::tests -- --nocapture
+            cargo test --locked --lib symbol_representation -- --nocapture
+            cargo test --locked --lib rebuild_cache -- --list | tee "$RUNNER_TEMP/body-cache-reuse-tests.txt"
+            grep -Eq 'rebuild_cache::.*: test$' "$RUNNER_TEMP/body-cache-reuse-tests.txt"
+            cargo test --locked --lib rebuild_cache -- --nocapture
+            cargo test --locked --lib config::tests -- --list | tee "$RUNNER_TEMP/body-cache-config-tests.txt"
+            grep -Eq '^config::tests::.*: test$' "$RUNNER_TEMP/body-cache-config-tests.txt"
+            cargo test --locked --lib config::tests -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/body-cache-reuse.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: body-cache-reuse
+          path: |
+            ${{ runner.temp }}/body-cache-reuse.log
+            ${{ runner.temp }}/body-cache-plan-tests.txt
+            ${{ runner.temp }}/body-cache-reuse-tests.txt
+            ${{ runner.temp }}/body-cache-config-tests.txt
+          if-no-files-found: warn
+          retention-days: 14

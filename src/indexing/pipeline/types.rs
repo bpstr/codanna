@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 /// The COLLECT stage converts this to a full `Symbol` with ID.
 #[derive(Debug, Clone)]
 pub struct RawSymbol {
+    pub code_embedding_policy: crate::symbol_representation::CodeEmbeddingPolicy,
+    pub embedding_source: Option<crate::symbol_representation::SymbolSource>,
     pub name: CompactString,
     pub kind: SymbolKind,
     pub range: Range,
@@ -34,6 +36,8 @@ pub struct RawSymbol {
 impl RawSymbol {
     pub fn new(name: impl Into<CompactString>, kind: SymbolKind, range: Range) -> Self {
         Self {
+            code_embedding_policy: Default::default(),
+            embedding_source: None,
             name: name.into(),
             kind,
             range,
@@ -359,27 +363,35 @@ impl Default for IndexBatch {
 pub struct EmbeddingBatch {
     /// Embedding candidates: (symbol_id, doc_comment, language)
     pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
+    /// Opt-in source snapshots, partitioned against the real backend input budget.
+    pub body_candidates: Vec<(
+        SymbolId,
+        crate::symbol_representation::SymbolSource,
+        Box<str>,
+    )>,
 }
 
 impl EmbeddingBatch {
     pub fn new() -> Self {
         Self {
             candidates: Vec::new(),
+            body_candidates: Vec::new(),
         }
     }
 
     pub fn with_capacity(size: usize) -> Self {
         Self {
             candidates: Vec::with_capacity(size),
+            body_candidates: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.candidates.is_empty()
+        self.candidates.is_empty() && self.body_candidates.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.candidates.len()
+        self.candidates.len() + self.body_candidates.len()
     }
 }
 
