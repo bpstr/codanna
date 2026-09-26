@@ -247,7 +247,7 @@ impl Pipeline {
         let content_hash = file_content.hash.clone();
 
         // Check if file already exists by querying Tantivy
-        let before_generation = index.generation();
+        let before_snapshot = index.reader_snapshot();
         let mut changed_file_ids = Vec::with_capacity(2);
         let mut existing_changed = false;
         let mut captured_inbound: Vec<
@@ -379,7 +379,7 @@ impl Pipeline {
         changed_file_ids.push(file_id);
         let symbol_cache = self.resolution_cache(
             &index,
-            Some(before_generation),
+            Some(before_snapshot),
             &changed_file_ids,
             !unresolved.is_empty(),
         )?;

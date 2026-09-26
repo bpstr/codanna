@@ -66,6 +66,9 @@ CLI JSON keeps the existing result array and adds `meta.total`, `meta.offset`, `
 
 Contextual semantic search retains its matches when a popular symbol exceeds the impact budget. Per-function `impact.status` is `complete`, `budget_exceeded`, or `unavailable`; only a completed traversal has a `count`. MCP exposes these records under `structuredContent.impact`, and CLI JSON includes `impact` on each function result. Standalone `analyze_impact` continues to report a budget error explicitly. Lexical search treats rejected query syntax as an analyzed literal phrase, so pasted qualified names such as `std::collections::HashMap` can match signatures. Invalid search limits and backend query failures are errors, not “no results.”
 
+Ticket retrieval supports scoped semantic candidates, observed facets, persistent documentation links, owner/impact profiles, and paged coverage of bounded candidates. See the [evidence retrieval guide](contributing/retrieval/evidence-v1/README.md) for request examples, limits, and the opt-in `symbol_body_v2` representation.
+
+
 In JavaScript and TypeScript, passing a resolved function as an argument, such as `router.get('/health', handle)`, records a `References` relationship with the argument's source location. Find registrations and their dependents with `codanna mcp analyze_impact symbol_name:handle`; inspect source evidence with `codanna retrieve describe handle --json` under `relationships.referenced_by`. Describing the registering function exposes `relationships.references`. `get_calls` and `find_callers` continue to report explicit invocations, while dependency and impact queries also traverse references.
 
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.

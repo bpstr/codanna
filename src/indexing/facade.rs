@@ -95,6 +95,10 @@ pub struct SemanticCoverageStatus {
     pub total_symbols: usize,
     pub eligible_symbols: usize,
     pub source_input_policy: &'static str,
+    pub recorded_source_policy: Option<String>,
+    pub representation_status: &'static str,
+    pub representation_action: &'static str,
+    pub source_coverage: &'static str,
     pub vector_count: Option<usize>,
     pub eligible_with_vector: Option<usize>,
     pub eligible_without_vector: Option<usize>,
@@ -609,10 +613,49 @@ impl IndexFacade {
             }
         }
 
+        let recorded_source_policy = identity
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .and_then(|value| {
+                value
+                    .get("source_input_policy")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            });
+        let representation_status = match recorded_source_policy.as_deref() {
+            Some(recorded)
+                if recorded
+                    == self
+                        .settings
+                        .semantic_search
+                        .code_representation
+                        .source_policy() =>
+            {
+                "matched"
+            }
+            Some(_) => "mismatch",
+            None => "unknown_legacy_or_absent",
+        };
         SemanticCoverageStatus {
             state,
             total_symbols,
             eligible_symbols: eligible_ids.len(),
+            recorded_source_policy,
+            representation_status,
+            representation_action: if representation_status == "mismatch" {
+                "Explicitly rebuild with the configured code_representation; queries never rebuild vectors"
+            } else if representation_status == "matched" {
+                "No policy rebuild indicated; verify missing vectors and source freshness separately"
+            } else {
+                "Verify recorded identity; absent policy is not proof of body-aware indexing"
+            },
+            source_coverage: if self.settings.semantic_search.code_representation
+                == crate::symbol_representation::CodeEmbeddingPolicy::DocComment
+            {
+                "documentation_only_no_implementation_coverage"
+            } else {
+                "bounded_excerpts_not_complete_implementation"
+            },
+
             source_input_policy: self
                 .settings
                 .semantic_search
@@ -1191,16 +1234,42 @@ impl IndexFacade {
         limit: usize,
         language_filter: Option<&str>,
     ) -> FacadeResult<Vec<(Symbol, f32)>> {
+        self.semantic_search_docs_scoped(query, limit, language_filter, None)
+    }
+
+    /// Scope membership and result hydration use a single pinned code reader.
+    /// Vector/source freshness remains unknown; reader identity is not a source revision.
+    pub fn semantic_search_docs_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        language_filter: Option<&str>,
+        prefix: Option<&str>,
+    ) -> FacadeResult<Vec<(Symbol, f32)>> {
         self.check_semantic_state()?;
         let semantic = self
             .semantic_search
             .as_ref()
             .ok_or(IndexError::SemanticSearchNotEnabled)?;
 
-        let sem = semantic
+        let mut sem = semantic
             .lock()
             .map_err(|_| IndexError::lock_error())?
             .query_snapshot();
+
+        let view = self.document_index.graph_view();
+        if let Some(prefix) = prefix {
+            let mut allowed = HashSet::new();
+            // Validate even an empty corpus. Use registered-file identity, not display paths.
+            view.symbols_scoped(&[], prefix)?;
+            for ids in sem.embedding_ids().chunks(512) {
+                allowed.extend(view.symbols_scoped(ids, prefix)?.into_iter().map(|s| s.id));
+            }
+            if allowed.is_empty() {
+                return Ok(Vec::new());
+            }
+            sem.retain_symbols(&allowed);
+        }
 
         // When the semantic search has no local model (built with remote embeddings),
         // generate the query vector via the embedding backend regardless of whether
@@ -1221,8 +1290,8 @@ impl IndexFacade {
         };
 
         let ids = results.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        let mut hydrated = self
-            .get_symbols(&ids)?
+        let mut hydrated = view
+            .symbols(&ids)?
             .into_iter()
             .map(|s| (s.id, s))
             .collect::<std::collections::HashMap<_, _>>();
@@ -5197,5 +5266,36 @@ mod tests {
                 .is_err()
         );
         assert_eq!(facade.file_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod evidence_v1_diagnostics {
+    use super::*;
+    use crate::symbol_representation::CodeEmbeddingPolicy;
+    #[test]
+    fn evidence_v1_reports_policy_mismatch_without_initializing_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut settings = Settings {
+            index_path: temp.path().join("index"),
+            ..Default::default()
+        };
+        settings.semantic_search.enabled = false;
+        settings.semantic_search.code_representation = CodeEmbeddingPolicy::SymbolBodyV2;
+        let mut facade = IndexFacade::new(Arc::new(settings)).unwrap();
+        let mut metadata = crate::semantic::SemanticMetadata::new_remote("fixture".into(), 2, 0);
+        metadata.embedding_identity =
+            Some(CodeEmbeddingPolicy::SymbolBodyV1.bind_identity("{}".into()));
+        facade.semantic_metadata_snapshot = Some(metadata);
+        let status = facade.semantic_coverage_status(&[]);
+        assert_eq!(status.representation_status, "mismatch");
+        assert!(status.representation_action.contains("rebuild"));
+        assert!(facade.embedding_pool.get().is_none());
+        assert_eq!(status.generation_alignment, "unknown_untracked");
+        facade.semantic_metadata_snapshot = None;
+        assert_eq!(
+            facade.semantic_coverage_status(&[]).representation_status,
+            "unknown_legacy_or_absent"
+        );
     }
 }

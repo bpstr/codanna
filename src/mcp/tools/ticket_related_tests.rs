@@ -11,6 +11,14 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn fixture(count: u32, edges: &[(u32, u32)]) -> (tempfile::TempDir, IndexFacade) {
+    fixture_with_public_symbol(count, edges, None)
+}
+
+fn fixture_with_public_symbol(
+    count: u32,
+    edges: &[(u32, u32)],
+    public_symbol: Option<u32>,
+) -> (tempfile::TempDir, IndexFacade) {
     let temp = tempfile::tempdir().unwrap();
     let mut settings = Settings {
         index_path: temp.path().join("index"),
@@ -33,6 +41,9 @@ fn fixture(count: u32, edges: &[(u32, u32)]) -> (tempfile::TempDir, IndexFacade)
             FileId::new(1).unwrap(),
             Range::new(id, 0, id, 20),
         );
+        if public_symbol == Some(id) {
+            symbol.visibility = crate::Visibility::Public;
+        }
         if id == 1 {
             symbol.doc_comment = Some("conversation timeout request handler".into());
         }
@@ -232,5 +243,56 @@ async fn ticket_related_sidecar_preserves_direct_items_and_default_response_shap
         data["code"]["related_code"]["items"][0]
             .get("fusion_score")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches() {
+    let (_temp, index) =
+        fixture_with_public_symbol(18, &(2..=18).map(|id| (id, 1)).collect::<Vec<_>>(), Some(2));
+    let server = CodeIntelligenceServer::new(index);
+    let baseline = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(json!({"query":"requestHandler", "code_limit":1})).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(baseline["code"]["items"][0]["name"], "requestHandler");
+    let first = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(
+                json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let coverage = &first["code"]["coverage"];
+    assert_eq!(coverage["total_candidates"], 18);
+    assert_eq!(coverage["items"].as_array().unwrap().len(), 10);
+    let next = server.search_ticket_context(Parameters(serde_json::from_value(json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10, "coverage_offset":10, "coverage_snapshot":coverage["snapshot"]})).unwrap())).await.unwrap().structured_content.unwrap();
+    assert_eq!(
+        next["code"]["coverage"]["items"].as_array().unwrap().len(),
+        8
+    );
+    let owner = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(
+                json!({"query":"requestHandler", "profile":"implementation_owner", "code_limit":1}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(owner["code"]["items"][0]["name"], "implementation2");
+    assert_eq!(
+        owner["code"]["items"][0]["relationships"][0]["direction"],
+        "incoming"
     );
 }

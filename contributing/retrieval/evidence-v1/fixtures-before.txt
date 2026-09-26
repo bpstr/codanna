@@ -1,0 +1,27 @@
+   Compiling tree-sitter-language-pack v1.16.2
+   Compiling codanna v1.0.0-rc3 (<workspace>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+     Running unittests src/lib.rs (target/debug/deps/codanna-f13eaf2a44f84421)
+
+running 2 tests
+
+thread 'mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_profiles_report_coverage_and_observed_facets' (19571653) panicked at src/mcp/tools/ticket_context.rs:971:13:
+called `Result::unwrap()` on an `Err` value: Error("unknown field `coverage_limit`, expected one of `query`, `code_limit`, `document_limit`, `conversation_limit`, `collection`, `code_path_prefix`, `include_semantic_code`, `include_conversations`, `include_related_code`", line: 0, column: 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_profiles_report_coverage_and_observed_facets ... FAILED
+
+thread 'mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_scoped_semantic_unavailable_is_not_unsupported' (19571654) panicked at src/mcp/tools/ticket_context.rs:987:9:
+assertion `left == right` failed
+  left: "not_run_scoped_semantic_unsupported"
+ right: "unavailable"
+test mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_scoped_semantic_unavailable_is_not_unsupported ... FAILED
+
+failures:
+
+failures:
+    mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_profiles_report_coverage_and_observed_facets
+    mcp::tools::ticket_context::ticket_code_fusion::evidence_v1_scoped_semantic_unavailable_is_not_unsupported
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1509 filtered out; finished in 0.62s
+
+error: test failed, to rerun pass `--lib`

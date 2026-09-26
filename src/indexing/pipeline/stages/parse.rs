@@ -335,12 +335,13 @@ fn attach_symbol_sources(
 ) {
     if settings.semantic_search.enabled
         && settings.semantic_search.code_representation
-            == crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+            != crate::symbol_representation::CodeEmbeddingPolicy::DocComment
     {
-        crate::symbol_representation::capture(
+        crate::symbol_representation::capture_with_policy(
             parsed,
             source,
             settings.workspace_root.as_deref().or(module_root),
+            settings.semantic_search.code_representation,
         );
     }
 }

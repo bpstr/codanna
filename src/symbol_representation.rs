@@ -17,6 +17,9 @@ pub const MAX_SYMBOL_SEGMENTS: usize = 8;
 pub const SOURCE_POLICY_ID: &str =
     "symbol-body-v1:source=16384:file=1048576:segments=8:fields=v1:selection=head-tail";
 
+pub const SOURCE_POLICY_V2_ID: &str =
+    "symbol-body-v2:source=16384:file=1048576:segments=8:fields=v2:selection=head-middle-tail";
+
 /// Source policy is independent of the model's complete-input/tokenizer policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,13 +27,14 @@ pub enum CodeEmbeddingPolicy {
     #[default]
     DocComment,
     SymbolBodyV1,
+    SymbolBodyV2,
 }
 
 impl CodeEmbeddingPolicy {
     pub fn eligible(self, kind: SymbolKind, has_doc: bool) -> bool {
         match self {
             Self::DocComment => has_doc,
-            Self::SymbolBodyV1 => matches!(
+            Self::SymbolBodyV1 | Self::SymbolBodyV2 => matches!(
                 kind,
                 SymbolKind::Function
                     | SymbolKind::Method
@@ -48,6 +52,7 @@ impl CodeEmbeddingPolicy {
         match self {
             Self::DocComment => "doc_comment_present_v1",
             Self::SymbolBodyV1 => SOURCE_POLICY_ID,
+            Self::SymbolBodyV2 => SOURCE_POLICY_V2_ID,
         }
     }
 
@@ -63,6 +68,7 @@ impl CodeEmbeddingPolicy {
         match self {
             Self::DocComment => source.is_none() || source == Some("doc_comment_present_v1"),
             Self::SymbolBodyV1 => source == Some(SOURCE_POLICY_ID),
+            Self::SymbolBodyV2 => source == Some(SOURCE_POLICY_V2_ID),
         }
     }
 
@@ -71,13 +77,13 @@ impl CodeEmbeddingPolicy {
     pub(crate) fn bind_identity(self, backend: String) -> String {
         match self {
             Self::DocComment => backend,
-            Self::SymbolBodyV1 => {
+            Self::SymbolBodyV1 | Self::SymbolBodyV2 => {
                 let mut identity: serde_json::Value = serde_json::from_str(&backend)
                     .unwrap_or_else(|_| serde_json::json!({"backend_identity": backend}));
                 if !identity.is_object() {
                     identity = serde_json::json!({"backend_identity": backend});
                 }
-                identity["source_input_policy"] = SOURCE_POLICY_ID.into();
+                identity["source_input_policy"] = self.source_policy().into();
                 identity.to_string()
             }
         }
@@ -95,6 +101,7 @@ pub struct SourceFragment {
 pub struct SymbolSource {
     pub header: String,
     pub fragments: Vec<SourceFragment>,
+    pub policy: CodeEmbeddingPolicy,
 }
 
 #[derive(Debug)]
@@ -122,7 +129,31 @@ impl SymbolSource {
                 ranges.push((fragment_index, range));
             }
         }
-        let selected = selected_indices(ranges.len(), MAX_SYMBOL_SEGMENTS);
+        let selected = if self.policy == CodeEmbeddingPolicy::SymbolBodyV2 {
+            let midpoint = (self.fragments.first().map_or(0, |f| f.range.start)
+                + self.fragments.last().map_or(0, |f| f.range.end))
+                / 2;
+            let center = ranges.iter().position(|(fragment, range)| {
+                let start = self.fragments[*fragment].range.start + range.start;
+                let end = self.fragments[*fragment].range.start + range.end;
+                start <= midpoint && midpoint < end
+            });
+            let mut selected = std::collections::BTreeSet::new();
+            for index in center
+                .into_iter()
+                .chain((!ranges.is_empty()).then_some(0))
+                .chain(ranges.len().checked_sub(1))
+                .chain(distributed_indices(ranges.len(), MAX_SYMBOL_SEGMENTS))
+            {
+                selected.insert(index);
+                if selected.len() == MAX_SYMBOL_SEGMENTS {
+                    break;
+                }
+            }
+            selected.into_iter().collect()
+        } else {
+            selected_indices(ranges.len(), MAX_SYMBOL_SEGMENTS)
+        };
         let mut result = Vec::with_capacity(selected.len());
         for index in selected {
             let (fragment_index, range) = &ranges[index];
@@ -146,6 +177,60 @@ fn selected_indices(len: usize, limit: usize) -> Vec<usize> {
     }
     let head = limit.div_ceil(2);
     (0..head).chain(len - (limit - head)..len).collect()
+}
+
+fn distributed_indices(len: usize, limit: usize) -> Vec<usize> {
+    if len <= limit {
+        return (0..len).collect();
+    }
+    if limit == 0 {
+        return vec![];
+    }
+    let mut chosen = std::collections::BTreeSet::new();
+    for index in [0, len - 1, len / 2]
+        .into_iter()
+        .chain((0..limit).map(|i| i * (len - 1) / limit.saturating_sub(1).max(1)))
+        .chain(0..len)
+    {
+        chosen.insert(index);
+        if chosen.len() == limit {
+            break;
+        }
+    }
+    chosen.into_iter().collect()
+}
+
+fn middle_fragments(
+    source: &str,
+    range: ByteRange<usize>,
+    allowance: usize,
+) -> Vec<SourceFragment> {
+    let limit = allowance.min(MAX_SYMBOL_SOURCE_BYTES);
+    if range.len() <= limit || limit < 3 {
+        return fragments(source, range, allowance);
+    }
+    let width = limit / 3;
+    let starts = [
+        range.start,
+        range.start + (range.len() - width) / 2,
+        range.end - width,
+    ];
+    starts
+        .into_iter()
+        .filter_map(|mut start| {
+            let mut end = (start + width).min(range.end);
+            while start < end && !source.is_char_boundary(start) {
+                start += 1;
+            }
+            while end > start && !source.is_char_boundary(end) {
+                end -= 1;
+            }
+            (start < end).then(|| SourceFragment {
+                range: start..end,
+                text: source[start..end].to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn prefix(value: &str, max: usize) -> &str {
@@ -215,7 +300,17 @@ fn fragments(source: &str, range: ByteRange<usize>, allowance: usize) -> Vec<Sou
     result
 }
 
+#[cfg(test)]
 pub(crate) fn capture(parsed: &mut ParsedFile, source: &str, root: Option<&Path>) {
+    capture_with_policy(parsed, source, root, CodeEmbeddingPolicy::SymbolBodyV1);
+}
+
+pub(crate) fn capture_with_policy(
+    parsed: &mut ParsedFile,
+    source: &str,
+    root: Option<&Path>,
+    policy: CodeEmbeddingPolicy,
+) {
     let mut lines = vec![0];
     lines.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
     let path = root.and_then(|root| parsed.path.strip_prefix(root).ok());
@@ -230,8 +325,8 @@ pub(crate) fn capture(parsed: &mut ParsedFile, source: &str, root: Option<&Path>
     let path = path.to_string_lossy().replace('\\', "/");
     let mut remaining = MAX_FILE_SOURCE_BYTES;
     for symbol in &mut parsed.raw_symbols {
-        symbol.code_embedding_policy = CodeEmbeddingPolicy::SymbolBodyV1;
-        if !CodeEmbeddingPolicy::SymbolBodyV1.eligible(symbol.kind, symbol.doc_comment.is_some()) {
+        symbol.code_embedding_policy = policy;
+        if !policy.eligible(symbol.kind, symbol.doc_comment.is_some()) {
             continue;
         }
         let mut header =
@@ -253,6 +348,27 @@ pub(crate) fn capture(parsed: &mut ParsedFile, source: &str, root: Option<&Path>
             symbol.doc_comment.as_deref(),
             256,
         );
+        if policy == CodeEmbeddingPolicy::SymbolBodyV2 {
+            header = header.replacen("representation v1", "representation v2", 1);
+            field(
+                &mut header,
+                "Context basis",
+                Some("observed parser identity; no inferred behavior"),
+                128,
+            );
+            field(
+                &mut header,
+                "Language",
+                Some(parsed.language_id.as_str()),
+                64,
+            );
+            field(
+                &mut header,
+                "Declaration role",
+                Some(&format!("{:?}", symbol.kind)),
+                32,
+            );
+        }
         // Reserve the fixed coverage line too. Exhaustion means a missing eligible
         // representation, never fallback to a mislabeled comment vector.
         let overhead = header.len() + 128;
@@ -261,7 +377,13 @@ pub(crate) fn capture(parsed: &mut ParsedFile, source: &str, root: Option<&Path>
         }
         remaining -= overhead;
         let range = source_range(source, &lines, symbol.range);
-        let fragments = range.map_or_else(Vec::new, |range| fragments(source, range, remaining));
+        let fragments = range.map_or_else(Vec::new, |range| {
+            if policy == CodeEmbeddingPolicy::SymbolBodyV2 {
+                middle_fragments(source, range, remaining)
+            } else {
+                fragments(source, range, remaining)
+            }
+        });
         let bytes = fragments.iter().map(|f| f.text.len()).sum::<usize>();
         remaining = remaining.saturating_sub(bytes);
         header.push_str(if fragments.is_empty() {
@@ -269,7 +391,11 @@ pub(crate) fn capture(parsed: &mut ParsedFile, source: &str, root: Option<&Path>
         } else {
             "Source coverage: bounded parser-range excerpts; extraction completeness unverified\nImplementation excerpt:\n"
         });
-        symbol.embedding_source = Some(SymbolSource { header, fragments });
+        symbol.embedding_source = Some(SymbolSource {
+            header,
+            fragments,
+            policy,
+        });
     }
 }
 
@@ -291,6 +417,37 @@ mod tests {
             Range::new(0, 0, 0, source.len() as u32),
         ));
         parsed
+    }
+
+    #[test]
+    fn evidence_v1_body_v2_keeps_middle_in_final_embedding_inputs() {
+        let source = format!(
+            "fn serve() {{ head_marker(); {} middle_marker(); {} tail_marker(); }}",
+            "a();".repeat(6000),
+            "z();".repeat(6000)
+        );
+        let mut parsed = parsed(&source);
+        capture_with_policy(
+            &mut parsed,
+            &source,
+            None,
+            CodeEmbeddingPolicy::SymbolBodyV2,
+        );
+        let representation = parsed.raw_symbols[0].embedding_source.as_ref().unwrap();
+        let inputs = representation
+            .inputs(&InputBudget::remote(Some(1024), None).unwrap())
+            .unwrap();
+        assert!(
+            inputs
+                .iter()
+                .any(|input| input.text.contains("middle_marker"))
+        );
+        assert!(inputs.len() <= MAX_SYMBOL_SEGMENTS);
+        assert!(inputs.iter().all(|input| {
+            input
+                .text
+                .contains("Context basis: observed parser identity")
+        }));
     }
 
     #[test]
@@ -469,7 +626,7 @@ mod pipeline_contracts {
                     assert!(!batch.candidates[0].1.contains("old.route"));
                     assert!(batch.body_candidates.is_empty());
                 }
-                CodeEmbeddingPolicy::SymbolBodyV1 => {
+                CodeEmbeddingPolicy::SymbolBodyV1 | CodeEmbeddingPolicy::SymbolBodyV2 => {
                     assert!(batch.candidates.is_empty());
                     assert_eq!(batch.body_candidates.len(), 2);
                     let inputs: Vec<_> = batch
@@ -493,6 +650,45 @@ mod pipeline_contracts {
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod evidence_v1_tests {
+    use super::*;
+    #[test]
+    fn evidence_v1_middle_source_is_retained_without_growing_budget() {
+        let source = format!(
+            "{}timezone_sensitive_middle{}",
+            "a".repeat(20_000),
+            "z".repeat(20_000)
+        );
+        let old = fragments(&source, 0..source.len(), MAX_SYMBOL_SOURCE_BYTES);
+        let new = middle_fragments(&source, 0..source.len(), MAX_SYMBOL_SOURCE_BYTES);
+        assert!(
+            !old.iter()
+                .any(|f| f.text.contains("timezone_sensitive_middle"))
+        );
+        assert!(
+            new.iter()
+                .any(|f| f.text.contains("timezone_sensitive_middle"))
+        );
+        assert!(new.iter().map(|f| f.text.len()).sum::<usize>() <= MAX_SYMBOL_SOURCE_BYTES);
+        for fragment in new {
+            assert_eq!(fragment.text, source[fragment.range]);
+        }
+        assert!(distributed_indices(100, 8).contains(&50));
+        assert!(!selected_indices(100, 8).contains(&50));
+        let identity = CodeEmbeddingPolicy::SymbolBodyV2.bind_identity("{}".into());
+        assert!(!CodeEmbeddingPolicy::SymbolBodyV1.accepts_recorded_identity(Some(&identity)));
+        assert!(CodeEmbeddingPolicy::SymbolBodyV2.accepts_recorded_identity(Some(&identity)));
+    }
+    #[test]
+    fn evidence_v1_middle_source_preserves_unicode_ranges() {
+        let source = "árvíztűrő 🦀".repeat(4000);
+        for fragment in middle_fragments(&source, 0..source.len(), 16384) {
+            assert_eq!(fragment.text, source[fragment.range]);
         }
     }
 }

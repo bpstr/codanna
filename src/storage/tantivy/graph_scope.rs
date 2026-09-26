@@ -9,6 +9,83 @@ use tantivy::schema::IndexRecordOption;
 use tantivy::{TantivyDocument, Term};
 
 impl GraphView<'_> {
+    /// Enumerate indexed symbols in one registered scope; fail explicitly at the bound.
+    pub fn inventory(&self, prefix: Option<&str>, limit: usize) -> StorageResult<Vec<Symbol>> {
+        use tantivy::collector::{Count, TopDocs};
+        if !(1..=100_000).contains(&limit) {
+            return Err(StorageError::General(
+                "inventory limit must be 1..100000".into(),
+            ));
+        }
+        let s = &self.index.schema;
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(s.doc_type, "symbol"),
+                IndexRecordOption::Basic,
+            )),
+        )];
+        if let Some(prefix) = prefix {
+            clauses.push((
+                Occur::Must,
+                Box::new(TermSetQuery::new(
+                    self.index.file_scope_terms(&self.searcher, prefix)?,
+                )),
+            ));
+        }
+        let (total, docs) = self.searcher.search(
+            &BooleanQuery::new(clauses),
+            &(Count, TopDocs::with_limit(limit).order_by_score()),
+        )?;
+        if total > limit {
+            return Err(StorageError::General(
+                "symbol inventory exceeds budget; narrow the code scope".into(),
+            ));
+        }
+        let mut symbols = docs
+            .into_iter()
+            .map(|(_, addr)| {
+                self.index
+                    .document_to_symbol(&self.searcher.doc::<TantivyDocument>(addr)?)
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        symbols.sort_by_key(|s| s.id.value());
+        Ok(symbols)
+    }
+
+    /// Indexed file content hash from this reader, not a fresh filesystem read.
+    pub fn file_hash(&self, id: crate::FileId) -> StorageResult<Option<String>> {
+        use tantivy::schema::Value;
+        let s = &self.index.schema;
+        let query = BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(s.doc_type, "file_info"),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(s.file_id, u64::from(id.value())),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ]);
+        let docs = self.searcher.search(&query, &DocSetCollector)?;
+        if docs.len() != 1 {
+            return Ok(None);
+        }
+        let doc = self
+            .searcher
+            .doc::<TantivyDocument>(*docs.iter().next().expect("one file"))?;
+        Ok(doc
+            .get_first(s.file_hash)
+            .and_then(|v| v.as_str())
+            .map(str::to_owned))
+    }
+
     /// Instance-local identity of the pinned graph reader, not source freshness.
     pub fn reader_generation(&self) -> u64 {
         self.searcher.generation().generation_id()

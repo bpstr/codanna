@@ -279,6 +279,14 @@ fn compaction_bounds_one_hundred_updates_and_preserves_pinned_queries() {
         store
             .index_collection("docs", &config(&source), &chunks())
             .unwrap();
+        // Publication must release the writer lock before returning, including
+        // cycles that schedule background merges. No retry or delay is allowed.
+        store
+            .index
+            .writer::<Document>(store.heap_size)
+            .unwrap_or_else(|error| panic!("writer lock retained after cycle {cycle}: {error}"))
+            .wait_merging_threads()
+            .unwrap();
         let stats = store.embedding_diagnostics();
         assert_eq!(stats.live_vectors, 2);
         assert!(stats.physical_vectors <= 4);

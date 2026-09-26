@@ -117,6 +117,10 @@ async fn pair(server: &CodeIntelligenceServer, scope: &str) -> Value {
             .unwrap();
         assert_ne!(response.is_error, Some(true));
         let result = response.structured_content.unwrap();
+        let direct_before = direct["code"]["reader_generation_before"].as_u64().unwrap();
+        let direct_after = direct["code"]["reader_generation_after"].as_u64().unwrap();
+        let expanded_before = result["code"]["reader_generation_before"].as_u64().unwrap();
+        let expanded_after = result["code"]["reader_generation_after"].as_u64().unwrap();
         let status = result["code"]["related_code"]["status"].as_str().unwrap();
         if matches!(
             status,
@@ -129,6 +133,19 @@ async fn pair(server: &CodeIntelligenceServer, scope: &str) -> Value {
                     .is_empty()
             );
             println!("scoped_related_generation_retry={attempt} status={status}");
+            continue;
+        }
+        if direct_before != direct_after
+            || expanded_before != expanded_after
+            || direct_after != expanded_before
+        {
+            println!(
+                "scoped_related_generation_retry={}",
+                json!({"attempt":attempt, "direct_before":direct_before,
+                    "direct_after":direct_after, "expanded_before":expanded_before,
+                    "expanded_after":expanded_after, "direct_warnings":direct["code"]["warnings"],
+                    "expanded_warnings":result["code"]["warnings"]})
+            );
             continue;
         }
         assert_eq!(direct["code"]["items"], result["code"]["items"]);

@@ -1,4 +1,7 @@
 //! Disposable process environment; documents, semantic indexing and recall disabled.
+#[path = "support/ticket_evidence.rs"]
+mod ticket_evidence;
+
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -65,10 +68,7 @@ fn ticket_related_cli_json_text_and_default_compatibility() {
         String::from_utf8_lossy(&enabled.stderr)
     );
     let enabled: Value = serde_json::from_slice(&enabled.stdout).unwrap();
-    assert_eq!(
-        enabled["data"]["code"]["items"],
-        disabled["data"]["code"]["items"]
-    );
+    ticket_evidence::assert_same_dispatch_items(&enabled["data"], &disabled["data"]);
     let related = &enabled["data"]["code"]["related_code"];
     assert_eq!(related["status"], "completed_bounded");
     assert_eq!(related["items"][0]["name"], "timeout_worker");

@@ -380,7 +380,8 @@ impl CollectStage {
                         ));
                     }
                 }
-                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1 => {
+                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
+                | crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV2 => {
                     if let Some(source) = raw_sym.embedding_source.take() {
                         state.retained_source_bytes += source.retained_bytes();
                         state.current_embed_batch.body_candidates.push((
