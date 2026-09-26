@@ -1,0 +1,61 @@
+name: Calendar graph evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/mcp/**'
+      - 'src/indexing/**'
+      - 'src/storage/**'
+      - 'src/parsing/**'
+      - 'tests/calendar_graph_evidence.rs'
+      - 'tests/fixtures/calendar_graph_evidence/**'
+      - 'contributing/retrieval/calendar-graph-evidence/**'
+      - 'contributing/scripts/check-calendar-graph-evidence.sh'
+      - '.github/workflows/calendar-graph-evidence.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: calendar-graph-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+
+jobs:
+  contracts:
+    name: Calendar graph contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+      - name: Archive tested sources
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/calendar-graph-source.tar.gz" HEAD
+      - name: Run deterministic graph contracts and capture provenance
+        run: bash contributing/scripts/check-calendar-graph-evidence.sh 2>&1 | tee "$RUNNER_TEMP/calendar-graph-evidence.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calendar-graph-evidence
+          path: |
+            ${{ runner.temp }}/calendar-graph-evidence.log
+            ${{ runner.temp }}/calendar-graph-source.tar.gz
+          retention-days: 14
+          if-no-files-found: error
