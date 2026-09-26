@@ -105,6 +105,12 @@ impl DocumentIndex {
         self.reader.searcher().generation().generation_id()
     }
 
+    /// Metadata from one pinned reader. Segment IDs and delete opstamps identify
+    /// its stored documents even when an unchanged reload advances generation.
+    pub(crate) fn reader_snapshot(&self) -> tantivy::SearcherGeneration {
+        self.reader.searcher().generation().clone()
+    }
+
     /// Create a new document index
     pub fn new(
         index_path: impl AsRef<Path>,
