@@ -1,0 +1,55 @@
+{
+  "quick_check": "passed",
+  "full_test": "passed",
+  "rust_toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Homebrew)",
+  "rust_tests": {
+    "passed": 2564,
+    "failed": 0,
+    "ignored": 63,
+    "result_groups": 59
+  },
+  "python_contracts": {
+    "retrieval": 27,
+    "semantic_evaluator": 38,
+    "status": "passed"
+  },
+  "cli_smoke": "passed",
+  "documentation_build": "passed",
+  "scratch_stdio_mcp": "passed",
+  "paid_inference_requests": 0,
+  "environment": "Allowlisted test child environment; Cargo network disabled; model cache misses fail offline; installed toolchain retained",
+  "logs": {
+    "quick-check.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/quick-check.txt",
+      "sha256": "dadea0ac2125344de4f39de513573d3a15ad92e718b2cc9ab4dfa0e985b49f96"
+    },
+    "full-test.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/full-test.txt",
+      "sha256": "6c605b246783f8f0b92ce536a1a6437d26a8a6b65f0cdb1ee29abf3d21807a2b"
+    },
+    "evaluator-final.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/evaluator-final.txt",
+      "sha256": "ff019439e8afd9dd8824bbb1aaf903239e2b59f35f6dd9e9c4461ff20ab080ff"
+    },
+    "retrieval-contracts.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/retrieval-contracts.txt",
+      "sha256": "ea7f8806bd588600a072f620c4f66ff36baccf9fa48d281700adfc90f72cf675"
+    },
+    "release-build-final.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/release-build-final.txt",
+      "sha256": "72af05a8745f7f6ef54503578008b48150f96820354b47d9554359d4d358343b"
+    },
+    "ranking-before.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/ranking-before.txt",
+      "sha256": "26b1c71def266a48730f3f206dab1a3a1f52fe5d538cd000cc091c9d76ed1529"
+    },
+    "evaluator-before.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/evaluator-before.txt",
+      "sha256": "e6d0fde6c103ab03631417f327d7a4d37e57f7012f28afb5e85083bc356481f5"
+    },
+    "retrieval-contracts-final.txt": {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/retrieval-contracts-final.txt",
+      "sha256": "6c1a0406038ba684ef2b267cfb27724779f9d17b5c4010401b12dafa9f7560c8"
+    }
+  }
+}

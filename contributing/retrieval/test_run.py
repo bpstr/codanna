@@ -39,6 +39,9 @@ class EvaluatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             config = runner.write_settings(Path(temp), True)
             self.assertEqual(tomllib.loads(config.read_text())['semantic_search']['code_representation'], 'doc_comment')
+        with tempfile.TemporaryDirectory() as temp:
+            config = runner.write_settings(Path(temp), True, 'symbol_body_v1', 'MultilingualE5Small')
+            self.assertEqual(tomllib.loads(config.read_text())['semantic_search']['model'], 'MultilingualE5Small')
 
     def setUp(self):
         self.manifest = json.loads((HERE / 'cases.json').read_text(encoding='utf-8'))

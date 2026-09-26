@@ -284,7 +284,8 @@ def binary(value: str) -> str:
     return str(Path(resolved).resolve())
 
 
-def write_settings(workspace: Path, semantic: bool, code_representation: str = 'doc_comment') -> Path:
+def write_settings(workspace: Path, semantic: bool, code_representation: str = 'doc_comment',
+                   model: str = 'AllMiniLML6V2') -> Path:
     config = workspace / '.codanna/settings.toml'
     config.parent.mkdir(exist_ok=True)
     config.write_text(f'''version = 1
@@ -297,7 +298,7 @@ show_progress = false
 
 [semantic_search]
 enabled = {str(semantic).lower()}
-model = "AllMiniLML6V2"
+model = {json.dumps(model)}
 code_representation = {json.dumps(code_representation)}
 embedding_threads = 2
 
