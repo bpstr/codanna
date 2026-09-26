@@ -278,7 +278,9 @@ def normalize_response(envelope: dict, returncode: int, query: dict,
             # Resolve only the workspace ancestor, preserving the relative
             # spelling so contained_file still rejects source-level symlinks.
             root = workspace.resolve()
-            ancestor = next((parent for parent in absolute.parents
+            # Use the outermost match: an inner `docs/loop -> workspace`
+            # alias or `subdir/..` must remain visible to contained_file.
+            ancestor = next((parent for parent in reversed(absolute.parents)
                              if parent.resolve() == root), None)
             if ancestor is None:
                 fail(f'Foreign result path: {value}')

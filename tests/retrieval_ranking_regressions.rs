@@ -214,6 +214,33 @@ fn lexical_diversity_reaches_other_sources_beyond_a_long_matching_source() {
 }
 
 #[test]
+fn lexical_diversity_keeps_complementary_high_coverage_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = index(
+        temp.path(),
+        &[
+            (
+                "policy.md",
+                "# First\n\nparcel quota first rule.\n\n# Second\n\nparcel quota second rule.\n"
+                    .into(),
+            ),
+            ("a.md", "parcel dispatch".into()),
+            ("b.md", "parcel tracking".into()),
+            ("c.md", "parcel routing".into()),
+            ("d.md", "parcel arrivals".into()),
+        ],
+    );
+    let hits = store.search(query("parcel quota", 5)).unwrap();
+    assert_eq!(hits.len(), 5);
+    assert!(
+        hits[..2]
+            .iter()
+            .all(|hit| hit.source_path.ends_with("policy.md"))
+    );
+    assert_ne!(hits[0].byte_range, hits[1].byte_range);
+}
+
+#[test]
 fn lexical_reranking_covers_full_question_before_repeated_partial_headings() {
     let temp = tempfile::tempdir().unwrap();
     let mut store = index(

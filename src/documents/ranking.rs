@@ -48,10 +48,16 @@ impl LexicalCoverage {
     }
 }
 
-/// Take the best eligible passage from each source before adding more sections.
-/// The caller bounds semantic eligibility by cosine before this selection.
+/// For semantic candidates, take one passage per source before more sections.
+/// The caller bounds their eligibility by cosine before this selection.
+/// Lexical candidates retain the existing per-source quota because partial
+/// term matches have no equivalent relevance floor.
 /// Relax quotas only to fill a sparse result set or a single-document query.
-pub(super) fn diversify(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
+pub(super) fn diversify(
+    results: Vec<SearchResult>,
+    limit: usize,
+    prefer_sources: bool,
+) -> Vec<SearchResult> {
     if limit == 0 {
         return Vec::new();
     }
@@ -67,7 +73,11 @@ pub(super) fn diversify(results: Vec<SearchResult>, limit: usize) -> Vec<SearchR
             }
             let source = (&result.collection, &result.source_path);
             let section = (source, &result.heading_context);
-            let source_limit = if pass == 0 { 1 } else { per_source };
+            let source_limit = if pass == 0 && prefer_sources {
+                1
+            } else {
+                per_source
+            };
             if pass < 3 && sources.get(&source).copied().unwrap_or(0) >= source_limit {
                 continue;
             }

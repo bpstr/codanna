@@ -37,6 +37,13 @@ CASES = [
 ]
 
 
+def code_rows(raw, code, workspace):
+    items = acceptance.envelope_items(json.loads(raw), code)
+    if len(items) > 5:
+        raise ValueError('CLI exceeded the top-five result budget')
+    return acceptance.normalize_rows(items, 'semantic_code', workspace)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codanna', type=Path, required=True)
@@ -95,8 +102,7 @@ def main():
         for text, path, name in CASES:
             raw, code = cmd.call(base + ['mcp', 'semantic_search_docs', f'query:{text}',
                                          'limit:5', '--json'], workspace, allowed=(0, 1))
-            items = acceptance.envelope_items(json.loads(raw), code)
-            rows = acceptance.normalize_rows(items, 'semantic_code', workspace)
+            rows = code_rows(raw, code, workspace)
             rank = next((i for i, row in enumerate(rows, 1)
                          if row['path'] == path and row['name'] == name), None)
             report['results'].append({'query': text, 'expected': [path, name], 'rank': rank,
@@ -106,7 +112,7 @@ def main():
         text = CASES[0][0]
         raw, code = cmd.call(base + ['mcp', 'semantic_search_docs', f'query:{text}',
                                      'limit:5', '--json'], workspace, allowed=(0, 1))
-        rows = acceptance.normalize_rows(acceptance.envelope_items(json.loads(raw), code), 'semantic_code', workspace)
+        rows = code_rows(raw, code, workspace)
         report['force_rebuild_stable'] = [[row['path'], row['name']] for row in rows] == report['results'][0]['returned']
         count = len(CASES)
         report['hit_at_5'] = sum(row['rank'] is not None for row in report['results']) / count

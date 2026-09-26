@@ -236,6 +236,7 @@ class ContractTests(unittest.TestCase):
         envelope['data'][0]['source_path'] = str(self.binary)
         with self.assertRaises(ValueError):
             self.normalize(envelope)
+
         link = self.out / 'workspace/docs/outside.md'
         link.symlink_to(self.binary)
         envelope['data'][0]['source_path'] = str(link)
@@ -244,6 +245,17 @@ class ContractTests(unittest.TestCase):
         (self.out / 'workspace' / self.source).write_text('changed', encoding='utf-8')
         with self.assertRaises(ValueError):
             self.normalize(original)
+
+    def test_absolute_paths_cannot_hide_source_reentry_or_parent_traversal(self):
+        workspace = self.out / 'workspace'
+        (workspace / 'docs/loop').symlink_to(workspace.resolve(), target_is_directory=True)
+        (workspace / 'subdir').mkdir()
+        for path in (workspace / 'docs/loop' / self.source,
+                     workspace / 'subdir/..' / self.source):
+            envelope = self.response()
+            envelope['data'][0]['source_path'] = str(path)
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.normalize(envelope)
 
     def test_workspace_parent_alias_preserves_results_without_allowing_source_symlinks(self):
         alias = self.out.parent / 'alias'

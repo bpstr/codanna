@@ -22,6 +22,14 @@ spec.loader.exec_module(runner)
 
 
 class EvaluatorTests(unittest.TestCase):
+    def test_repository_probe_rejects_results_beyond_top_five(self):
+        spec = importlib.util.spec_from_file_location('repository_probe', HERE / 'qualify-repository.py')
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        envelope = {'status': 'success', 'code': 'OK', 'data': [{}] * 6}
+        with self.assertRaisesRegex(ValueError, 'top-five'):
+            probe.code_rows(json.dumps(envelope), 0, self.workspace)
+
     def test_body_policy_is_explicit_and_default_remains_comment_based(self):
         for policy in ('doc_comment', 'symbol_body_v1'):
             with tempfile.TemporaryDirectory() as temp:
