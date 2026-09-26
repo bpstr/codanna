@@ -552,6 +552,30 @@ impl SimpleSemanticSearch {
         Ok(similarities)
     }
 
+    /// Restrict a pinned query snapshot before scoring and parent-level top-K.
+    pub fn search_with_embedding_and_symbols(
+        &self,
+        query: &[f32],
+        limit: usize,
+        allowed: &std::collections::HashSet<SymbolId>,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        if query.len() != self.dimensions {
+            return Err(SemanticSearchError::EmbeddingError(
+                "query dimension mismatch".into(),
+            ));
+        }
+        let magnitude = vector_magnitude(query);
+        let mut hits = allowed
+            .iter()
+            .filter_map(|id| {
+                self.score_symbol(*id, query, magnitude)
+                    .map(|score| (*id, score))
+            })
+            .collect();
+        retain_top_k(&mut hits, limit);
+        Ok(hits)
+    }
+
     /// Search using a pre-computed query vector with optional language pre-filtering.
     ///
     /// Language filtering is applied before similarity ranking so the result slice
@@ -1053,14 +1077,16 @@ impl SimpleSemanticSearch {
                 None,
                 &input_budget,
             );
-            let identity = if crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
-                .accepts_recorded_identity(metadata.embedding_identity.as_deref())
-            {
-                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1
-                    .bind_identity(identity)
-            } else {
-                identity
-            };
+            let identity = [
+                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV1,
+                crate::symbol_representation::CodeEmbeddingPolicy::SymbolBodyV2,
+            ]
+            .into_iter()
+            .find(|policy| policy.accepts_recorded_identity(metadata.embedding_identity.as_deref()))
+            .map_or_else(
+                || identity.clone(),
+                |policy| policy.bind_identity(identity.clone()),
+            );
             search.validate_embedding_identity(&identity)?;
             search.input_budget = Some(input_budget);
             search.model = Some(Arc::new(Mutex::new(text_model)));
@@ -1072,6 +1098,15 @@ impl SimpleSemanticSearch {
 /// Restricted query surface: snapshots cannot mutate or publish a generation.
 pub(crate) struct SemanticQuery(SimpleSemanticSearch);
 impl SemanticQuery {
+    pub(crate) fn retain_symbols(&mut self, allowed: &std::collections::HashSet<SymbolId>) {
+        Arc::make_mut(&mut self.0.embeddings).retain(|id, _| allowed.contains(id));
+        Arc::make_mut(&mut self.0.language_symbols)
+            .values_mut()
+            .for_each(|ids| Arc::make_mut(ids).retain(|id| allowed.contains(id)));
+    }
+    pub(crate) fn embedding_ids(&self) -> Vec<SymbolId> {
+        self.0.embedding_ids()
+    }
     pub(crate) fn has_local_model(&self) -> bool {
         self.0.has_local_model()
     }

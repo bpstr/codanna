@@ -90,8 +90,9 @@ impl CodeIntelligenceServer {
                 timestamp_info,
             );
 
+            let representation_info = format!("\n  - Recorded source policy: {}\n  - Representation status: {}\n  - Action: {}\n  - Source coverage: {}", semantic.recorded_source_policy.as_deref().unwrap_or("unknown"), semantic.representation_status, semantic.representation_action, semantic.source_coverage);
             let result = format!(
-                "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}\n\nLanguages:{languages_display}{semantic_info}"
+                "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}\n\nLanguages:{languages_display}{semantic_info}{representation_info}"
             );
 
             let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);

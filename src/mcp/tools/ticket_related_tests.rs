@@ -234,3 +234,63 @@ async fn ticket_related_sidecar_preserves_direct_items_and_default_response_shap
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches() {
+    let (_temp, index) = fixture(18, &(2..=18).map(|id| (id, 1)).collect::<Vec<_>>());
+    let storage = index.document_index();
+    let mut owner = index
+        .get_all_symbols()
+        .into_iter()
+        .find(|s| s.id.value() == 2)
+        .unwrap();
+    owner.visibility = crate::Visibility::Public;
+    storage.start_batch().unwrap();
+    storage.index_symbol(&owner, "src/handlers.rs").unwrap();
+    storage.commit_batch().unwrap();
+    let server = CodeIntelligenceServer::new(index);
+    let baseline = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(json!({"query":"requestHandler", "code_limit":1})).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(baseline["code"]["items"][0]["name"], "requestHandler");
+    let first = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(
+                json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    let coverage = &first["code"]["coverage"];
+    assert_eq!(coverage["total_candidates"], 18);
+    assert_eq!(coverage["items"].as_array().unwrap().len(), 10);
+    let next = server.search_ticket_context(Parameters(serde_json::from_value(json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10, "coverage_offset":10, "coverage_snapshot":coverage["snapshot"]})).unwrap())).await.unwrap().structured_content.unwrap();
+    assert_eq!(
+        next["code"]["coverage"]["items"].as_array().unwrap().len(),
+        8
+    );
+    let owner = server
+        .search_ticket_context(Parameters(
+            serde_json::from_value(
+                json!({"query":"requestHandler", "profile":"implementation_owner", "code_limit":1}),
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_ne!(owner["code"]["items"][0]["name"], "requestHandler");
+    assert_eq!(
+        owner["code"]["items"][0]["relationships"][0]["direction"],
+        "incoming"
+    );
+}

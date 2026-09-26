@@ -131,10 +131,7 @@ fn assert_body_related_in_process(workspace: &Workspace, direct: &Value) {
                 assert_ne!(response.is_error, Some(true));
                 let result = response.structured_content.unwrap();
                 assert_eq!(result["code"]["items"], direct["code"]["items"]);
-                assert_eq!(
-                    result["code"]["semantic_status"],
-                    "not_run_scoped_semantic_unsupported"
-                );
+                assert_eq!(result["code"]["semantic_status"], "unavailable");
                 let related = &result["code"]["related_code"];
                 let status = related["status"].as_str().unwrap();
                 if matches!(
@@ -195,11 +192,11 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
             "include_semantic_code": true, "code_path_prefix": "src/lib.rs"
         }),
     );
-    assert_eq!(scoped["code"]["items"], scoped_direct["code"]["items"]);
     assert_eq!(
-        scoped["code"]["semantic_status"],
-        "not_run_scoped_semantic_unsupported"
+        scoped["code"]["items"][0]["symbol_id"],
+        scoped_direct["code"]["items"][0]["symbol_id"]
     );
+    assert_eq!(scoped["code"]["semantic_status"], "completed_bounded");
     let related = &scoped["code"]["related_code"];
     match related["status"].as_str().unwrap() {
         "completed_bounded" => assert_eq!(related["items"][0]["name"], "beta_worker"),
@@ -212,10 +209,11 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
         }
         status => panic!("Unexpected scoped related status: {status}"),
     }
+    assert_query_only(&endpoint);
     assert_body_related_in_process(&workspace, &scoped_direct);
     assert!(
         endpoint.take_inputs().is_empty(),
-        "unsupported scoped semantics contacted a provider"
+        "disabled in-process backend contacted provider"
     );
 
     let missing = ticket(
@@ -232,7 +230,11 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
             .unwrap()
             .is_empty()
     );
-    assert!(endpoint.take_inputs().is_empty());
+    assert_eq!(
+        endpoint.take_inputs(),
+        vec!["probe".to_string()],
+        "empty scope may prepare backend but must not embed a query"
+    );
 
     let semantic = ticket(
         &workspace,

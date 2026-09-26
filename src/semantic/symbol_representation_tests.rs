@@ -188,3 +188,49 @@ fn symbol_representation_identity_changes_reject_legacy_and_changed_budgets() {
             .accepts_recorded_identity(search.metadata().unwrap().embedding_identity.as_deref())
     );
 }
+
+#[test]
+fn evidence_v1_scoped_prefilter_recovers_parent_below_global_top_k() {
+    use std::collections::HashSet;
+    let mut search = fixture();
+    for id in 1..=40 {
+        put(&mut search, id, &[[1.0, 0.0]], "rust");
+    }
+    put(&mut search, 41, &[[0.8, 0.6], [0.9, 0.4]], "rust");
+    let desired = SymbolId::new(41).unwrap();
+    let global = search.search_with_embedding(&[1.0, 0.0], 32, -1.0).unwrap();
+    assert!(
+        !global.iter().any(|(id, _)| *id == desired),
+        "baseline post-filter misses target"
+    );
+    let allowed = HashSet::from([desired]);
+    let scoped = search
+        .search_with_embedding_and_symbols(&[1.0, 0.0], 1, &allowed)
+        .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].0, desired);
+    let mut snapshot = search.query_snapshot();
+    snapshot.retain_symbols(&allowed);
+    assert_eq!(
+        snapshot
+            .search_with_embedding_and_language(&[1.0, 0.0], 1, Some("rust"))
+            .unwrap(),
+        scoped
+    );
+    assert_eq!(
+        search.embedding_count(),
+        41,
+        "query filtering never mutates live vectors"
+    );
+    assert!(
+        search
+            .search_with_embedding_and_symbols(&[1.0], 1, &allowed)
+            .is_err()
+    );
+    assert!(
+        search
+            .search_with_embedding_and_symbols(&[1.0, 0.0], 1, &HashSet::new())
+            .unwrap()
+            .is_empty()
+    );
+}

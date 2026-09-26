@@ -250,7 +250,9 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
         status: "complete",
         scope: match policy {
             CodeEmbeddingPolicy::DocComment => "current_source_doc_comment_inputs",
-            CodeEmbeddingPolicy::SymbolBodyV1 => "current_source_symbol_body_inputs",
+            CodeEmbeddingPolicy::SymbolBodyV1 | CodeEmbeddingPolicy::SymbolBodyV2 => {
+                "current_source_symbol_body_inputs"
+            }
         },
         code_representation: policy,
         source_input_policy: policy.source_policy(),
@@ -296,7 +298,7 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
     // A disabled backend still permits an inventory of potential source inputs.
     // Enable only ParseStage's capture switch in an isolated settings copy. No
     // IndexFacade/backend is constructed, and the caller's config is not changed.
-    let parsing_settings = if policy == CodeEmbeddingPolicy::SymbolBodyV1
+    let parsing_settings = if policy != CodeEmbeddingPolicy::DocComment
         && !settings.semantic_search.enabled
     {
         let mut parsing = (*settings).clone();
@@ -337,7 +339,7 @@ pub fn inspect(settings: Settings, requested_roots: &[PathBuf]) -> IndexResult<R
                         record_input(&mut report, &lookup, &mut unique, &input)?;
                     }
                 }
-                CodeEmbeddingPolicy::SymbolBodyV1 => {
+                CodeEmbeddingPolicy::SymbolBodyV1 | CodeEmbeddingPolicy::SymbolBodyV2 => {
                     let Some(source) = symbol.embedding_source else {
                         report.missing_body_sources += 1;
                         report.symbols_without_embedding_input += 1;

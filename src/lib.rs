@@ -17,6 +17,7 @@ pub mod git;
 pub mod indexing;
 pub mod init;
 pub mod io;
+pub mod knowledge;
 pub mod logging;
 pub mod mcp;
 pub mod memory;
@@ -28,6 +29,7 @@ pub mod rebuild_plan;
 #[cfg(test)]
 mod rebuild_plan_pressure;
 pub mod relationship;
+pub mod retrieval;
 pub mod retrieve;
 pub(crate) mod runtime;
 pub mod semantic;
