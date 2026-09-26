@@ -1,0 +1,72 @@
+name: Offline index plan contracts
+on:
+  pull_request:
+    branches: [main, fix/semantic-rebuild-reuse]
+    paths:
+      - 'src/lib.rs'
+      - 'src/rebuild_plan*.rs'
+      - 'src/bin/codanna-index-plan.rs'
+      - 'src/embedding_cache.rs'
+      - 'src/embedding_input.rs'
+      - 'src/config/**'
+      - 'src/indexing/**'
+      - 'src/parsing/**'
+      - 'tests/index_plan_cli.rs'
+      - '.github/workflows/index-plan-contracts.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: index-plan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Refresh native linker artifacts
+        run: cargo clean -p ort-sys
+      - name: Exercise offline plan and neighboring rebuild contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            rustc --version
+            sha256sum src/rebuild_plan.rs src/rebuild_plan_pressure.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
+            cargo test --locked --lib rebuild_plan_pressure -- --nocapture
+            cargo test --locked --test index_plan_cli --test semantic_rebuild_reuse -- --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/index-plan-contracts.log"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check strict lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Check standalone planner without default features
+        run: cargo check --locked --no-default-features --bin codanna-index-plan
+      - name: Exercise CLI help without workspace initialization
+        run: ./target/debug/codanna-index-plan --help
+      - name: Retain tested sources
+        if: always()
+        run: tar czf "$RUNNER_TEMP/index-plan-sources.tar.gz" src/lib.rs src/rebuild_plan.rs src/rebuild_plan_pressure.rs src/bin/codanna-index-plan.rs tests/index_plan_cli.rs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: index-plan-contracts
+          path: |
+            ${{ runner.temp }}/index-plan-contracts.log
+            ${{ runner.temp }}/index-plan-sources.tar.gz
+          retention-days: 14
+          if-no-files-found: error
