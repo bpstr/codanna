@@ -1911,9 +1911,19 @@ impl DocumentStore {
                 }
             }
         }
-        // Release Tantivy's writer so another process can advance the store.
+        // Finish background merges before ending serialized publication and
+        // releasing its writer. The next transaction must be able to acquire
+        // a fresh writer immediately.
         if let Ok(mut guard) = self.writer.lock() {
-            guard.take();
+            if let Some(writer) = guard.take() {
+                if let Err(error) = writer.wait_merging_threads() {
+                    if result.is_ok() {
+                        result = Err(error.into());
+                    } else {
+                        tracing::error!(target: "documents", %error, "document writer shutdown failed");
+                    }
+                }
+            }
         }
         if recovered {
             generation::collect_obsolete(
