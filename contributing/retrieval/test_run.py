@@ -22,6 +22,27 @@ spec.loader.exec_module(runner)
 
 
 class EvaluatorTests(unittest.TestCase):
+    def test_repository_probe_rejects_results_beyond_top_five(self):
+        spec = importlib.util.spec_from_file_location('repository_probe', HERE / 'qualify-repository.py')
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        envelope = {'status': 'success', 'code': 'OK', 'data': [{}] * 6}
+        with self.assertRaisesRegex(ValueError, 'top-five'):
+            probe.code_rows(json.dumps(envelope), 0, self.workspace)
+
+    def test_body_policy_is_explicit_and_default_remains_comment_based(self):
+        for policy in ('doc_comment', 'symbol_body_v1'):
+            with tempfile.TemporaryDirectory() as temp:
+                config = runner.write_settings(Path(temp), True, policy)
+                settings = tomllib.loads(config.read_text())
+                self.assertEqual(settings['semantic_search']['code_representation'], policy)
+        with tempfile.TemporaryDirectory() as temp:
+            config = runner.write_settings(Path(temp), True)
+            self.assertEqual(tomllib.loads(config.read_text())['semantic_search']['code_representation'], 'doc_comment')
+        with tempfile.TemporaryDirectory() as temp:
+            config = runner.write_settings(Path(temp), True, 'symbol_body_v1', 'MultilingualE5Small')
+            self.assertEqual(tomllib.loads(config.read_text())['semantic_search']['model'], 'MultilingualE5Small')
+
     def setUp(self):
         self.manifest = json.loads((HERE / 'cases.json').read_text(encoding='utf-8'))
         self.workspace = HERE / 'workspace'

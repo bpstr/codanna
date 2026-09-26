@@ -214,6 +214,33 @@ fn lexical_diversity_reaches_other_sources_beyond_a_long_matching_source() {
 }
 
 #[test]
+fn lexical_diversity_keeps_complementary_high_coverage_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = index(
+        temp.path(),
+        &[
+            (
+                "policy.md",
+                "# First\n\nparcel quota first rule.\n\n# Second\n\nparcel quota second rule.\n"
+                    .into(),
+            ),
+            ("a.md", "parcel dispatch".into()),
+            ("b.md", "parcel tracking".into()),
+            ("c.md", "parcel routing".into()),
+            ("d.md", "parcel arrivals".into()),
+        ],
+    );
+    let hits = store.search(query("parcel quota", 5)).unwrap();
+    assert_eq!(hits.len(), 5);
+    assert!(
+        hits[..2]
+            .iter()
+            .all(|hit| hit.source_path.ends_with("policy.md"))
+    );
+    assert_ne!(hits[0].byte_range, hits[1].byte_range);
+}
+
+#[test]
 fn lexical_reranking_covers_full_question_before_repeated_partial_headings() {
     let temp = tempfile::tempdir().unwrap();
     let mut store = index(
@@ -477,6 +504,36 @@ fn semantic_diversity_recovers_close_positive_sources_without_weak_fill() {
     assert!(hits.iter().all(|hit| hit.similarity == 1.0));
     assert_eq!(store.search(query("north", 1)).unwrap().len(), 1);
     assert!(store.search(query("north", 0)).unwrap().is_empty());
+}
+
+#[test]
+fn semantic_diversity_prefers_new_sources_before_second_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = enable_fixed_embeddings(index(
+        temp.path(),
+        &[
+            (
+                "strong.md",
+                "# First\n\nnorth first section.\n\n# Second\n\nnorth second section.\n".into(),
+            ),
+            ("a.md", "complement evidence a".into()),
+            ("b.md", "complement evidence b".into()),
+            ("c.md", "operations evidence c".into()),
+            ("d.md", "operations evidence d".into()),
+            ("weak.md", "weak evidence".into()),
+        ],
+    ));
+    let hits = store.search(query("north", 5)).unwrap();
+    assert_eq!(hits.len(), 5);
+    assert_eq!(hits[0].similarity, 1.0);
+    assert_eq!(
+        hits.iter()
+            .map(|hit| &hit.source_path)
+            .collect::<HashSet<_>>()
+            .len(),
+        5
+    );
+    assert!(hits.iter().all(|hit| hit.similarity >= 0.9));
 }
 
 #[test]

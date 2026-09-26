@@ -284,7 +284,8 @@ def binary(value: str) -> str:
     return str(Path(resolved).resolve())
 
 
-def write_settings(workspace: Path, semantic: bool) -> Path:
+def write_settings(workspace: Path, semantic: bool, code_representation: str = 'doc_comment',
+                   model: str = 'AllMiniLML6V2') -> Path:
     config = workspace / '.codanna/settings.toml'
     config.parent.mkdir(exist_ok=True)
     config.write_text(f'''version = 1
@@ -297,7 +298,8 @@ show_progress = false
 
 [semantic_search]
 enabled = {str(semantic).lower()}
-model = "AllMiniLML6V2"
+model = {json.dumps(model)}
+code_representation = {json.dumps(code_representation)}
 embedding_threads = 2
 
 [documents]
@@ -380,6 +382,8 @@ def main() -> int:
     parser.add_argument('--profile', choices=('structural', 'lexical', 'semantic'), default='structural')
     parser.add_argument('--codanna', default='codanna')
     parser.add_argument('--knowledge', default='codanna-knowledge')
+    parser.add_argument('--code-representation', choices=('doc_comment', 'symbol_body_v1'),
+                        default='doc_comment', help='Explicit semantic code input policy; defaults to rc2 behavior')
     parser.add_argument('--out', type=Path, help='New output directory outside this checkout; never overwritten')
     args = parser.parse_args()
     manifest = json.loads((HERE / 'cases.json').read_text(encoding='utf-8'))
@@ -404,7 +408,8 @@ def main() -> int:
         'cases_sha256': digest(HERE / 'cases.json'), 'binary_sha256': digest(Path(codanna)),
         'knowledge_binary_sha256': digest(Path(knowledge)), 'manual_pending': manifest['manual_cases'],
         'full_qualification': False, 'commands': cmd.history,
-        'inspected_main': manifest['inspected_main'], 'model': 'AllMiniLML6V2' if args.profile == 'semantic' else None}
+        'inspected_main': manifest['inspected_main'], 'model': 'AllMiniLML6V2' if args.profile == 'semantic' else None,
+        'code_representation': args.code_representation if args.profile == 'semantic' else None}
     try:
         for executable, key in ((codanna, 'codanna_version'), (knowledge, 'knowledge_version')):
             raw, _ = cmd.call([executable, '--version'], out)
@@ -413,7 +418,8 @@ def main() -> int:
         for repo, fixture in (('primary', 'workspace'), ('peer', 'peer-workspace')):
             workspace = out / repo
             shutil.copytree(HERE / fixture, workspace, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-            config = write_settings(workspace, args.profile == 'semantic' and repo == 'primary')
+            config = write_settings(workspace, args.profile == 'semantic' and repo == 'primary',
+                                    args.code_representation)
             configs[repo] = config
             paths = [path for path in ('src', 'clients', 'tests') if (workspace / path).is_dir()]
             cmd.call([codanna, '--config', str(config), 'index', *paths, '--threads', '2', '--no-progress'], workspace, timeout=300)

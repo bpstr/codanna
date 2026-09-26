@@ -1,0 +1,846 @@
+{
+  "removed": [
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_owner_columns-2apbscgoacyrd",
+      "files": 72,
+      "logical_bytes": 11687964
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/profiles_tests-3hm9vkifja68x",
+      "files": 56,
+      "logical_bytes": 6975553
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_rebuild_reuse-3n7bstf4cmpvu",
+      "files": 124,
+      "logical_bytes": 30393889
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_mcp-3f7v0utswo30b",
+      "files": 8,
+      "logical_bytes": 18680855
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/callback_references-1cjvdkbyarq23",
+      "files": 37,
+      "logical_bytes": 8093597
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/calendar_graph_evidence-3qumuuxkqqw56",
+      "files": 8,
+      "logical_bytes": 9175570
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/index_plan_cli-2k0yvvdq6smys",
+      "files": 194,
+      "logical_bytes": 19331580
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-3awwp08smenhy",
+      "files": 8,
+      "logical_bytes": 14517902
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_auto-3lgt1j8d735nl",
+      "files": 8,
+      "logical_bytes": 3345034
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parser_census-18lmeaklhtvz9",
+      "files": 39,
+      "logical_bytes": 8250284
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-2j2d4dkpt0st7",
+      "files": 4,
+      "logical_bytes": 5772528
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/simple_progress_demo-0xvhroeo55xax",
+      "files": 8,
+      "logical_bytes": 3217723
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_diagnostics_regressions-1hqe79bwf63ma",
+      "files": 39,
+      "logical_bytes": 6859379
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_fallback_contracts-1gdtypbity1tp",
+      "files": 53,
+      "logical_bytes": 11895708
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_path_scope-0zz4z5v3b6zdr",
+      "files": 61,
+      "logical_bytes": 13669692
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_relevance_ablation-1jzrra2bbw0fo",
+      "files": 89,
+      "logical_bytes": 14474429
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_backend_regressions-1gg2w0hsq3xqa",
+      "files": 8,
+      "logical_bytes": 11740999
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/unified_output_bench-2r5vpb5tzm3uy",
+      "files": 8,
+      "logical_bytes": 5276352
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-10erisei3ldyh",
+      "files": 5,
+      "logical_bytes": 156473707
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-07i3v6rbzsu0w",
+      "files": 5,
+      "logical_bytes": 143431450
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_bootstrap-3q75bsg7ewsra",
+      "files": 8,
+      "logical_bytes": 3492032
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-0tt0dxmdh4uej",
+      "files": 8,
+      "logical_bytes": 12857710
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_owner_columns-0u42bc8y1tacx",
+      "files": 8,
+      "logical_bytes": 7012219
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/simple_progress_demo-03fj9u9ui3lkd",
+      "files": 49,
+      "logical_bytes": 7256178
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-37jx2mlfmtv4x",
+      "files": 207,
+      "logical_bytes": 65588262
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_body_inputs-29pf6m1300iju",
+      "files": 8,
+      "logical_bytes": 8122733
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/build_script_build-3eipbbyxc214p",
+      "files": 69,
+      "logical_bytes": 1592363
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-03s2npfsawtx1",
+      "files": 8,
+      "logical_bytes": 23070233
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-37yhbi25l5lpr",
+      "files": 94,
+      "logical_bytes": 16303663
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_loop_bindings-32btfnf3zsyjh",
+      "files": 8,
+      "logical_bytes": 7672680
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_recall-1upylf1oul6qf",
+      "files": 260,
+      "logical_bytes": 74582015
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/knowledge_source_evidence_regressions-0pxbwm8oeko7l",
+      "files": 196,
+      "logical_bytes": 34243040
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/watcher_startup-13w05y75v8cru",
+      "files": 108,
+      "logical_bytes": 9693784
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/tui_tests-1c94n9m0vgngv",
+      "files": 8,
+      "logical_bytes": 2344033
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/upstream_regressions-0szw7xw6hmn6h",
+      "files": 96,
+      "logical_bytes": 12482101
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-2373qe2mn49xw",
+      "files": 414,
+      "logical_bytes": 129663416
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/scoped_ticket_related-1af2yr2ftmx0v",
+      "files": 8,
+      "logical_bytes": 9381053
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/context_limit_diagnostics-3tubyp1ed5ug8",
+      "files": 8,
+      "logical_bytes": 8492591
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_ablation-2s2335ytdg2ou",
+      "files": 8,
+      "logical_bytes": 10597744
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parser_semantics_regressions-2w8nk48lzf301",
+      "files": 8,
+      "logical_bytes": 1874534
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/ticket_related_relevance-247l67902ro4w",
+      "files": 57,
+      "logical_bytes": 12552192
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parsers_tests-27xodam1mjy5b",
+      "files": 260,
+      "logical_bytes": 39736455
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parser_census-1osk3zzjua75p",
+      "files": 8,
+      "logical_bytes": 6182459
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-0y0og62oc5kzg",
+      "files": 47,
+      "logical_bytes": 8156655
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_reload_retention-2k7tieavx26pj",
+      "files": 8,
+      "logical_bytes": 6370781
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-1dkdnbep0pujq",
+      "files": 8,
+      "logical_bytes": 26597864
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/exploration_tests-1oy5xw1hxw3je",
+      "files": 134,
+      "logical_bytes": 17628479
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-13h684di7gb1n",
+      "files": 520,
+      "logical_bytes": 242527715
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_scope_cli-3tnr6dfe4x1n4",
+      "files": 73,
+      "logical_bytes": 4091953
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_recall-21dltcrxnx48q",
+      "files": 8,
+      "logical_bytes": 3482791
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_task_relevance-0nzh0ib6kmsz4",
+      "files": 8,
+      "logical_bytes": 6644268
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/retrieval_ranking_regressions-3d7coscb5xzy3",
+      "files": 176,
+      "logical_bytes": 45938568
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_body_inputs-2ts0we7h363ab",
+      "files": 44,
+      "logical_bytes": 8686030
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_rebuild_reuse-353ql4s2m6xcb",
+      "files": 8,
+      "logical_bytes": 12994026
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/watcher_startup-11orbg3m1fh3t",
+      "files": 8,
+      "logical_bytes": 1469767
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parsers_tests-25s55ftig1qyr",
+      "files": 8,
+      "logical_bytes": 25289130
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/language_semantics_regressions-3tzl7h8mkzxfu",
+      "files": 59,
+      "logical_bytes": 10727835
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/resolution_precision-19mlalc20xnr1",
+      "files": 8,
+      "logical_bytes": 5419319
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-1ggh5cb1h10mb",
+      "files": 40,
+      "logical_bytes": 12277981
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/go_parser_bench-1l68by32rk030",
+      "files": 8,
+      "logical_bytes": 5082436
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/retrieval_ranking_regressions-1ipgz0yftg7c3",
+      "files": 352,
+      "logical_bytes": 90395086
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/exploration_tests-2m1nb0i7ugxrb",
+      "files": 8,
+      "logical_bytes": 7595615
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_auto-2y0d8fyu59bst",
+      "files": 31,
+      "logical_bytes": 7967650
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/profiles_tests-3ibtvnvaytm0v",
+      "files": 8,
+      "logical_bytes": 3453626
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-1u3u1h6h185m2",
+      "files": 261,
+      "logical_bytes": 921856856
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-1hrdfs7vu1qsz",
+      "files": 8,
+      "logical_bytes": 12146427
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_holdout-1zkq1zy45pssn",
+      "files": 8,
+      "logical_bytes": 10023704
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_reload_retention-2gdf2zmyewatb",
+      "files": 48,
+      "logical_bytes": 8494513
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_impact_regressions-0njo6ks5dqu1a",
+      "files": 96,
+      "logical_bytes": 17022969
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_live-1ak13kp3vvcgl",
+      "files": 8,
+      "logical_bytes": 4186499
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/build_script_build-34k9n9sgxnnyt",
+      "files": 69,
+      "logical_bytes": 1592363
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-0rv40u92jv6ro",
+      "files": 4,
+      "logical_bytes": 11332871
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/web_export_regressions-1wgyycqs89en8",
+      "files": 8,
+      "logical_bytes": 8476073
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/web_export_regressions-0gphavrz7dfj0",
+      "files": 66,
+      "logical_bytes": 11289123
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/python_dispatch_regressions-3v5i3za9471jn",
+      "files": 47,
+      "logical_bytes": 8345314
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/integration_tests-392xyoijmgpuw",
+      "files": 8,
+      "logical_bytes": 25089573
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_runtime_holdout-34r3yh5b2d4bf",
+      "files": 8,
+      "logical_bytes": 9223170
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_diagnostics_regressions-2k4nh691nrzoc",
+      "files": 8,
+      "logical_bytes": 4776071
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-00c1xv16mtpkq",
+      "files": 260,
+      "logical_bytes": 66829930
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/code_dimension_contract-1vfu1xrslzh5u",
+      "files": 89,
+      "logical_bytes": 12793061
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-11lve2y0a2cg5",
+      "files": 135,
+      "logical_bytes": 14514541
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-0o4sv2amfljq4",
+      "files": 8,
+      "logical_bytes": 7077516
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_relevance_ablation-2b96ppn6g6fzf",
+      "files": 8,
+      "logical_bytes": 9153359
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/index_lifecycle_regressions-0ecu81yb1v9eu",
+      "files": 62,
+      "logical_bytes": 12381464
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-1qbiqxprad6o8",
+      "files": 197,
+      "logical_bytes": 32391761
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-2iq6xqud0e91s",
+      "files": 4,
+      "logical_bytes": 12730172
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-0mrk10jhjx2f2",
+      "files": 8,
+      "logical_bytes": 27307259
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_backend_regressions-3j8u5pd5lrbhy",
+      "files": 132,
+      "logical_bytes": 19364523
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-13ux8ebtrjdab",
+      "files": 8,
+      "logical_bytes": 365432430
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-2dtdy5q1sur0d",
+      "files": 8,
+      "logical_bytes": 24625796
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-0b95o7edx8qbn",
+      "files": 8,
+      "logical_bytes": 14779682
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-2hstju5bmsovg",
+      "files": 4,
+      "logical_bytes": 3110684
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/parser_semantics_regressions-29wd7q31p51g9",
+      "files": 26,
+      "logical_bytes": 4700070
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/ticket_related_cli-0f5nae34i7bui",
+      "files": 77,
+      "logical_bytes": 4121788
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/build_script_build-2520bkn86880y",
+      "files": 69,
+      "logical_bytes": 1592359
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_regressions-35l1rmwgxil3q",
+      "files": 61,
+      "logical_bytes": 12533349
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/semantic_fallback_contracts-3p5cbq5nol3o4",
+      "files": 8,
+      "logical_bytes": 4009792
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-0v3fg3la5vfy7",
+      "files": 198,
+      "logical_bytes": 68949315
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/adversarial_regressions-1sjkeasrunuut",
+      "files": 8,
+      "logical_bytes": 13641984
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_runtime_holdout-2xawzrde33jcz",
+      "files": 31,
+      "logical_bytes": 9896671
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/build_script_build-1ae3jlohwiclc",
+      "files": 69,
+      "logical_bytes": 1592359
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/upstream_regressions-0u6fqphhuefm6",
+      "files": 8,
+      "logical_bytes": 8546365
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/ticket_related_relevance-1ouzymh1jn7kz",
+      "files": 8,
+      "logical_bytes": 8956367
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/body_index_plan_cli-2vqe08hgjbqyf",
+      "files": 109,
+      "logical_bytes": 6696002
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_regressions-1ed5vry7i10lc",
+      "files": 8,
+      "logical_bytes": 7765648
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/dump_edges-2ma0d6dlvy1t3",
+      "files": 8,
+      "logical_bytes": 4830300
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-0sjdcoeqkqdz0",
+      "files": 9,
+      "logical_bytes": 3410724
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/scoped_search_snapshots-1egq5aaa5t5oh",
+      "files": 8,
+      "logical_bytes": 5737138
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/repository_task_relevance-1njyzrd8gkh7r",
+      "files": 43,
+      "logical_bytes": 9107352
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_recall-1ofbeovhszdj4",
+      "files": 190,
+      "logical_bytes": 61587622
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-1035pbduji2pg",
+      "files": 260,
+      "logical_bytes": 1061979600
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/cli_tests-0kpsbnqlho88e",
+      "files": 8,
+      "logical_bytes": 15276562
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_index_plan-0yzb2g4zsrk89",
+      "files": 8,
+      "logical_bytes": 7120262
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/knowledge_source_evidence_regressions-3qpura5zy9scx",
+      "files": 8,
+      "logical_bytes": 11327626
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_cli-1s9ixn9pnxmk3",
+      "files": 88,
+      "logical_bytes": 4879597
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_scope_cli-1tza17is8ylvr",
+      "files": 8,
+      "logical_bytes": 1237595
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/kotlin_parser_bench-3f7d5qx03ac4q",
+      "files": 8,
+      "logical_bytes": 5274926
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/integration_tests-07m8t998q7cbb",
+      "files": 260,
+      "logical_bytes": 46852004
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/index_plan_cli-1dr97gzbnck37",
+      "files": 8,
+      "logical_bytes": 3777239
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/tui_tests-2hex8a6ipqv8l",
+      "files": 22,
+      "logical_bytes": 4252342
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/adversarial_regressions-15d6ft5grp0yn",
+      "files": 130,
+      "logical_bytes": 23588449
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_cli-0ce0tzwyy1nxn",
+      "files": 8,
+      "logical_bytes": 1444622
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_bootstrap-12p5v3g3wc9vm",
+      "files": 260,
+      "logical_bytes": 73990958
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-37ll8e428kk2s",
+      "files": 396,
+      "logical_bytes": 136475055
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_live-20552b8wcojtl",
+      "files": 260,
+      "logical_bytes": 74789920
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/dump_edges-2rhfps9ubfmwk",
+      "files": 52,
+      "logical_bytes": 10001787
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/build_script_build-2arzde5sc3mkj",
+      "files": 69,
+      "logical_bytes": 1603586
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/context_limit_diagnostics-39n4dh3qvom0y",
+      "files": 56,
+      "logical_bytes": 13221386
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/scoped_search_snapshots-13ysn59zref7e",
+      "files": 42,
+      "logical_bytes": 7982618
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_ablation-38c2rlms75ct5",
+      "files": 81,
+      "logical_bytes": 14660816
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/index_lifecycle_regressions-1b8smsvysh17i",
+      "files": 8,
+      "logical_bytes": 6722210
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/pipeline_metrics_demo-1i1ro5kaw88ke",
+      "files": 8,
+      "logical_bytes": 2421002
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_embedding_regressions-2gwkrcuga9ddf",
+      "files": 48,
+      "logical_bytes": 9468145
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/vector_storage_batch-0rafgpbohrc20",
+      "files": 31,
+      "logical_bytes": 5795973
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_loop_bindings-37kpbhzhuvo2w",
+      "files": 63,
+      "logical_bytes": 10720232
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/language_semantics_regressions-32r4qzugkgz4c",
+      "files": 8,
+      "logical_bytes": 6182008
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_ranking_holdout-0fe1zn22hjpm7",
+      "files": 67,
+      "logical_bytes": 12648066
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/body_index_plan_cli-28ulmugm22zn7",
+      "files": 8,
+      "logical_bytes": 2386980
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/pipeline_metrics_demo-0ar1knufotayd",
+      "files": 32,
+      "logical_bytes": 6858712
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-1b56p4ushlmr3",
+      "files": 10,
+      "logical_bytes": 326670462
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/jsx_impact_regressions-25k2rwozseb6v",
+      "files": 8,
+      "logical_bytes": 8895866
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/callback_references-3ne2mv7iq5cb9",
+      "files": 8,
+      "logical_bytes": 5973935
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/resolution_precision-3vamwulv0hvvq",
+      "files": 97,
+      "logical_bytes": 13138266
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna-1xlgwvcats0yq",
+      "files": 522,
+      "logical_bytes": 1822674547
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/document_embedding_regressions-0zmtuel8a8fxt",
+      "files": 8,
+      "logical_bytes": 7491444
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/calendar_graph_evidence-3jo6hmjpjrxd1",
+      "files": 74,
+      "logical_bytes": 14203602
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/vector_storage_batch-3uj3fn1w3swku",
+      "files": 8,
+      "logical_bytes": 3681758
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-3qp20x58r79gr",
+      "files": 270,
+      "logical_bytes": 28624534
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_manifests-0h283oiqv1m3b",
+      "files": 4,
+      "logical_bytes": 5940862
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/code_dimension_contract-2pa844kx8rc3a",
+      "files": 8,
+      "logical_bytes": 9552077
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/ticket_related_cli-3ss5sgda5q7ht",
+      "files": 8,
+      "logical_bytes": 1044852
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/python_dispatch_regressions-2ut8iek7srrub",
+      "files": 8,
+      "logical_bytes": 5771350
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/workspace_mcp-3tcr0dgch4z7k",
+      "files": 202,
+      "logical_bytes": 77845281
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/scoped_ticket_related-0m8z7cimk63y2",
+      "files": 66,
+      "logical_bytes": 13072670
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/cli_tests-19n60fu3s10s5",
+      "files": 147,
+      "logical_bytes": 22511390
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/codanna_knowledge-2v5484wcupgcs",
+      "files": 260,
+      "logical_bytes": 123539950
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/retrieval_ranking_regressions-2y4gyafrngl9d",
+      "files": 8,
+      "logical_bytes": 28630481
+    },
+    {
+      "path": "/Users/bpstr/Github/codanna/target/debug/incremental/symbol_path_scope-01gbpmydqwpv2",
+      "files": 8,
+      "logical_bytes": 8400366
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/baseline/semantic-default/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/baseline/semantic-body/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/candidate/semantic-default/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/candidate/semantic-body/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/repository/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/repository-measured/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 91102109
+    },
+    {
+      "path": "/Users/bpstr/codanna-rc3-quality-20260926/repository-e5/home/.codanna/models",
+      "files": 6,
+      "logical_bytes": 487352545
+    }
+  ],
+  "logical_bytes_unique_inodes": 8016590419,
+  "allocated_bytes_unique_inodes": 8047169536,
+  "free_bytes_before": 14144376832,
+  "free_bytes_after": 19748102144,
+  "observed_free_delta": 5603725312,
+  "note": "Free-space delta can include concurrent system activity. Only session-born incremental caches and explicit inactive duplicate model copies were removed. Raw reports, indexes, graded model snapshots, canonical downloaded E5 cache, and release binaries retained.",
+  "debug_file_cleanup": {
+    "files_removed": 9621,
+    "manifest_path": "/Users/bpstr/codanna-rc3-quality-20260926/cleanup-debug-files.json",
+    "manifest_sha256": "6194c5fa92472b1d84072fb309663520cc0364f0c65254ce7990afabd6747045",
+    "logical_bytes_unique_inodes": 10155699654,
+    "allocated_bytes_unique_inodes": 10172497920,
+    "free_bytes_before": 21771653120,
+    "free_bytes_after": 31483625472,
+    "observed_free_delta": 9711972352,
+    "scope": "Only direct files in target/debug and target/debug/deps born during this session, after no open files remained; no pre-existing files removed. Exact tested release binaries retained in evidence bin/."
+  }
+}

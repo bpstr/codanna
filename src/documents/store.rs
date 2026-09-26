@@ -2424,7 +2424,11 @@ impl DocumentStore {
                     .then_with(|| a.chunk_id.get().cmp(&b.chunk_id.get()))
             });
         }
-        Ok(super::ranking::diversify(results, query.limit))
+        Ok(super::ranking::diversify(
+            results,
+            query.limit,
+            self.embedding_generator.is_some(),
+        ))
     }
 
     fn load_state(path: &Path) -> StoreResult<PersistedState> {
