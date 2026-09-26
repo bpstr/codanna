@@ -510,22 +510,25 @@ mod tests {
 
     #[test]
     fn test_discover_respects_gitignore() {
-        let (sender, receiver) = bounded(1000);
-
-        let stage = DiscoverStage::new(".", 4);
-        let _count = stage.run(sender);
-
-        let paths: Vec<PathBuf> = receiver.iter().collect();
-
-        // Should not include target/ directory contents
-        for path in &paths {
-            let path_str = path.to_string_lossy();
-            assert!(
-                !path_str.contains("target/debug") && !path_str.contains("target/release"),
-                "Should not include target/ contents: {}",
-                path.display()
-            );
+        // A fixed workspace keeps this test independent of repository growth.
+        // Drain concurrently: discovery sends through a bounded channel.
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        for directory in ["src", "target/debug", "target/release"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+            fs::write(root.join(directory).join("fixture.rs"), "fn fixture() {}\n").unwrap();
         }
+        let (sender, receiver) = bounded(1);
+        let stage = DiscoverStage::new(&root, 4);
+        let (count, paths) = std::thread::scope(|scope| {
+            let consumer = scope.spawn(|| receiver.iter().collect::<Vec<PathBuf>>());
+            let count = stage.run(sender).unwrap();
+            (count, consumer.join().unwrap())
+        });
+
+        assert_eq!(count, 1);
+        assert_eq!(paths, vec![root.join("src/fixture.rs")]);
     }
 
     #[test]
