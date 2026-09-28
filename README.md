@@ -289,3 +289,35 @@ Attribution required. See [NOTICE](NOTICE).
 ---
 
 Built with Rust.
+
+### Local embedding acceleration on Apple Silicon
+
+Run `codanna embedding-info` to inspect providers compiled into the binary. This
+command does not read project configuration, initialize ONNX Runtime, or load a
+model. A CPU-only binary cannot enable CoreML through an environment variable.
+
+For an Apple build with CoreML support, the build command is:
+
+```bash
+cargo build --release --locked --features gpu-coreml
+```
+
+Select the provider in the environment of the CLI or MCP server process:
+
+```bash
+CODANNA_EMBED_PROVIDER=coreml CODANNA_EMBED_PROVIDER_STRICT=1 codanna --config .codanna/settings.toml config
+```
+
+The configuration command verifies selection without creating an embedding
+session. Unset `CODANNA_EMBED_PROVIDER` (or set it to `cpu`) to retain CPU behavior.
+`auto` selects the target's compiled accelerator when available. Non-strict
+selection warns and preserves the existing runtime configuration when selection
+fails. Strict selection exits with status 2 for an invalid name, unavailable
+compiled provider, initialization failure, or a runtime initialized too early;
+provider registration failures also fail subsequent session creation.
+
+Compiled support and successful selection do not establish GPU execution.
+CoreML may use CPU, GPU, or Neural Engine, and unsupported graph nodes can remain
+on CPU even with strict registration. Device placement and performance require
+separate verification. Keep `semantic_search.embedding_threads = 1` on a busy
+small-memory Mac; total RAM alone does not establish available inference headroom.

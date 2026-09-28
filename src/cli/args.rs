@@ -241,6 +241,9 @@ pub enum Commands {
     #[command(about = "Display active settings from .codanna/settings.toml")]
     Config,
 
+    /// Report compiled embedding providers without loading models or configuration
+    EmbeddingInfo,
+
     /// Start MCP server
     #[command(
         about = "Start MCP server",
