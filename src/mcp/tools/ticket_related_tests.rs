@@ -26,7 +26,17 @@ fn fixture_with_public_symbol(
     };
     settings.semantic_search.enabled = false;
     let settings = Arc::new(settings);
-    let index = IndexFacade::new(settings.clone()).unwrap();
+    let storage =
+        crate::storage::DocumentIndex::new(settings.index_path.join("tantivy"), &settings)
+            .unwrap()
+            .with_manual_reload_for_test()
+            .unwrap();
+    let index = IndexFacade::from_components(
+        Arc::new(storage),
+        crate::indexing::Pipeline::with_settings(settings.clone()),
+        None,
+        settings,
+    );
     let storage = index.document_index();
     storage.start_batch().unwrap();
     for id in 1..=count {
@@ -68,12 +78,7 @@ fn fixture_with_public_symbol(
             .unwrap();
     }
     writer.flush().unwrap();
-    // A delayed notification from our own commit can reload this reader again
-    // after commit_batch's explicit reload. Query a fresh committed reader so
-    // budget assertions do not race that unrelated generation advance.
-    drop(writer);
-    drop(index);
-    (temp, IndexFacade::new(settings).unwrap())
+    (temp, index)
 }
 
 #[test]
