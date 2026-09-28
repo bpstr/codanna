@@ -436,6 +436,7 @@ impl LanguageBehavior for TypeScriptBehavior {
 
             // Enhance import path if we have tsconfig rules
             let mut alias_target_path = None;
+            let mut alias_workspace_path = None;
             let target_module = if let Some(module) = file_resolved_module {
                 // The resolved file's parse-derived module is the truth the
                 // string normalization approximates.
@@ -448,6 +449,13 @@ impl LanguageBehavior for TypeScriptBehavior {
                             .canonicalize()
                             .unwrap_or_else(|_| parent.to_path_buf());
                         Some(base.join(enhanced_path.trim_start_matches("./")))
+                    });
+                    alias_workspace_path = alias_target_path.as_deref().and_then(|path| {
+                        let root = self
+                            .workspace_root
+                            .canonicalize()
+                            .unwrap_or_else(|_| self.workspace_root.clone());
+                        path.strip_prefix(root).ok().map(PathBuf::from)
                     });
                     // Tsconfig alias - convert enhanced path to module format
                     enhanced_path.trim_start_matches("./").replace('/', ".")
@@ -478,6 +486,20 @@ impl LanguageBehavior for TypeScriptBehavior {
             if resolved_symbol.is_none()
                 && matches!(export_resolution, ExportResolution::Unknown)
                 && let Some(path) = alias_target_path.as_deref()
+            {
+                export_resolution = cache.resolve_export_path(path, target_name, extensions);
+                match export_resolution {
+                    ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => {
+                        resolved_symbol = Some(id)
+                    }
+                    ExportResolution::Missing
+                    | ExportResolution::Ambiguous
+                    | ExportResolution::Unknown => {}
+                }
+            }
+            if resolved_symbol.is_none()
+                && matches!(export_resolution, ExportResolution::Unknown)
+                && let Some(path) = alias_workspace_path.as_deref()
             {
                 export_resolution = cache.resolve_export_path(path, target_name, extensions);
                 match export_resolution {
