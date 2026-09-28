@@ -93,6 +93,7 @@ fn php_instance_call(from_id: u32, to_name: &str, file_id: FileId) -> Unresolved
         kind: RelationKind::Calls,
         metadata: Some(meta),
         to_range: Some(Range::new(42, 4, 42, 20)),
+        composition_target: None,
     }
 }
 

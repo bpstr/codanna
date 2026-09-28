@@ -7,8 +7,8 @@ use crate::io::args::parse_positional_args;
 use crate::io::envelope::EntityType;
 use crate::mcp::catalog::ToolKind;
 use crate::mcp::service::{
-    FindSymbolTarget, SymbolResolution, accepted_params_line, missing_param_message,
-    resolve_symbol_or_id, tool_param_spec, try_resolve_find_symbol_target,
+    FindSymbolPageTarget, SymbolResolution, accepted_params_line, missing_param_message,
+    resolve_symbol_or_id, tool_param_spec, try_resolve_find_symbol_page,
 };
 use serde::Serialize;
 
@@ -46,6 +46,22 @@ pub(crate) fn render_envelope_json<T: Serialize>(
             Err(FieldProjectionError::Serde(e)) => panic!("envelope serialization: {e}"),
         },
     }
+}
+
+pub(crate) fn render_document_envelope<T: Serialize>(
+    envelope: &crate::io::envelope::Envelope<T>,
+    retrieval: serde_json::Value,
+    fields: Option<&Vec<String>>,
+) -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(&render_envelope_json(envelope, fields)).expect("envelope JSON");
+    if let Some(meta) = value
+        .get_mut("meta")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        meta.insert("retrieval".into(), retrieval);
+    }
+    serde_json::to_string_pretty(&value).expect("document envelope serialization")
 }
 
 /// Print an INVALID_QUERY envelope for an ambiguous symbol name and exit 2.
@@ -261,6 +277,17 @@ pub async fn run(
 
             // Add all key:value pairs from params
             for (key, value) in params {
+                if tool == "search_documents"
+                    && key == "score_floor"
+                    && value.parse::<f32>().is_ok_and(|floor| !floor.is_finite())
+                {
+                    exit_invalid_args(
+                        &tool,
+                        "score_floor must be finite",
+                        tool_param_spec(&tool).0,
+                        json,
+                    );
+                }
                 // Try to parse as number first, then boolean, fallback to string
                 let json_value = if let Ok(n) = value.parse::<i64>() {
                     serde_json::Value::Number(n.into())
@@ -280,7 +307,22 @@ pub async fn run(
     }
 
     // Convert to Option<Map> only if we have arguments
-    let arguments = arguments.filter(|map| !map.is_empty());
+    let mut arguments = arguments.filter(|map| !map.is_empty());
+    // Preserve the legacy CLI render/exit paths while accepting ID-only JSON.
+    if tool == "find_symbol"
+        && let Some(map) = arguments.as_mut()
+        && !map.contains_key("name")
+        && let Some(id) = map.get("symbol_id")
+    {
+        let id = id
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| id.to_string());
+        map.insert(
+            "name".into(),
+            serde_json::Value::String(format!("symbol_id:{id}")),
+        );
+    }
 
     // Validate the tool name up front: JSON mode never reaches the dispatch
     // match below, so its unknown-tool arm cannot cover this.
@@ -306,7 +348,6 @@ pub async fn run(
     // checks that used to sit duplicated in the JSON collection blocks and
     // the text dispatch): unknown keys reject instead of silently dropping,
     // and missing required params error as INVALID_QUERY, exit 2.
-    let mut arguments = arguments;
     {
         let (accepted, requires_one_of) = tool_param_spec(&tool);
 
@@ -351,7 +392,25 @@ pub async fn run(
             }
         }
     }
-    let arguments = arguments;
+
+    let document_request = if tool_kind == ToolKind::SearchDocuments {
+        let request = serde_json::from_value::<crate::mcp::SearchDocumentsRequest>(
+            serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+        )
+        .unwrap_or_else(|error| {
+            exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+        });
+        let options = crate::documents::DocumentSearchOptions {
+            literal: request.literal,
+            score_floor: request.score_floor,
+        };
+        if let Err(error) = options.validate() {
+            exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json);
+        }
+        Some(request)
+    } else {
+        None
+    };
 
     let ticket_context_request = if tool_kind == ToolKind::SearchTicketContext {
         let request =
@@ -373,9 +432,42 @@ pub async fn run(
     // CLI-only symbol_id alias has already supplied the name string above.
     let find_symbol_request = if tool_kind == ToolKind::FindSymbol {
         let mut map = arguments.clone().unwrap_or_default();
-        map.remove("symbol_id");
+        // Preserve malformed-ID aliases' historical not-found rendering, but
+        // validate positive numeric string aliases through the typed contract.
+        if let Some(id) = map.get("symbol_id").and_then(serde_json::Value::as_str) {
+            let target = format!("symbol_id:{id}");
+            if map
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|name| !name.is_empty() && name != target)
+            {
+                exit_invalid_args(
+                    &tool,
+                    "Supply either name or symbol_id, not conflicting targets",
+                    tool_param_spec(&tool).0,
+                    json,
+                );
+            }
+            if let Ok(id) = id.parse::<u32>() {
+                map.insert("symbol_id".into(), serde_json::json!(id));
+            } else {
+                map.remove("symbol_id");
+            }
+        }
         Some(
             serde_json::from_value::<crate::mcp::FindSymbolRequest>(serde_json::Value::Object(map))
+                .and_then(|request| {
+                    let target = request
+                        .target_name()
+                        .map_err(<serde_json::Error as serde::de::Error>::custom)?
+                        .into_owned();
+                    // Every rendering must use the target accepted by the
+                    // typed MCP contract, including an explicitly empty name.
+                    arguments
+                        .get_or_insert_with(Default::default)
+                        .insert("name".to_owned(), serde_json::Value::String(target));
+                    Ok(request)
+                })
                 .unwrap_or_else(|error| {
                     exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
                 }),
@@ -433,36 +525,39 @@ pub async fn run(
         if let Some(symbol_name) = name {
             // One resolution policy with the MCP handler: the symbol_id:
             // form resolves by id here exactly as it does in text mode.
-            let symbols = match try_resolve_find_symbol_target(&facade, symbol_name, language)
-                .unwrap_or_else(|error| exit_index_error(EntityType::Symbol, symbol_name, error))
-            {
-                FindSymbolTarget::Symbols { symbols, .. } => symbols,
-                // Non-numeric id: nothing to look up; renders the
-                // not_found envelope exactly like an unmatched name.
-                FindSymbolTarget::InvalidId(_) => Vec::new(),
-            };
             let request = find_symbol_request
                 .as_ref()
                 .expect("find_symbol request validated");
-            let (symbols, page) =
-                crate::mcp::service::page_symbols(symbols, request.offset, request.limit);
+            let (symbols, page) = match try_resolve_find_symbol_page(
+                &facade,
+                symbol_name,
+                language,
+                request.offset,
+                request.limit,
+            )
+            .unwrap_or_else(|error| exit_index_error(EntityType::Symbol, symbol_name, error))
+            {
+                FindSymbolPageTarget::Symbols { symbols, page, .. } => (symbols, page),
+                // Non-numeric id: nothing to look up; renders the
+                // not_found envelope exactly like an unmatched name.
+                FindSymbolPageTarget::InvalidId(_) => {
+                    crate::mcp::service::page_symbols(Vec::new(), request.offset, request.limit)
+                }
+            };
+            let semantic_definitions = facade.semantic_definition_status(&symbols);
             if !symbols.is_empty() {
-                use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();
 
                 for symbol in symbols {
                     // Get full context with callers using the same approach as MCP
-                    let context =
-                        facade.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD);
+                    let context = crate::mcp::service::selected_symbol_context(&facade, &symbol);
 
                     // Build result with context if available
                     if let Some(ctx) = context {
                         results.push(ctx);
                     } else {
                         // Fallback: create minimal context
-                        let file_path = facade
-                            .get_file_path(symbol.file_id)
-                            .unwrap_or_else(|| "unknown".to_string());
+                        let file_path = symbol.file_path.to_string();
 
                         results.push(crate::symbol::context::SymbolContext {
                             symbol,
@@ -471,9 +566,9 @@ pub async fn run(
                         });
                     }
                 }
-                Some((results, page))
+                Some((results, page, semantic_definitions))
             } else {
-                Some((Vec::new(), page))
+                Some((Vec::new(), page, semantic_definitions))
             }
         } else {
             None
@@ -716,6 +811,7 @@ pub async fn run(
 
     // Get guidance config before moving indexer
     let guidance_config = facade.settings().guidance.clone();
+    let configured_semantic_floor = facade.settings().semantic_search.threshold;
 
     let semantic_search_docs_data = if json && tool == "semantic_search_docs" {
         if !facade.has_semantic_search() {
@@ -859,7 +955,11 @@ pub async fn run(
         tool.as_str(),
         "search_documents" | "search_context" | "search_ticket_context"
     );
-    let document_store = if needs_document_store {
+    let document_store = if needs_document_store
+        && !document_request
+            .as_ref()
+            .is_some_and(|request| request.literal)
+    {
         crate::documents::load_from_settings(config)
     } else {
         None
@@ -917,109 +1017,8 @@ pub async fn run(
         None
     };
 
-    // Pre-collect search_documents data for JSON output
-    let search_documents_data = if json && tool == "search_documents" {
-        if let Some(ref store_arc) = document_store {
-            let query = arguments
-                .as_ref()
-                .and_then(|m| m.get("query"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let collection = arguments
-                .as_ref()
-                .and_then(|m| m.get("collection"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let limit = arguments
-                .as_ref()
-                .and_then(|m| m.get("limit"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5) as usize;
-
-            let mut store = store_arc.read().await.query_snapshot();
-            let search_query = crate::documents::SearchQuery {
-                text: query.clone(),
-                collection,
-                document: None,
-                limit,
-                preview_config: Some(config.documents.search.clone()),
-            };
-
-            // Queries consume the indexed snapshot. Explicit indexing and the
-            // watcher own corpus refresh, consistently with the MCP handler.
-            match crate::runtime::blocking(move || store.search(search_query)).await {
-                Ok(Ok(results)) => Some((query, results)),
-                Ok(Err(e)) => exit_index_error(EntityType::Document, &query, e),
-                Err(e) => exit_index_error(EntityType::Document, &query, e),
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Text mode plans its exit code before the facade moves into the
-    // server: the outcome comes from the same shared resolution service
-    // the JSON path uses (not_found -> 1, ambiguous -> 2); the handler
-    // still renders the text. Search-class tools keep exit 0 on empty
-    // text results — they declare no envelope to contradict.
-    let text_exit: i32 = if json {
-        0
-    } else {
-        match tool.as_str() {
-            "find_symbol" => {
-                let name = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("name"))
-                    .and_then(|v| v.as_str())
-                    .expect("required param validated upstream");
-                let lang = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("lang"))
-                    .and_then(|v| v.as_str());
-                let found = match try_resolve_find_symbol_target(&facade, name, lang)
-                    .unwrap_or_else(|error| {
-                        eprintln!("Symbol lookup failed: {error}");
-                        std::process::exit(2);
-                    }) {
-                    FindSymbolTarget::Symbols { symbols, .. } => !symbols.is_empty(),
-                    FindSymbolTarget::InvalidId(_) => false,
-                };
-                if found { 0 } else { 1 }
-            }
-            "get_calls" | "find_callers" | "analyze_impact" => {
-                let symbol_id = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("symbol_id"))
-                    .and_then(|v| v.as_u64())
-                    .map(|id| id as u32);
-                let name_key = if tool == "analyze_impact" {
-                    "symbol_name"
-                } else {
-                    "function_name"
-                };
-                let symbol_name = arguments
-                    .as_ref()
-                    .and_then(|m| m.get(name_key))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                match resolve_symbol_or_id(&facade, symbol_id, symbol_name) {
-                    SymbolResolution::Resolved { .. } => 0,
-                    SymbolResolution::NotFoundById(_) | SymbolResolution::NotFoundByName(_) => 1,
-                    SymbolResolution::Ambiguous { .. } => 2,
-                    SymbolResolution::MissingParam => exit_invalid_args(
-                        &tool,
-                        &missing_param_message(&tool),
-                        tool_param_spec(&tool).0,
-                        json,
-                    ),
-                }
-            }
-            _ => 0,
-        }
-    };
+    // Target handlers carry their resolution outcome into the text exit status.
+    let mut text_exit = 0;
 
     // Embedded mode - use already loaded facade directly
     let server = {
@@ -1043,7 +1042,10 @@ pub async fn run(
     let result = if json
         && !matches!(
             tool_kind,
-            ToolKind::SearchContext | ToolKind::SearchTicketContext
+            ToolKind::SearchContext
+                | ToolKind::SearchTicketContext
+                | ToolKind::DocumentDrift
+                | ToolKind::SearchDocuments
         ) {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
@@ -1060,8 +1062,9 @@ pub async fn run(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 server
-                    .find_symbol(Parameters(FindSymbolRequest {
+                    .find_symbol_with_outcome(Parameters(FindSymbolRequest {
                         name: name.to_string(),
+                        symbol_id: None,
                         lang,
                         limit: find_symbol_request
                             .as_ref()
@@ -1073,6 +1076,10 @@ pub async fn run(
                             .offset,
                     }))
                     .await
+                    .map(|response| {
+                        text_exit = response.outcome.exit_code();
+                        response.result
+                    })
             }
             ToolKind::GetCalls => {
                 let function_name = arguments
@@ -1088,11 +1095,15 @@ pub async fn run(
                     .map(|id| id as u32);
 
                 server
-                    .get_calls(Parameters(GetCallsRequest {
+                    .get_calls_with_outcome(Parameters(GetCallsRequest {
                         function_name,
                         symbol_id,
                     }))
                     .await
+                    .map(|response| {
+                        text_exit = response.outcome.exit_code();
+                        response.result
+                    })
             }
             ToolKind::FindCallers => {
                 let function_name = arguments
@@ -1108,11 +1119,15 @@ pub async fn run(
                     .map(|id| id as u32);
 
                 server
-                    .find_callers(Parameters(FindCallersRequest {
+                    .find_callers_with_outcome(Parameters(FindCallersRequest {
                         function_name,
                         symbol_id,
                     }))
                     .await
+                    .map(|response| {
+                        text_exit = response.outcome.exit_code();
+                        response.result
+                    })
             }
             ToolKind::AnalyzeImpact => {
                 let symbol_name = arguments
@@ -1133,12 +1148,16 @@ pub async fn run(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(3) as u32;
                 server
-                    .analyze_impact(Parameters(AnalyzeImpactRequest {
+                    .analyze_impact_with_outcome(Parameters(AnalyzeImpactRequest {
                         symbol_name,
                         symbol_id,
                         max_depth,
                     }))
                     .await
+                    .map(|response| {
+                        text_exit = response.outcome.exit_code();
+                        response.result
+                    })
             }
             ToolKind::GetIndexInfo => {
                 use crate::mcp::GetIndexInfoRequest;
@@ -1249,30 +1268,20 @@ pub async fn run(
                     }))
                     .await
             }
+            ToolKind::DocumentDrift => {
+                let request = serde_json::from_value::<crate::mcp::DocumentDriftRequest>(
+                    serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+                )
+                .unwrap_or_else(|error| {
+                    exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+                });
+                server.document_drift(Parameters(request)).await
+            }
             ToolKind::SearchDocuments => {
-                use crate::mcp::SearchDocumentsRequest;
-                let query = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("query"))
-                    .and_then(|v| v.as_str())
-                    .expect("required param validated upstream")
-                    .to_string();
-                let collection = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("collection"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let limit = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("limit"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5) as u32;
                 server
-                    .search_documents(Parameters(SearchDocumentsRequest {
-                        query,
-                        collection,
-                        limit,
-                    }))
+                    .search_documents(Parameters(
+                        document_request.expect("document request validated upstream"),
+                    ))
                     .await
             }
             ToolKind::SearchTicketContext => {
@@ -1323,7 +1332,14 @@ pub async fn run(
     // Print result
     match result {
         Ok(call_result) => {
-            if json && tool == "search_ticket_context" {
+            if json && tool == "document_drift" {
+                let data = call_result
+                    .structured_content
+                    .unwrap_or(serde_json::Value::Null);
+                let envelope = crate::io::envelope::Envelope::success(data)
+                    .with_message("Document source drift inspection completed");
+                println!("{}", render_envelope_json(&envelope, fields.as_ref()));
+            } else if json && tool == "search_ticket_context" {
                 use crate::io::envelope::{EntityType, Envelope};
                 let data = call_result
                     .structured_content
@@ -1385,7 +1401,7 @@ pub async fn run(
                 }
             } else if json && tool == "find_symbol" {
                 // Use pre-collected data for JSON output
-                if let Some((symbol_contexts, page)) = find_symbol_data {
+                if let Some((symbol_contexts, page, semantic_definitions)) = find_symbol_data {
                     use crate::io::envelope::{EntityType, Envelope};
                     use crate::io::guidance_engine::generate_guidance_from_config;
 
@@ -1404,6 +1420,8 @@ pub async fn run(
                             Envelope::not_found(format!("Symbol '{name}' not found"))
                                 .with_entity_type(EntityType::Symbol)
                                 .with_query(name);
+                        envelope.meta.semantic_definitions =
+                            Some(serde_json::json!(semantic_definitions));
                         envelope.meta.total = Some(page.total);
                         envelope.meta.offset = Some(page.offset);
                         envelope.meta.limit = Some(page.limit);
@@ -1431,6 +1449,8 @@ pub async fn run(
                             .with_count(count)
                             .with_query(name)
                             .with_message(format!("Found {count} symbol(s)"));
+                        envelope.meta.semantic_definitions =
+                            Some(serde_json::json!(semantic_definitions));
                         envelope.meta.total = Some(page.total);
                         envelope.meta.offset = Some(page.offset);
                         envelope.meta.limit = Some(page.limit);
@@ -1755,6 +1775,17 @@ pub async fn run(
                             .with_message(format!("Found {count} similar symbol(s)"))
                     };
 
+                    envelope.meta.retrieval =
+                        Some(crate::mcp::service::semantic_retrieval_metadata(
+                            arguments
+                                .as_ref()
+                                .and_then(|m| m.get("threshold"))
+                                .and_then(|v| v.as_f64())
+                                .map(|t| t as f32),
+                            configured_semantic_floor,
+                            count,
+                        ));
+
                     if let Some(lang) = language {
                         envelope = envelope.with_lang(lang);
                     }
@@ -1825,6 +1856,17 @@ pub async fn run(
                             .with_message(format!("Found {count} symbol(s) with context"))
                     };
 
+                    envelope.meta.retrieval =
+                        Some(crate::mcp::service::semantic_retrieval_metadata(
+                            arguments
+                                .as_ref()
+                                .and_then(|m| m.get("threshold"))
+                                .and_then(|v| v.as_f64())
+                                .map(|t| t as f32),
+                            configured_semantic_floor,
+                            count,
+                        ));
+
                     if let Some(lang) = language {
                         envelope = envelope.with_lang(lang);
                     }
@@ -1865,65 +1907,55 @@ pub async fn run(
                     emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "search_documents" {
-                use crate::io::envelope::{EntityType, Envelope};
-
+                use crate::io::envelope::Envelope;
                 let query = arguments
                     .as_ref()
-                    .and_then(|m| m.get("query"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                if let Some((query_text, results)) = search_documents_data {
-                    let count = results.len();
-
-                    // Convert to serializable format
-                    let data: Vec<_> = results
+                    .and_then(|args| args.get("query"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if call_result.is_error == Some(true) {
+                    let message = call_result
+                        .content
                         .iter()
-                        .map(|r| {
-                            serde_json::json!({
-                                "chunk_id": r.chunk_id,
-                                "collection": r.collection,
-                                "source_path": r.source_path,
-                                "heading_context": r.heading_context,
-                                "content_preview": r.content_preview,
-                                "byte_range": r.byte_range,
-                                "similarity": r.similarity
-                            })
+                        .filter_map(|content| match content {
+                            rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
                         })
-                        .collect();
-
-                    let envelope = if count == 0 {
-                        Envelope::<Vec<serde_json::Value>>::not_found(format!(
-                            "No documents found for '{query_text}'"
-                        ))
-                        .with_entity_type(EntityType::Document)
-                        .with_query(&query_text)
-                    } else {
-                        Envelope::success(data)
-                            .with_entity_type(EntityType::Document)
-                            .with_count(count)
-                            .with_query(&query_text)
-                            .with_message(format!("Found {count} matching documents"))
-                            .with_hint(
-                                "Use the file paths and byte ranges to read specific sections",
-                            )
-                    };
-
-                    let output = render_envelope_json(&envelope, fields.as_ref());
-                    println!("{output}");
-                    if envelope.exit_code != 0 {
-                        std::process::exit(envelope.exit_code.into());
-                    }
-                } else {
-                    let envelope: Envelope<()> = Envelope::error(
-                        crate::io::envelope::ResultCode::IndexError,
-                        "Document search not available",
-                    )
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    exit_index_error(EntityType::Document, query, message);
+                }
+                let mut content = call_result
+                    .structured_content
+                    .expect("document search structured response");
+                let data = content["results"]
+                    .take()
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let count = data.len();
+                let envelope = if count == 0 {
+                    Envelope::<Vec<serde_json::Value>>::not_found(format!(
+                        "No documents found for '{query}'"
+                    ))
                     .with_entity_type(EntityType::Document)
                     .with_query(query)
-                    .with_hint("Run 'codanna documents index' to create the index");
-
-                    emit_envelope_and_exit(envelope);
+                } else {
+                    Envelope::success(data)
+                        .with_entity_type(EntityType::Document)
+                        .with_count(count)
+                        .with_query(query)
+                };
+                println!(
+                    "{}",
+                    render_document_envelope(
+                        &envelope,
+                        content["retrieval"].take(),
+                        fields.as_ref()
+                    )
+                );
+                if envelope.exit_code != 0 {
+                    std::process::exit(envelope.exit_code.into());
                 }
             } else {
                 // Default text output
@@ -1938,7 +1970,12 @@ pub async fn run(
                     }
                 }
                 if call_result.is_error == Some(true)
-                    && matches!(tool_kind, ToolKind::SearchSymbols | ToolKind::SearchContext)
+                    && matches!(
+                        tool_kind,
+                        ToolKind::SearchSymbols
+                            | ToolKind::SearchContext
+                            | ToolKind::SearchDocuments
+                    )
                 {
                     std::process::exit(2);
                 }

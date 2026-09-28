@@ -4,6 +4,11 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
+    #[error(
+        "Symbol ID {id} identifies multiple live definitions. Suggestion: rebuild the index with `codanna index . --force` before resolving this ID"
+    )]
+    DuplicateSymbolId { id: u32 },
+
     #[error("graph {resource} budget exceeded (limit {limit}); narrow the query or depth")]
     GraphBudgetExceeded {
         resource: &'static str,

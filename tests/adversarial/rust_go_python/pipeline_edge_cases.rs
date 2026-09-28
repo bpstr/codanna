@@ -75,6 +75,7 @@ fn resolve_fixture(language: &'static str, code: &str) -> (Vec<Symbol>, Vec<Reso
             kind: RelationKind::Calls,
             metadata: Some(meta),
             to_range: Some(call.range),
+            composition_target: None,
         });
     }
     for (child, parent, range) in parser.find_extends(code) {
@@ -90,6 +91,7 @@ fn resolve_fixture(language: &'static str, code: &str) -> (Vec<Symbol>, Vec<Reso
             kind: RelationKind::Extends,
             metadata: None,
             to_range: Some(range),
+            composition_target: None,
         });
     }
     let variable_bindings = parser

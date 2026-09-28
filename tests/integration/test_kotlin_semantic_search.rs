@@ -217,6 +217,7 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     let find_result = server
         .find_symbol(Parameters(FindSymbolRequest {
             name: "ReadWritePgClient".to_string(),
+            symbol_id: None,
             lang: Some("kotlin".to_string()),
             limit: 100,
             offset: 0,
