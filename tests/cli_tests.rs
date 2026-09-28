@@ -51,3 +51,6 @@ mod test_dump;
 
 #[path = "cli/test_review_cli_contracts.rs"]
 mod test_review_cli_contracts;
+
+#[path = "cli/test_embedding_info.rs"]
+mod test_embedding_info;

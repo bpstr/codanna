@@ -433,7 +433,11 @@ impl ResolveStage {
             }
         }
 
-        if let Some(to_id) = context.resolve(&unresolved.to_name) {
+        let scope_target = context.resolve(&unresolved.to_name);
+        let scope_target = self
+            .typescript_import_call_target(unresolved, context, scope_target)
+            .or(scope_target);
+        if let Some(to_id) = scope_target {
             if self.is_compatible(
                 from_kind,
                 to_id,
@@ -601,6 +605,56 @@ impl ResolveStage {
             return None;
         }
         self.accept_unwitnessed_pick(from_id, to_id, unresolved)
+    }
+
+    /// A file-wide scope can contain a function nested in an unrelated caller.
+    /// Such a function shadows a TypeScript import only within its enclosure.
+    fn typescript_import_call_target(
+        &self,
+        unresolved: &UnresolvedRelationship,
+        context: &ResolutionContext,
+        scope_target: Option<SymbolId>,
+    ) -> Option<SymbolId> {
+        use crate::SymbolKind;
+
+        if context.language_id.as_str() != "typescript" || !Self::is_bare_instance_call(unresolved)
+        {
+            return None;
+        }
+        let imported = context
+            .scope
+            .import_binding(&unresolved.to_name)?
+            .resolved_symbol?;
+        if scope_target == Some(imported) {
+            return Some(imported);
+        }
+        let call_site = unresolved.to_range.as_ref()?;
+        let mut local = None;
+        for id in self.symbol_cache.lookup_candidates(&unresolved.to_name) {
+            let Some(symbol) = self.symbol_cache.get_ref(id) else {
+                continue;
+            };
+            if symbol.file_id != context.file_id || symbol.kind != SymbolKind::Function {
+                continue;
+            }
+            let owner = context
+                .local_symbols
+                .iter()
+                .filter_map(|&owner_id| self.symbol_cache.get_ref(owner_id))
+                .filter(|owner| {
+                    owner.id != id
+                        && matches!(owner.kind, SymbolKind::Function | SymbolKind::Method)
+                        && range_contains(&owner.range, &symbol.range)
+                })
+                .max_by_key(|owner| (owner.range.start_line, owner.range.start_column));
+            let Some(owner) = owner.filter(|owner| range_contains(&owner.range, call_site)) else {
+                continue;
+            };
+            if local.is_none_or(|(_, range)| starts_before(&range, &owner.range)) {
+                local = Some((id, owner.range));
+            }
+        }
+        Some(local.map_or(imported, |(id, _)| id))
     }
 
     fn is_compatible(

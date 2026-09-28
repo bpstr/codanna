@@ -19,6 +19,8 @@ const REFRESH: Duration = Duration::from_secs(1);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(95);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKERS: usize = 4;
+const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const IDLE_SWEEP: Duration = Duration::from_secs(30);
 
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
@@ -152,10 +154,29 @@ impl Default for Slot {
     }
 }
 type Tasks = Arc<Mutex<Vec<JoinHandle<()>>>>;
+type Slots = Arc<Mutex<HashMap<String, Arc<Mutex<Slot>>>>>;
+
+fn prune_idle(slots: &mut HashMap<String, Arc<Mutex<Slot>>>) {
+    slots.retain(|_, slot| {
+        Arc::strong_count(slot) > 1 || slot.lock().last_used.elapsed() < IDLE_TIMEOUT
+    });
+}
+
+async fn idle_cleanup(slots: Slots, stop: CancellationToken, period: Duration) {
+    let mut ticks = tokio::time::interval(period);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = stop.cancelled() => break,
+            _ = ticks.tick() => prune_idle(&mut slots.lock()),
+        }
+    }
+}
 
 pub(super) struct WorkerPool {
     executable: PathBuf,
-    slots: Mutex<HashMap<String, Arc<Mutex<Slot>>>>,
+    slots: Slots,
     processes: Arc<Semaphore>,
     indexers: Arc<Semaphore>,
     tasks: Tasks,
@@ -175,22 +196,24 @@ impl WorkerPool {
                 "Readers must use the running Codanna executable",
             ));
         }
+        let slots = Arc::new(Mutex::new(HashMap::new()));
+        let stop = CancellationToken::new();
+        // Own only the slot map and cancellation token, never the pool itself.
+        // Dropping the pool must still stop cleanup and release its readers.
+        let cleanup = tokio::spawn(idle_cleanup(slots.clone(), stop.clone(), IDLE_SWEEP));
         Ok(Self {
             executable,
-            slots: Mutex::new(HashMap::new()),
+            slots,
             processes: Arc::new(Semaphore::new(MAX_WORKERS)),
             indexers: Arc::new(Semaphore::new(1)),
-            tasks: Arc::new(Mutex::new(Vec::new())),
-            stop: CancellationToken::new(),
+            tasks: Arc::new(Mutex::new(vec![cleanup])),
+            stop,
             budget,
         })
     }
     fn slot(&self, id: &str) -> Result<Arc<Mutex<Slot>>, ErrorData> {
         let mut slots = self.slots.lock();
-        slots.retain(|_, slot| {
-            Arc::strong_count(slot) > 1
-                || slot.lock().last_used.elapsed() < Duration::from_secs(300)
-        });
+        prune_idle(&mut slots);
         if let Some(slot) = slots.get(id) {
             return Ok(slot.clone());
         }

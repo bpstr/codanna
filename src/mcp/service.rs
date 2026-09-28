@@ -8,6 +8,31 @@
 use crate::Symbol;
 use crate::indexing::facade::IndexFacade;
 
+/// Semantic endpoint evidence contract; configured defaults are not implicitly
+/// applied to the existing omitted-threshold nearest-neighbor route.
+pub(crate) fn semantic_retrieval_metadata(
+    requested_floor: Option<f32>,
+    configured_floor: f32,
+    returned: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "mode": "semantic_nearest_neighbors",
+        "corpus": "code_symbols",
+        "requested_score_floor": requested_floor,
+        "effective_score_floor": requested_floor,
+        "configured_score_floor": configured_floor,
+        "configured_floor_applied": false,
+        "floor_stage": if requested_floor.is_some() { "after_top_k" } else { "not_applied" },
+        "returned_symbols": returned,
+        "support_status": "not_assessed",
+        "scores_are_probabilities": false,
+        "graph_scope": "resolved_indexed_relationships",
+        "graph_count_unit": "distinct_symbols",
+        "call_site_totals": "not_reported",
+        "unresolved_external_call_coverage": "not_reported"
+    })
+}
+
 /// Outcome of resolving a tool's target symbol from `symbol_id` or name.
 pub enum SymbolResolution {
     Resolved {
@@ -357,6 +382,24 @@ pub fn qualified_call(receiver: &str, is_static: bool, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn semantic_contract_distinguishes_omitted_and_explicit_score_floors() {
+        let omitted = super::semantic_retrieval_metadata(None, 0.6, 5);
+        assert!(omitted["effective_score_floor"].is_null());
+        assert_eq!(omitted["floor_stage"], "not_applied");
+        assert_eq!(omitted["configured_floor_applied"], false);
+        assert_eq!(omitted["support_status"], "not_assessed");
+        let explicit = super::semantic_retrieval_metadata(Some(0.7), 0.6, 0);
+        assert!((explicit["effective_score_floor"].as_f64().unwrap() - 0.7).abs() < 0.000001);
+        assert_eq!(explicit["floor_stage"], "after_top_k");
+        assert_eq!(explicit["returned_symbols"], 0);
+        assert_eq!(explicit["graph_count_unit"], "distinct_symbols");
+        assert_eq!(explicit["call_site_totals"], "not_reported");
+        assert_eq!(
+            explicit["unresolved_external_call_coverage"],
+            "not_reported"
+        );
+    }
     use super::*;
 
     #[test]
@@ -457,7 +500,7 @@ mod tests {
         );
         assert_eq!(
             missing_param_message("find_symbol"),
-            "find_symbol requires 'name' parameter"
+            "find_symbol requires either 'name' or 'symbol_id' parameter"
         );
         assert_eq!(
             accepted_params_line("get_calls"),
