@@ -133,6 +133,28 @@ pub struct SourceDriftEntry {
     pub current_sha256: Option<String>,
 }
 
+/// Optional retrieval controls; omitted controls preserve the configured strategy.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DocumentSearchOptions {
+    /// Match a case-sensitive substring of indexed chunk content without embeddings.
+    pub literal: bool,
+    /// Inclusive floor in the selected strategy's native score units.
+    pub score_floor: Option<f32>,
+}
+impl DocumentSearchOptions {
+    pub fn validate(&self) -> StoreResult<()> {
+        if self.score_floor.is_some_and(|floor| !floor.is_finite()) {
+            return Err(DocumentStoreError::Index(
+                "score_floor must be finite".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn accepts(&self, score: f32) -> bool {
+        self.score_floor.is_none_or(|floor| score >= floor)
+    }
+}
+
 /// Query parameters for document search.
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -473,6 +495,61 @@ impl std::fmt::Debug for DocumentStore {
 }
 
 impl DocumentStore {
+    pub(super) fn open_literal_reader(
+        base: &Path,
+        boundary: Option<&Path>,
+    ) -> StoreResult<DocumentQuery> {
+        let (generation, sources) = load_source_snapshot(base, boundary)?;
+        if let Some(root) = boundary {
+            for path in sources.keys() {
+                crate::indexing::facade::IndexFacade::contained_source(root, path)
+                    .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+            }
+        }
+        let index = Index::open_in_dir(base.join("tantivy"))?;
+        let (schema, fields) = DocumentSchema::build();
+        if index.schema() != schema {
+            return Err(DocumentStoreError::Index(
+                "Document schema mismatch; rebuild the collection".into(),
+            ));
+        }
+        let reader: IndexReader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()?;
+        let searcher = reader.searcher();
+        Ok(DocumentQuery(Self {
+            base_path: base.to_path_buf(),
+            index,
+            reader,
+            pinned_searcher: Some(searcher),
+            schema: fields,
+            writer: Mutex::new(None),
+            vector_storage: None,
+            vector_staging: None,
+            current_generation: generation,
+            new_vector_bytes: 0,
+            compacted_vector_bytes: 0,
+            cluster_assignments: HashMap::new(),
+            centroids: Vec::new(),
+            file_states: HashMap::new(),
+            chunking_fingerprints: HashMap::new(),
+            embedded_files: HashMap::new(),
+            embedding_identity: None,
+            forced_collections: HashSet::new(),
+            collection_ids: HashMap::new(),
+            next_chunk_id: 1,
+            id_reservation_end: 1,
+            chunker: Box::new(HybridChunker::new()),
+            embedding_generator: None,
+            embedding_cache: None,
+            dimension: VectorDimension::dimension_384(),
+            heap_size: 50_000_000,
+            workspace_root: boundary.map(Arc::from),
+            source_exclusion: Some(Arc::from(base)),
+        }))
+    }
+
     /// Create or open a document store.
     ///
     /// # Arguments
@@ -1110,12 +1187,47 @@ impl DocumentStore {
     }
 
     pub fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
+        self.search_with_options(query, &DocumentSearchOptions::default())
+    }
+
+    pub fn retrieval_metadata(
+        &self,
+        options: &DocumentSearchOptions,
+        returned: usize,
+    ) -> serde_json::Value {
+        let mode = if options.literal {
+            "literal"
+        } else {
+            self.retrieval_mode()
+        };
+        serde_json::json!({
+            "mode": mode, "corpus": "document_chunks",
+            "score_units": match mode { "literal" => "exact_match", "lexical" => "lexical_rank", _ => "cosine_similarity" },
+            "requested_score_floor": options.score_floor,
+            "effective_score_floor": options.score_floor,
+            "score_floor_stage": if options.score_floor.is_some() { "before_result_selection" } else { "not_applied" },
+            "ranking_constraints": if mode == "semantic_nearest_neighbors" { vec!["bounded_lookahead", "relative_cosine_cutoff", "source_balancing", "result_limit"] } else if mode == "lexical" { vec!["bounded_lookahead", "lexical_coverage", "source_balancing", "result_limit"] } else { vec!["source_balancing", "result_limit"] },
+            "support_status": "not_assessed",
+            "candidate_status": if returned == 0 { "none" } else { "returned" },
+            "returned_chunks": returned, "scores_are_probabilities": false,
+        })
+    }
+
+    pub fn search_with_options(
+        &mut self,
+        query: SearchQuery,
+        options: &DocumentSearchOptions,
+    ) -> StoreResult<Vec<SearchResult>> {
+        options.validate()?;
         if query.text.trim().is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
 
+        if options.literal {
+            return self.search_literal(&query, options);
+        }
         if self.embedding_generator.is_none() {
-            return self.search_lexical(&query);
+            return self.search_lexical(&query, options);
         }
 
         // Get candidate chunks based on filters
@@ -1139,6 +1251,7 @@ impl DocumentStore {
 
         // Score candidates by vector similarity
         let mut scored_candidates = self.score_by_similarity(&candidates, &query_vec)?;
+        scored_candidates.retain(|(_, score)| options.accepts(*score));
 
         // Retain bounded lookahead for complementary sources. Eligible candidates
         // must reach 90% of the original kth positive cosine; this is a score
@@ -1151,10 +1264,52 @@ impl DocumentStore {
         }
 
         // Enrich with full metadata and KWIC preview
-        self.build_search_results(scored_candidates, &query)
+        self.build_search_results(scored_candidates, &query, false)
     }
 
-    fn search_lexical(&self, query: &SearchQuery) -> StoreResult<Vec<SearchResult>> {
+    fn search_literal(
+        &self,
+        query: &SearchQuery,
+        options: &DocumentSearchOptions,
+    ) -> StoreResult<Vec<SearchResult>> {
+        if !options.accepts(1.0) {
+            return Ok(Vec::new());
+        }
+        let searcher = self.searcher();
+        let mut addresses: Vec<_> = searcher
+            .search(
+                &BooleanQuery::new(self.filter_clauses(query)),
+                &DocSetCollector,
+            )?
+            .into_iter()
+            .collect();
+        addresses.sort_unstable();
+        let mut scored = Vec::new();
+        for address in addresses {
+            let doc: Document = searcher.doc(address)?;
+            if doc
+                .get_first(self.schema.content)
+                .and_then(|value| value.as_str())
+                .is_some_and(|content| content.contains(&query.text))
+            {
+                if let Some(id) = doc
+                    .get_first(self.schema.chunk_id)
+                    .and_then(|value| value.as_u64())
+                    .and_then(|id| u32::try_from(id).ok())
+                    .and_then(ChunkId::from_u32)
+                {
+                    scored.push((id, 1.0));
+                }
+            }
+        }
+        self.build_search_results(scored, query, true)
+    }
+
+    fn search_lexical(
+        &self,
+        query: &SearchQuery,
+        options: &DocumentSearchOptions,
+    ) -> StoreResult<Vec<SearchResult>> {
         use tantivy::query::QueryClone;
 
         // Natural-language input is analyzed as literal terms, never parsed as
@@ -1263,7 +1418,8 @@ impl DocumentStore {
                 scored.push((id, score));
             }
         }
-        self.build_search_results(scored, query)
+        scored.retain(|(_, score)| options.accepts(*score));
+        self.build_search_results(scored, query, false)
     }
 
     /// Delete all chunks from a collection.
@@ -2363,6 +2519,7 @@ impl DocumentStore {
         &self,
         scored: Vec<(ChunkId, f32)>,
         query: &SearchQuery,
+        literal: bool,
     ) -> StoreResult<Vec<SearchResult>> {
         let searcher = self.searcher();
         let mut results = Vec::new();
@@ -2396,7 +2553,7 @@ impl DocumentStore {
         // Get preview config (use defaults if not provided)
         let default_config = super::config::SearchConfig::default();
         let preview_config = query.preview_config.as_ref().unwrap_or(&default_config);
-        let mut coverage = if self.embedding_generator.is_none() {
+        let mut coverage = if !literal && self.embedding_generator.is_none() {
             let tokenizers = self.index.tokenizers();
             let literal = tokenizers.get("default").ok_or_else(|| {
                 DocumentStoreError::Index("Document text tokenizer is unavailable".into())
@@ -2494,7 +2651,7 @@ impl DocumentStore {
         Ok(super::ranking::diversify(
             results,
             query.limit,
-            self.embedding_generator.is_some(),
+            literal || self.embedding_generator.is_some(),
         ))
     }
 
@@ -2698,13 +2855,24 @@ struct ClusterData {
 }
 
 /// Read-only query ownership, independent of the mutable document writer.
-pub(crate) struct DocumentQuery(DocumentStore);
+pub struct DocumentQuery(DocumentStore);
 impl DocumentQuery {
-    pub(crate) fn retrieval_mode(&self) -> &'static str {
-        self.0.retrieval_mode()
+    pub fn retrieval_metadata(
+        &self,
+        options: &DocumentSearchOptions,
+        returned: usize,
+    ) -> serde_json::Value {
+        self.0.retrieval_metadata(options, returned)
+    }
+    pub fn search_with_options(
+        &mut self,
+        query: SearchQuery,
+        options: &DocumentSearchOptions,
+    ) -> StoreResult<Vec<SearchResult>> {
+        self.0.search_with_options(query, options)
     }
 
-    pub(crate) fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
+    pub fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
         self.0.search(query)
     }
 }

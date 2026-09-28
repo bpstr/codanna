@@ -216,6 +216,36 @@ chunks without embeddings, active generation and backend/input identity. These
 counts describe committed evidence and do not establish freshness against current
 source files. Run-progress diagnostics currently cover CLI document indexing.
 
+### Search document candidates
+
+```bash
+codanna documents search "Account preferences" --collection docs --literal --json
+codanna mcp search_documents 'query:Account preferences' collection:docs literal:true score_floor:1 --json
+```
+
+`--literal` (MCP `literal:true`) matches a case-sensitive substring in indexed
+chunk content, including punctuation and Unicode. It does not load or call an
+embedding backend. Separate heading-context metadata does not participate, and
+phrases spanning chunk boundaries may not match. Search uses the indexed snapshot;
+changes to source files require indexing before they become searchable.
+
+`--score-floor` (MCP `score_floor`) is an inclusive, finite threshold applied
+before final result selection. Scores use cosine similarity for semantic retrieval,
+lexical rank for lexical retrieval, and a constant `1.0` for literal matches.
+Floors are not interchangeable between modes. Omit the option to preserve existing
+retrieval behavior: semantic search still applies bounded lookahead, its relative
+cosine cutoff and source balancing; lexical search uses bounded lookahead, term
+coverage and source balancing. Result limits and source balancing also apply to
+literal matches. Literal search scans the filtered indexed chunks and may be slower
+for large collections.
+
+MCP structured responses include `retrieval` metadata and `results`. CLI JSON puts
+the results in `data` and retrieval metadata in `meta.retrieval`, including empty
+searches. Metadata identifies the mode, score units, requested/effective floor and
+candidate count. All modes report `support_status: not_assessed`: a retrieved
+candidate, including a literal match, does not establish authority or substantiate
+a claim. Scores are not probabilities.
+
 ### Inspect document source drift
 
 ```bash

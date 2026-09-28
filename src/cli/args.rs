@@ -589,6 +589,14 @@ pub enum DocumentAction {
         #[arg(short, long)]
         limit: Option<usize>,
 
+        /// Match a case-sensitive substring of indexed chunk content without embeddings
+        #[arg(long)]
+        literal: bool,
+
+        /// Inclusive floor in native retrieval score units (must be finite)
+        #[arg(long, allow_hyphen_values = true)]
+        score_floor: Option<f32>,
+
         /// Output in JSON format
         #[arg(long)]
         json: bool,

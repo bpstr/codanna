@@ -69,6 +69,8 @@ async fn nearest_neighbors_can_return_candidates_without_literal_support() {
                     query: "Every violet narwhal must dance seventeen polkas".into(),
                     collection,
                     limit: 5,
+                    literal: false,
+                    score_floor: None,
                 },
             ))
             .await
@@ -358,6 +360,26 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
         vec![
             "documents",
             "search",
+            "query:::[]",
+            "--collection",
+            "docs",
+            "--literal",
+            "--score-floor",
+            "1",
+            "--json",
+        ],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:::[]",
+            "collection:docs",
+            "literal:true",
+            "score_floor:1",
+            "--json",
+        ],
+        vec![
+            "documents",
+            "search",
             "Account preferences",
             "--collection",
             "docs",
@@ -396,4 +418,182 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
         assert_eq!(data["meta"]["retrieval"]["effective_score_floor"], 1.0);
         assert_eq!(data["meta"]["retrieval"]["support_status"], "not_assessed");
     }
+}
+
+#[test]
+fn document_cli_rejects_invalid_controls_before_opening_documents() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut settings = codanna::Settings {
+        index_path: temp.path().join("missing"),
+        workspace_root: Some(temp.path().to_path_buf()),
+        ..Default::default()
+    };
+    settings.semantic_search.enabled = false;
+    let config = temp.path().join("settings.toml");
+    std::fs::write(&config, toml::to_string(&settings).unwrap()).unwrap();
+    for args in [
+        vec![
+            "documents",
+            "search",
+            "needle",
+            "--literal",
+            "--score-floor",
+            "NaN",
+            "--json",
+        ],
+        vec!["documents", "search", "needle", "score_floor:inf", "--json"],
+        vec!["documents", "search", "needle", "literal:perhaps", "--json"],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:needle",
+            "score_floor:NaN",
+            "--json",
+        ],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:needle",
+            "score_floor:inf",
+            "--json",
+        ],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:needle",
+            "score_floor:1e100",
+            "--json",
+        ],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:needle",
+            "literal:perhaps",
+            "--json",
+        ],
+        vec![
+            "mcp",
+            "search_documents",
+            "query:needle",
+            "limit:1001",
+            "--json",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_codanna"))
+            .arg("--config")
+            .arg(&config)
+            .args(&args)
+            .current_dir(temp.path())
+            .env_clear()
+            .env("HOME", temp.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["code"], "INVALID_QUERY", "{args:?}: {envelope}");
+        assert!(!settings.index_path.join("documents").exists());
+    }
+}
+
+#[test]
+fn literal_open_refuses_missing_and_foreign_indexes_without_creation() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = codanna::Settings {
+        index_path: temp.path().join("missing"),
+        workspace_root: Some(temp.path().to_path_buf()),
+        ..Default::default()
+    };
+    assert!(codanna::documents::open_literal_from_settings(&settings).is_err());
+    assert!(!settings.index_path.exists());
+    #[cfg(unix)]
+    {
+        let (_other, store, other_settings, _calls) = support_fixture();
+        drop(store);
+        std::fs::create_dir(&settings.index_path).unwrap();
+        std::os::unix::fs::symlink(
+            other_settings.index_path.join("documents"),
+            settings.index_path.join("documents"),
+        )
+        .unwrap();
+        assert!(codanna::documents::open_literal_from_settings(&settings).is_err());
+    }
+}
+
+#[test]
+fn literal_query_preserves_persistence_and_does_not_wait_for_publication() {
+    fn snapshot(base: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        walkdir::WalkDir::new(base)
+            .into_iter()
+            .map(Result::unwrap)
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| {
+                (
+                    entry.path().strip_prefix(base).unwrap().to_path_buf(),
+                    std::fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect()
+    }
+    let (temp, store, settings, _calls) = support_fixture();
+    drop(store);
+    let base = settings.index_path.join("documents");
+    std::fs::remove_file(base.join("state.json")).unwrap();
+    std::fs::write(
+        base.join("generations/unused-fixture.json"),
+        "preserve obsolete generation evidence",
+    )
+    .unwrap();
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(base.join("publication.lock"))
+        .unwrap();
+    fs4::fs_std::FileExt::lock_exclusive(&lock).unwrap();
+    let before = snapshot(&base);
+    let config = temp.path().join("settings.toml");
+    std::fs::write(&config, toml::to_string(&settings).unwrap()).unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_codanna"))
+        .arg("--config")
+        .arg(&config)
+        .args([
+            "documents",
+            "search",
+            "Account preferences",
+            "--literal",
+            "--json",
+        ])
+        .current_dir(temp.path())
+        .env_clear()
+        .env("HOME", temp.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("literal query waited behind publication lock");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["data"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot(&base), before);
+    assert!(!base.join("state.json").exists());
 }

@@ -25,7 +25,8 @@ pub use config::{
 pub use drift::{DocumentDriftRequest, inspect_source_drift};
 pub use schema::DocumentSchema;
 pub use store::{
-    CollectionStats, DocumentStore, EmbeddingDiagnostics, IndexProgress, SearchQuery, SearchResult,
+    CollectionStats, DocumentQuery, DocumentSearchOptions, DocumentStore, EmbeddingDiagnostics,
+    IndexProgress, SearchQuery, SearchResult,
 };
 pub use types::{ChunkId, CollectionId, DocumentChunk, FileState};
 
@@ -75,4 +76,26 @@ pub fn load_from_settings(settings: &Settings) -> Option<Arc<RwLock<DocumentStor
 
     tracing::info!(target: "documents", "loaded document store from {}", crate::parsing::paths::render_absolute_path(&doc_path).display());
     Some(Arc::new(RwLock::new(store)))
+}
+
+/// Open a read-only document query without models, vectors, repairs, or writer locks.
+pub fn open_literal_from_settings(settings: &Settings) -> store::StoreResult<DocumentQuery> {
+    let base = settings.index_path.join("documents");
+    let boundary = settings
+        .workspace_root
+        .as_deref()
+        .map(std::path::Path::canonicalize)
+        .transpose()?;
+    let boundary = boundary.as_deref();
+    if let Some(root) = boundary {
+        crate::indexing::facade::IndexFacade::contained_source(root, &base)
+            .map_err(|error| store::DocumentStoreError::Index(error.to_string()))?;
+        // Tantivy opens segment files named by its committed metadata. Check
+        // individual entries before opening any mmap, including symlink targets.
+        for entry in std::fs::read_dir(base.join("tantivy"))? {
+            crate::indexing::facade::IndexFacade::contained_source(root, &entry?.path())
+                .map_err(|error| store::DocumentStoreError::Index(error.to_string()))?;
+        }
+    }
+    DocumentStore::open_literal_reader(&base, boundary)
 }
