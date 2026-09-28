@@ -52,8 +52,8 @@ pub use lua::{LuaBehavior, LuaParser};
 pub use method_call::{MethodCall, MethodCallResolver};
 pub use nix::{NixBehavior, NixParser};
 pub use parser::{
-    HandledNode, LanguageParser, NodeTracker, NodeTrackingState, safe_substring_window,
-    safe_truncate_str, truncate_for_display,
+    DeferredCompositionTarget, DeferredCompositionUse, HandledNode, LanguageParser, NodeTracker,
+    NodeTrackingState, safe_substring_window, safe_truncate_str, truncate_for_display,
 };
 pub use paths::{
     normalize_for_module_path, strip_extension, strip_source_root, strip_source_root_owned,

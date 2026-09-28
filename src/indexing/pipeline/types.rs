@@ -161,6 +161,13 @@ pub struct RawRelationship {
     pub to_range: Range,
     pub kind: RelationKind,
     pub metadata: Option<RelationshipMetadata>,
+    pub composition_target: Option<CompositionTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompositionTarget {
+    pub module_path: Arc<str>,
+    pub export_name: Arc<str>,
 }
 
 impl RawRelationship {
@@ -178,11 +185,24 @@ impl RawRelationship {
             to_range,
             kind,
             metadata: None,
+            composition_target: None,
         }
     }
 
     pub fn with_metadata(mut self, metadata: RelationshipMetadata) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_composition_target(
+        mut self,
+        module_path: impl Into<Arc<str>>,
+        export_name: impl Into<Arc<str>>,
+    ) -> Self {
+        self.composition_target = Some(CompositionTarget {
+            module_path: module_path.into(),
+            export_name: export_name.into(),
+        });
         self
     }
 }
@@ -277,6 +297,7 @@ pub struct UnresolvedRelationship {
     pub kind: RelationKind,
     pub metadata: Option<RelationshipMetadata>,
     pub to_range: Option<Range>,
+    pub composition_target: Option<CompositionTarget>,
 }
 
 /// A batch of data ready to be written to Tantivy.

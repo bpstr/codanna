@@ -417,6 +417,7 @@ fn tsconfig_alias_missing_export_is_negative_evidence_for_resolution() {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: Some(range),
+            composition_target: None,
         })
         .collect();
     let context = ResolutionContext {

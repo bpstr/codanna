@@ -432,6 +432,28 @@ fn select_strip_base<'a>(
 /// For legacy find_* methods: range typically points to the reference site.
 fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<RawRelationship> {
     let mut relationships = Vec::new();
+    let deferred = parser.find_deferred_compositions(content);
+    let claimed_uses: HashSet<_> = deferred.iter().map(|item| item.usage_range).collect();
+
+    for item in deferred {
+        let Some(target) = item.target else {
+            continue;
+        };
+        relationships.push(
+            RawRelationship::new(
+                item.owner,
+                item.usage_range,
+                item.local_binding,
+                item.usage_range,
+                crate::RelationKind::Uses,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(item.usage_range.start_line, item.usage_range.start_column),
+            )
+            .with_composition_target(target.module_path, target.export_name),
+        );
+    }
 
     // Function/method calls - MethodCall provides caller_range for precise lookup
     for call in parser.find_method_calls(content) {
@@ -537,6 +559,9 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
 
     // Type usage - range is the usage site
     for (context, used_type, usage_range) in parser.find_uses(content) {
+        if claimed_uses.contains(&usage_range) {
+            continue;
+        }
         relationships.push(
             RawRelationship::new(
                 context,

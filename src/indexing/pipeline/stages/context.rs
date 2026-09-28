@@ -433,6 +433,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: Some(Range::new(5, 4, 5, 20)),
+            composition_target: None,
         }
     }
 
@@ -568,6 +569,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: Some(to_range),
+            composition_target: None,
         };
 
         let stage = ContextStage::new(cache, index, factory, settings);
@@ -617,6 +619,7 @@ mod tests {
             kind: RelationKind::Extends,
             metadata: None,
             to_range: Some(Range::new(0, 0, 0, 0)),
+            composition_target: None,
         };
 
         let stage = ContextStage::new(cache, index, factory, settings);

@@ -29,7 +29,11 @@ fn exact(index: &IndexFacade, path: &str, name: &str) -> Symbol {
         .into_iter()
         .filter(|symbol| Path::new(symbol.file_path.as_ref()).ends_with(path))
         .collect();
-    assert_eq!(matches.len(), 1, "expected one {path}:{name}, got {matches:?}");
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected one {path}:{name}, got {matches:?}"
+    );
     matches.into_iter().next().unwrap()
 }
 
@@ -61,10 +65,23 @@ fn assert_graph(index: &IndexFacade) {
         ("reassigned.tsx", "ReassignedPicker"),
         ("cache-reassigned.tsx", "CacheReassignedPicker"),
         ("computed.tsx", "ComputedPicker"),
+        ("wrapper-reassigned.tsx", "WrapperReassignedPicker"),
+        ("wrapper-shadowed.tsx", "ShadowedWrapperPicker"),
+        ("missing.tsx", "MissingPicker"),
+        ("type-only.tsx", "TypeOnlyPicker"),
+        ("duplicate.tsx", "DuplicatePicker"),
+        ("duplicate.tsx", "SpreadPicker"),
+        ("block.tsx", "BlockPicker"),
     ] {
         let picker = exact(index, path, name);
-        assert!(outgoing(index, picker.id, RelationKind::Uses).is_empty(), "{path}:{name}");
-        assert!(outgoing(index, picker.id, RelationKind::Calls).is_empty(), "{path}:{name}");
+        assert!(
+            outgoing(index, picker.id, RelationKind::Uses).is_empty(),
+            "{path}:{name}"
+        );
+        assert!(
+            outgoing(index, picker.id, RelationKind::Calls).is_empty(),
+            "{path}:{name}"
+        );
     }
     let incoming: Vec<_> = index
         .document_index()
@@ -74,9 +91,18 @@ fn assert_graph(index: &IndexFacade) {
         .filter_map(|(from, _, _)| index.get_symbol(from))
         .map(|symbol| symbol.name.to_string())
         .collect();
-    assert_eq!(incoming.len(), 2);
+    assert_eq!(incoming.len(), 3);
     assert!(incoming.contains(&"Picker".to_owned()));
     assert!(incoming.contains(&"UncachedPicker".to_owned()));
+    assert!(incoming.contains(&"StaticPicker".to_owned()));
+    let direct = exact(index, "static.tsx", "DirectCall");
+    assert_eq!(
+        outgoing(index, direct.id, RelationKind::Calls)
+            .iter()
+            .map(|symbol| symbol.id)
+            .collect::<Vec<_>>(),
+        [provider.id]
+    );
 }
 
 #[test]

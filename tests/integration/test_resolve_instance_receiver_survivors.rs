@@ -84,6 +84,7 @@ fn typed_receiver_call(caller_file: u32) -> (UnresolvedRelationship, Vec<Variabl
             static_call: false,
         }),
         to_range: Some(Range::new(5, 1, 5, 20)),
+        composition_target: None,
     };
     let bindings = vec![VariableBinding {
         name: "v".to_string(),
@@ -279,6 +280,7 @@ fn span_local_class_anchors_same_file_duplicates() {
             static_call: false,
         }),
         to_range: Some(Range::new(10, 1, 10, 20)),
+        composition_target: None,
     };
     let bindings = vec![VariableBinding {
         name: "x".to_string(),
