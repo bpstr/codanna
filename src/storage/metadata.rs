@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 // rather than mixing corrected rows with unchanged files from v3.
 // v5 emits TypeScript object-method endpoints and traverses ordinary variable
 // initializers. v6 adds source-grounded lazy component Uses edges. v7 adds Go
-// interface DispatchCandidate edges and Python typing.cast Uses edges. Rebuild
-// to recover relationship rows missing from older emissions.
-pub const EMISSION_SEMANTICS_VERSION: u32 = 7;
+// interface DispatchCandidate edges and Python typing.cast Uses edges. v8 binds
+// TypeScript path aliases to their exact project export instead of an ambiguous
+// module string. Rebuild to recover relationship rows missing from older emissions.
+pub const EMISSION_SEMANTICS_VERSION: u32 = 8;
 
 /// Short commit of the binary, `-dirty` when it was built from a modified
 /// tree. `None` when built without a work tree (release tarballs), which

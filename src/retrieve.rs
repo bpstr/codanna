@@ -8,7 +8,7 @@ use crate::io::{
     ExitCode, OutputFormat,
     envelope::{EntityType as EnvelopeEntityType, Envelope, FieldProjectionError, ResultCode},
 };
-use crate::symbol::context::SymbolContext;
+use crate::symbol::context::{SymbolContext, SymbolRelationships};
 use serde::Serialize;
 use std::fmt::Display;
 
@@ -769,7 +769,10 @@ pub fn retrieve_describe(
     let mut context = SymbolContext {
         symbol: symbol.clone(),
         file_path,
-        relationships: Default::default(),
+        relationships: SymbolRelationships {
+            resolver_binding: indexer.get_resolver_binding(&symbol),
+            ..Default::default()
+        },
     };
 
     // Get calls for this specific symbol

@@ -20,6 +20,9 @@ pub struct SymbolContext {
 /// Container for all types of symbol relationships
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SymbolRelationships {
+    /// Project resolver config governing this symbol's source file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolver_binding: Option<crate::project_resolver::persist::ResolverBindingDiagnostic>,
     /// What traits this type implements
     pub implements: Option<Vec<Symbol>>,
     /// What types implement this trait
@@ -171,6 +174,20 @@ impl SymbolContext {
     }
 
     fn append_metadata(&self, output: &mut String, indent: &str) {
+        if let Some(binding) = &self.relationships.resolver_binding {
+            let status = match binding.status {
+                crate::project_resolver::persist::ResolverBindingStatus::Bound => "bound",
+                crate::project_resolver::persist::ResolverBindingStatus::ResolverBindingsAbsent => {
+                    "resolver_bindings_absent"
+                }
+            };
+            output.push_str(&format!("{indent}Resolver binding: {status}"));
+            if let Some(path) = &binding.config_path {
+                output.push_str(&format!(" ({})", path.display()));
+            }
+            output.push('\n');
+        }
+
         // Module path
         if let Some(module) = self.symbol.as_module_path() {
             output.push_str(&format!("{indent}Module: {module}\n"));

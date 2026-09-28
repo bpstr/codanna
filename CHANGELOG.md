@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multi-project TypeScript aliases resolve through the exact `tsconfig.json`
+  binding and exported file, so identical aliases cannot cross project roots.
+  Symbol context reports the governing config or
+  `resolver_bindings_absent`; Go, Python and TypeScript resolver caches follow
+  the selected workspace. Existing indexes require a full rebuild; emission
+  semantics advance to v8.
 - Go interface-field calls expose structurally valid concrete methods as
   `DispatchCandidate` relationships, separate from definite `Calls`. Python
   `typing.cast` arguments record imported protocol aliases as `Uses` while
