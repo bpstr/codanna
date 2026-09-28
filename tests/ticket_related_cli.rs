@@ -55,7 +55,7 @@ impl Workspace {
 #[test]
 fn ticket_related_cli_json_text_and_default_compatibility() {
     let workspace = Workspace::new();
-    let mut request = json!({"query":"conversation timeout", "code_limit":1});
+    let mut request = json!({"query":"conversation timeout", "code_limit":1, "view":"detail", "max_output_bytes":65536});
     let disabled = workspace.ticket(&request, true);
     assert!(disabled.status.success());
     let disabled: Value = serde_json::from_slice(&disabled.stdout).unwrap();
@@ -79,7 +79,7 @@ fn ticket_related_cli_json_text_and_default_compatibility() {
     let text = workspace.ticket(&request, false);
     assert!(text.status.success());
     let text = String::from_utf8_lossy(&text.stdout);
-    assert!(text.contains("Related implementations"));
+    assert!(text.contains("code.related_code.items"));
     assert!(text.contains("timeout_worker"));
     assert!(!text.contains('\u{1b}'));
 }
@@ -118,6 +118,6 @@ fn ticket_related_cli_rejects_wrong_types_and_never_broadens_scope() {
     );
     assert!(text_result.status.success());
     let rendered = String::from_utf8_lossy(&text_result.stdout);
-    assert!(rendered.contains("Scope: src/main.rs"));
+    assert!(rendered.contains("path_prefix: \"src/main.rs\""));
     assert!(rendered.contains("timeout_worker"));
 }

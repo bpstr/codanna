@@ -322,7 +322,13 @@ impl CodeIntelligenceServer {
             let kind_filter = kind.as_deref().map(str::parse::<crate::SymbolKind>).transpose()
                 .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
             let results = indexer.search_scoped(&query, limit as usize, kind_filter, module.as_deref(), lang.as_deref(), path_prefix.as_deref())
-                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+                .map_err(|error| {
+                    if matches!(&error, crate::IndexError::Storage(crate::StorageError::InvalidFieldValue { .. })) {
+                        McpError::invalid_params(error.to_string(), None)
+                    } else {
+                        McpError::internal_error(error.to_string(), None)
+                    }
+                })?;
             let rows: Vec<_> = results.iter().map(|row| crate::mcp::output::lexical_row(row, view, &query)).collect();
             crate::mcp::output::bounded(serde_json::json!({
                 "schema_version":2, "results":rows, "retrieval":{"mode":"lexical", "corpus":"code_symbols", "scores_are_probabilities":false, "support_status":"not_assessed"},

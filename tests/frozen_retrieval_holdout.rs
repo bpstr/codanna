@@ -213,28 +213,39 @@ fn frozen_holdout_executes_every_oracle_against_reopened_indexes() {
             String::from_utf8_lossy(&output.stderr)
         );
         let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let compact = response["meta"]["schema_version"] == "2.0.0";
+        let payload = if compact {
+            &response["data"]["results"]
+        } else {
+            &response["data"]
+        };
+        if compact {
+            assert_eq!(response["data"]["output"]["partial"], false, "{id}");
+        }
         let data = if case["exit_code"] == 0 {
             assert_eq!(response["code"], "OK", "{id}");
             assert_eq!(response["status"], "success", "{id}");
-            response["data"]
+            payload
                 .as_array()
                 .expect("successful retrieval has array data")
                 .clone()
         } else {
             assert_eq!(response["code"], "NOT_FOUND", "{id}");
             assert_eq!(response["status"], "not_found", "{id}");
-            match response.get("data") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(data)) => data.clone(),
+            match payload {
+                Value::Null => Vec::new(),
+                Value::Array(data) => data.clone(),
                 _ => panic!("{id}: malformed not-found data"),
             }
         };
         let actual: BTreeSet<String> = if tool == "search_documents" {
-            assert_eq!(response["meta"]["retrieval"]["mode"], "literal", "{id}");
-            assert_eq!(
-                response["meta"]["retrieval"]["support_status"], "not_assessed",
-                "{id}"
-            );
+            let retrieval = if compact {
+                &response["data"]["retrieval"]
+            } else {
+                &response["meta"]["retrieval"]
+            };
+            assert_eq!(retrieval["mode"], "literal", "{id}");
+            assert_eq!(retrieval["support_status"], "not_assessed", "{id}");
             data.iter()
                 .map(|result| {
                     PathBuf::from(result["source_path"].as_str().unwrap())
