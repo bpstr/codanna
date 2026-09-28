@@ -7,6 +7,7 @@ use crate::vector::{MmapVectorStorage, SegmentOrdinal, VectorDimension, VectorId
 use crate::{SymbolId, semantic::SemanticSearchError};
 use std::path::Path;
 
+const SEMANTIC_VECTOR_FILE: &str = "segment_0.vec";
 const VECTOR_HEADER_BYTES: u64 = 16;
 const VECTOR_ID_BYTES: u64 = 4;
 const F32_BYTES: u64 = 4;
@@ -22,6 +23,11 @@ pub struct SemanticVectorStorage {
 }
 
 impl SemanticVectorStorage {
+    /// Check the vector segment used by semantic persistence, independently of metadata.
+    pub(crate) fn vectors_exist(path: &Path) -> bool {
+        path.join(SEMANTIC_VECTOR_FILE).is_file()
+    }
+
     /// Creates a new semantic vector storage.
     ///
     /// # Arguments
@@ -29,7 +35,7 @@ impl SemanticVectorStorage {
     /// * `dimension` - Dimension of embeddings (must match model output)
     pub fn new(path: &Path, dimension: VectorDimension) -> Result<Self, SemanticSearchError> {
         // First, remove any existing storage file to ensure clean state
-        let storage_path = path.join("segment_0.vec");
+        let storage_path = path.join(SEMANTIC_VECTOR_FILE);
         if storage_path.exists() {
             std::fs::remove_file(&storage_path).map_err(|e| SemanticSearchError::StorageError {
                 message: format!("Failed to remove old storage: {e}"),

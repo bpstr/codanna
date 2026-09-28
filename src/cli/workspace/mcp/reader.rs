@@ -149,10 +149,19 @@ impl ServerHandler for Reader {
                 .map_err(super::internal)?;
         }
         let mut server = self.code.clone();
-        if matches!(
-            request.name.as_ref(),
-            "search_context" | "search_documents" | "search_ticket_context"
-        ) {
+        let literal_documents = request.name == "search_documents"
+            && request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("literal"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+        if !literal_documents
+            && matches!(
+                request.name.as_ref(),
+                "search_context" | "search_documents" | "search_ticket_context"
+            )
+        {
             let settings = self.settings.clone();
             let documents = self
                 .documents

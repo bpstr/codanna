@@ -513,22 +513,35 @@ pub fn build(input: &Input) -> Result<Graph> {
     for (path, text) in input.files.iter().filter(|(p, _)| is_document(p)) {
         let mut seen: BTreeMap<String, usize> = BTreeMap::new();
         let mut headings = Vec::new();
-        let mut fence = None;
-        for (i, line) in text.lines().enumerate() {
-            if fenced(line, &mut fence) {
-                continue;
-            }
-            let trimmed = line.trim_start();
-            let count = trimmed.bytes().take_while(|&b| b == b'#').count();
-            if (1..=6).contains(&count) && trimmed.as_bytes().get(count) == Some(&b' ') {
-                headings.push((
-                    i as u32 + 1,
-                    trimmed[count..]
-                        .trim()
-                        .trim_end_matches('#')
-                        .trim()
-                        .to_owned(),
-                ));
+        let mut heading = None;
+        let mut line_offset = 0;
+        let mut line_number = 1;
+        for (event, range) in Parser::new(text).into_offset_iter() {
+            match event {
+                Event::Start(Tag::Heading { .. }) => {
+                    line_number += text[line_offset..range.start]
+                        .bytes()
+                        .filter(|&b| b == b'\n')
+                        .count() as u32;
+                    line_offset = range.start;
+                    heading = Some((line_number, String::new()));
+                }
+                Event::Text(value) | Event::Code(value) => {
+                    if let Some((_, label)) = &mut heading {
+                        label.push_str(&value);
+                    }
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    if let Some((_, label)) = &mut heading {
+                        label.push(' ');
+                    }
+                }
+                Event::End(TagEnd::Heading(_)) => {
+                    if let Some(entry) = heading.take() {
+                        headings.push(entry);
+                    }
+                }
+                _ => (),
             }
         }
         for (i, (start, label)) in headings.iter().enumerate() {
@@ -749,7 +762,7 @@ pub fn build(input: &Input) -> Result<Graph> {
         }
     }
     graph.limitations.push("Code relationships inherit Codanna's static resolution; dump-to-source freshness is not independently proven.".into());
-    graph.limitations.push("Markdown links use CommonMark inline/full/collapsed/shortcut reference syntax with source spans; images, remote links and links in code/HTML blocks are excluded. Local URL paths and fragments are percent-decoded once. Headings support ATX anchors; unknown inline literals are not broken references.".into());
+    graph.limitations.push("Markdown links use CommonMark inline/full/collapsed/shortcut reference syntax with source spans; images, remote links and links in code/HTML blocks are excluded. Local URL paths and fragments are percent-decoded once. Headings support ATX and Setext anchors derived from parsed text; unknown inline literals are not broken references.".into());
     graph.limitations.push("Rationale comments attach to the smallest enclosing symbol or a uniquely identified adjacent declaration at the same indentation. Gaps, statements and explicit file-level metadata prevent leading attachment; this is source association, not compiler comment semantics.".into());
     graph.limitations.push(
         "Test nodes identify test source, not executed coverage or proof of correctness.".into(),
@@ -901,6 +914,51 @@ mod tests {
         graph.edges[0].to = "missing".into();
         assert!(graph.validate().is_err());
     }
+    #[test]
+    fn formatted_heading_links_resolve_using_visible_text() {
+        let mut input = fixture();
+        input.files.insert(
+            "docs/a.md".into(),
+            "# Contract readiness ([core-work endpoints](target.md), [OpenAPI][api])\n\
+             # **Bold** and `code` &amp; *emphasis*\n\
+             # [Repeated](target.md)\n\
+             # Repeated\n\
+             Setext title\n============\n\n\
+             [api]: target.md\n\n\
+             [contract](#contract-readiness-core-work-endpoints-openapi)\n\
+             [formatted](#bold-and-code--emphasis)\n\
+             [duplicate](#repeated-1)\n\
+             [setext](#setext-title)\n"
+                .into(),
+        );
+        input
+            .files
+            .insert("docs/target.md".into(), "# Target\n".into());
+        input.files.insert(
+            "docs/reference.md".into(),
+            "[contract](a.md#contract-readiness-core-work-endpoints-openapi)\n".into(),
+        );
+        let graph = build(&input).unwrap();
+        assert!(graph.unresolved.is_empty(), "{:?}", graph.unresolved);
+        assert!(graph.edges.iter().any(|edge| {
+            edge.method == "markdown_link"
+                && edge.evidence.path == "docs/reference.md"
+                && graph.nodes[&edge.to].source.path == "docs/a.md"
+                && graph.nodes[&edge.to].source.start_line == 1
+        }));
+        for line in [1, 10, 11, 12, 13] {
+            assert!(
+                graph.edges.iter().any(|edge| {
+                    edge.method == "markdown_link"
+                        && edge.evidence.path == "docs/a.md"
+                        && edge.evidence.start_line == line
+                }),
+                "missing link evidence at line {line}"
+            );
+        }
+        graph.validate().unwrap();
+    }
+
     #[test]
     fn duplicate_headings_are_addressable() {
         let mut input = fixture();

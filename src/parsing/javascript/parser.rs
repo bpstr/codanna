@@ -1826,6 +1826,23 @@ impl LanguageParser for JavaScriptParser {
             .unwrap_or_default()
     }
 
+    fn find_deferred_compositions(
+        &mut self,
+        code: &str,
+    ) -> Vec<crate::parsing::DeferredCompositionUse> {
+        let imports = self.find_imports(code, FileId::new(1).expect("one is a valid file id"));
+        self.parser
+            .parse(code, None)
+            .map(|tree| {
+                crate::parsing::TypeScriptParser::deferred_compositions_from_root(
+                    tree.root_node(),
+                    code,
+                    &imports,
+                )
+            })
+            .unwrap_or_default()
+    }
+
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,

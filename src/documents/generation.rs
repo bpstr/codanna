@@ -45,7 +45,12 @@ pub(super) fn try_lock(base: &Path) -> StoreResult<Option<File>> {
 }
 
 pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> StoreResult<T> {
-    let file = File::open(path)?;
+    let file = super::drift::open_regular_source(path)?.ok_or_else(|| {
+        DocumentStoreError::Index(format!(
+            "Document state {} is not a regular file",
+            path.display()
+        ))
+    })?;
     if file.metadata()?.len() > limit {
         return Err(DocumentStoreError::Index(format!(
             "Document state {} exceeds the {limit}-byte limit",

@@ -106,6 +106,7 @@ fn instance_call_unresolved(
         kind: RelationKind::Calls,
         metadata: Some(meta),
         to_range: None,
+        composition_target: None,
     }
 }
 

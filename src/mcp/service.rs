@@ -8,6 +8,45 @@
 use crate::Symbol;
 use crate::indexing::facade::IndexFacade;
 
+/// Attach ID-keyed context only when its definition is the selected row.
+/// A collision or an index change must never substitute another definition.
+pub(crate) fn selected_symbol_context(
+    facade: &IndexFacade,
+    selected: &Symbol,
+) -> Option<crate::symbol::context::SymbolContext> {
+    facade
+        .get_symbol_context(
+            selected.id,
+            crate::symbol::context::ContextIncludes::SYMBOL_CARD,
+        )
+        .filter(|context| context.symbol == *selected)
+}
+
+/// Semantic endpoint evidence contract; configured defaults are not implicitly
+/// applied to the existing omitted-threshold nearest-neighbor route.
+pub(crate) fn semantic_retrieval_metadata(
+    requested_floor: Option<f32>,
+    configured_floor: f32,
+    returned: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "mode": "semantic_nearest_neighbors",
+        "corpus": "code_symbols",
+        "requested_score_floor": requested_floor,
+        "effective_score_floor": requested_floor,
+        "configured_score_floor": configured_floor,
+        "configured_floor_applied": false,
+        "floor_stage": if requested_floor.is_some() { "after_top_k" } else { "not_applied" },
+        "returned_symbols": returned,
+        "support_status": "not_assessed",
+        "scores_are_probabilities": false,
+        "graph_scope": "resolved_indexed_relationships",
+        "graph_count_unit": "distinct_symbols",
+        "call_site_totals": "not_reported",
+        "unresolved_external_call_coverage": "not_reported"
+    })
+}
+
 /// Outcome of resolving a tool's target symbol from `symbol_id` or name.
 pub enum SymbolResolution {
     Resolved {
@@ -68,7 +107,7 @@ pub enum FindSymbolTarget {
     /// Matches, possibly empty. `label` is the queried name, or the
     /// resolved symbol's own name for the `symbol_id:` form.
     Symbols { symbols: Vec<Symbol>, label: String },
-    /// `symbol_id:` prefix with a non-numeric id.
+    /// `symbol_id:` prefix without a positive numeric id.
     InvalidId(String),
 }
 
@@ -99,6 +138,9 @@ pub fn try_resolve_find_symbol_target(
         let Ok(id) = id_str.parse::<u32>() else {
             return Ok(FindSymbolTarget::InvalidId(id_str.to_string()));
         };
+        if id == 0 {
+            return Ok(FindSymbolTarget::InvalidId(id_str.to_string()));
+        }
         let symbols: Vec<Symbol> = facade
             .document_index()
             .find_symbol_by_id(crate::SymbolId(id))?
@@ -147,6 +189,68 @@ pub struct SymbolPageInfo {
     pub offset: u32,
     pub limit: u32,
     pub next_offset: Option<usize>,
+}
+
+pub enum FindSymbolPageTarget {
+    Symbols {
+        symbols: Vec<Symbol>,
+        label: String,
+        page: SymbolPageInfo,
+    },
+    InvalidId(String),
+}
+
+/// Resolve and page exact-name candidates using one storage snapshot per query.
+pub fn try_resolve_find_symbol_page(
+    facade: &IndexFacade,
+    name: &str,
+    lang: Option<&str>,
+    offset: u32,
+    limit: u32,
+) -> crate::StorageResult<FindSymbolPageTarget> {
+    if name.starts_with("symbol_id:") {
+        return Ok(match try_resolve_find_symbol_target(facade, name, lang)? {
+            FindSymbolTarget::Symbols { symbols, label } => {
+                let (symbols, page) = page_symbols(symbols, offset, limit);
+                FindSymbolPageTarget::Symbols {
+                    symbols,
+                    label,
+                    page,
+                }
+            }
+            FindSymbolTarget::InvalidId(id) => FindSymbolPageTarget::InvalidId(id),
+        });
+    }
+    let index = facade.document_index();
+    let (mut symbols, mut total) =
+        index.find_symbols_by_name_page(name, lang, offset as usize, limit as usize)?;
+    if total == 0
+        && let Some((owner, member)) = name.rsplit_once('.')
+        && !owner.is_empty()
+        && !member.is_empty()
+    {
+        (symbols, total) = index.find_symbols_by_name_filtered_page(
+            member,
+            lang,
+            offset as usize,
+            limit as usize,
+            |symbol| is_member_of(symbol, owner),
+        )?;
+    }
+    let returned = symbols.len();
+    let next = offset as usize + returned;
+    let page = SymbolPageInfo {
+        total,
+        returned,
+        offset,
+        limit,
+        next_offset: (next < total).then_some(next),
+    };
+    Ok(FindSymbolPageTarget::Symbols {
+        symbols,
+        label: name.to_owned(),
+        page,
+    })
 }
 
 pub fn page_symbols(
@@ -357,6 +461,24 @@ pub fn qualified_call(receiver: &str, is_static: bool, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn semantic_contract_distinguishes_omitted_and_explicit_score_floors() {
+        let omitted = super::semantic_retrieval_metadata(None, 0.6, 5);
+        assert!(omitted["effective_score_floor"].is_null());
+        assert_eq!(omitted["floor_stage"], "not_applied");
+        assert_eq!(omitted["configured_floor_applied"], false);
+        assert_eq!(omitted["support_status"], "not_assessed");
+        let explicit = super::semantic_retrieval_metadata(Some(0.7), 0.6, 0);
+        assert!((explicit["effective_score_floor"].as_f64().unwrap() - 0.7).abs() < 0.000001);
+        assert_eq!(explicit["floor_stage"], "after_top_k");
+        assert_eq!(explicit["returned_symbols"], 0);
+        assert_eq!(explicit["graph_count_unit"], "distinct_symbols");
+        assert_eq!(explicit["call_site_totals"], "not_reported");
+        assert_eq!(
+            explicit["unresolved_external_call_coverage"],
+            "not_reported"
+        );
+    }
     use super::*;
 
     #[test]
@@ -457,7 +579,7 @@ mod tests {
         );
         assert_eq!(
             missing_param_message("find_symbol"),
-            "find_symbol requires 'name' parameter"
+            "find_symbol requires either 'name' or 'symbol_id' parameter"
         );
         assert_eq!(
             accepted_params_line("get_calls"),

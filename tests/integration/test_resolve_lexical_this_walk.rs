@@ -90,6 +90,7 @@ fn this_call(from_id: u32, to_name: &str, call_site: Range) -> UnresolvedRelatio
                 .with_receiver("this"),
         ),
         to_range: Some(call_site),
+        composition_target: None,
     }
 }
 

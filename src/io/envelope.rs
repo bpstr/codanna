@@ -162,6 +162,14 @@ pub struct Meta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
 
+    /// Semantic retrieval evidence shared with MCP endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<serde_json::Value>,
+
+    /// Per-definition membership and representation diagnostics for find_symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_definitions: Option<serde_json::Value>,
+
     /// Traversal depth for tree/graph results
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
@@ -188,6 +196,8 @@ impl Default for Meta {
             duration_ms: None,
             truncated: None,
             depth: None,
+            retrieval: None,
+            semantic_definitions: None,
             total: None,
             offset: None,
             limit: None,

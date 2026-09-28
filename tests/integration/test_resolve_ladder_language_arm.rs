@@ -111,6 +111,7 @@ fn relation(kind: RelationKind, to_name: &str, caller_file: u32) -> UnresolvedRe
         kind,
         metadata: None,
         to_range: Some(Range::new(12, 1, 12, 20)),
+        composition_target: None,
     }
 }
 
