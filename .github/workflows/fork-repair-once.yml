@@ -1,5 +1,5 @@
-# Temporary branch-only repair runner. Removed before the PR is finalized.
-name: Fork repair validation
+# Temporary branch-only validation runner; removed before final PR delivery.
+name: Fork repair qualification
 on:
   push:
     branches: [fix/upstream-regressions-20260928]
@@ -10,7 +10,7 @@ concurrency:
   group: fork-repair-20260928
   cancel-in-progress: false
 jobs:
-  repair:
+  qualify:
     if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/fix/upstream-regressions-20260928'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
@@ -31,68 +32,54 @@ jobs:
         with:
           cache-on-failure: true
           shared-key: fork-repair-20260928
-      - name: Apply reviewed edits with exact source and patch checks
+      - name: Integrate inspected fork main and remove transfer manifests
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, pathlib, subprocess
-          entries = []
-          for n in range(1, 7):
-              entries.extend(json.loads(pathlib.Path(f'.fork-repair-{n}.json').read_text()))
-          assert len(entries) == 48
-          seen = set()
-          for entry in entries:
-              path = pathlib.Path(entry['path'])
-              assert not path.is_absolute() and '..' not in path.parts
-              assert path.parts[0] in ('src', 'tests') or str(path) in ('AGENTS.md', 'UPSTREAM.md', 'CHANGELOG.md')
-              assert str(path) not in seen
-              seen.add(str(path))
-              old = path.read_bytes() if path.exists() else None
-              assert (hashlib.sha256(old).hexdigest() if old is not None else None) == entry['before'], f'Base moved: {path}'
-              lines = (old or b'').decode().splitlines(True)
-              for start, end, replacement in reversed(entry['edits']):
-                  assert 0 <= start <= end <= len(lines)
-                  lines[start:end] = replacement.splitlines(True)
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_text(''.join(lines))
-          subprocess.run(['git', 'add', '-N', '--', *sorted(seen)], check=True)
-          diff = subprocess.check_output(['git', 'diff', '--binary', '--', 'src', 'tests', 'AGENTS.md', 'UPSTREAM.md', 'CHANGELOG.md'])
-          assert hashlib.sha256(diff).hexdigest() == 'fd11bcbc7b7383c4be4c81146b511f050456b05d33e6ea7785118647e273a8d8', 'Transferred patch differs from reviewed local patch'
-          pathlib.Path('/tmp/repair-paths.json').write_text(json.dumps(sorted(seen)))
-          PY
-          cargo fmt --all
-          git diff --check
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          allowed = set(json.loads(pathlib.Path('/tmp/repair-paths.json').read_text()))
-          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
-          assert changed <= allowed, f'Unexpected formatting changes: {changed - allowed}'
-          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
-          PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit --signoff -m 'Repair upstream-derived indexing and watcher regressions'
+          git merge --no-ff --no-commit f8018e78db3eb7058141e435a7f0c4f11bbb182e
+          python3 - <<'PY'
+          from pathlib import Path
+          def replace(path, old, new):
+              p = Path(path); content = p.read_text()
+              assert content.count(old) == 1, path
+              p.write_text(content.replace(old, new))
+          replace('UPSTREAM.md', '- Inspected fork main: `705f946982437941eb845d76c524129c868c151f`', '- Initial fork base: `705f946982437941eb845d76c524129c868c151f`\n- Rechecked and integrated fork main: `f8018e78db3eb7058141e435a7f0c4f11bbb182e`')
+          replace('UPSTREAM.md', 'independent. Their draft fixtures are not evidence that a fix has shipped or passed.', 'independent. A final recheck found #70 and #73 merged on `f8018e7`; those changes\nare integrated unchanged. The remaining 10 drafts are #74-#83. The updated #80\nhead `42e8ee4a973e06499dd3b86b8778272a7a31a0b0` adds segment-measurement\nfixtures and a measured receipt, not any of these fixes. Its prepared-data test\nresult is scoped to that PR and is not qualification of this adaptation.')
+          replace('UPSTREAM.md', 'The new fixtures are deterministic, local, and disable semantic providers. Source\ninspection and `git diff --check` were performed during preparation. Rust test results\nmust be taken from the adaptation PR\'s exact-head CI receipts, not inferred from this\nfixture list or upstream\'s green checks. Native macOS/Windows, million-symbol scaling,\nand full transport shutdown are separate qualification scopes.', 'The new fixtures are deterministic, local, and disable semantic providers. On\nimplementation commit `4f626009a54219f3c87589d31b318803fde02da9`,\n[run 36413674627](https://github.com/bpstr/codanna/actions/runs/36413674627)\npassed formatting, 5 focused unit regressions, 7 upstream integration regressions\n(2 scale witnesses intentionally ignored), and all 23 export-barrel regressions.\nThat receipt predates integration of `f8018e7`; combined-head checks must be\nverified separately. Native macOS/Windows, million-symbol scaling, and full\ntransport shutdown are separate qualification scopes, not implied by these passes.')
+          replace('src/parsing/resolution.rs', '/// Trait for symbol cache used in pipeline resolution.\n///\n/// Implemented by `SymbolLookupCache` (DashMap-based parallel pipeline cache).\n/// Provides methods for resolving imports and symbols without hitting Tantivy.\n/// Absence is meaningful only for a complete persisted file view.', '/// Absence is meaningful only for a complete persisted file view.')
+          replace('src/indexing/pipeline/file_presence.rs', '            if let Some(key) = stem_key(&old) {\n                if let Some(count) = self.stems.get_mut(&key) {\n                    *count -= 1;\n                    if *count == 0 {\n                        self.stems.remove(&key);\n                    }\n                }\n            }', '            if let Some(key) = stem_key(&old)\n                && let Some(count) = self.stems.get_mut(&key)\n            {\n                *count -= 1;\n                if *count == 0 {\n                    self.stems.remove(&key);\n                }\n            }')
+          replace('src/indexing/pipeline/stages/write.rs', '        if self.batch_started {\n            if let Err(error) = self.index.rollback_batch() {\n                tracing::error!(target: "pipeline", "Failed to discard unfinished relationship batch: {error}");\n            }\n        }', '        if self.batch_started\n            && let Err(error) = self.index.rollback_batch()\n        {\n            tracing::error!(target: "pipeline", "Failed to discard unfinished relationship batch: {error}");\n        }')
+          PY
+          git rm -- .fork-repair-{1,2,3,4,5,6}.json
+          cargo fmt --all
+          git diff --check
+          git add -- UPSTREAM.md src/parsing/resolution.rs src/indexing/pipeline/file_presence.rs src/indexing/pipeline/stages/write.rs
+          git commit --signoff -m 'Integrate current fork main and refresh the upstream review receipt'
           git push origin HEAD:refs/heads/fix/upstream-regressions-20260928
           git config --local --unset-all http.https://github.com/.extraheader || true
-          git rev-parse HEAD | tee "$RUNNER_TEMP/repair-head.txt"
-      - name: Focused unit regressions
-        run: cargo test --locked --lib upstream_repair -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-unit.log"
-      - name: Upstream overlap regressions
+          git rev-parse HEAD | tee "$RUNNER_TEMP/qualification-head.txt"
+      - name: Strict all-target Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/qualification-clippy.log"
+      - name: No-default-features compilation
         if: success() || failure()
-        run: cargo test --locked --test upstream_regressions -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-upstream.log"
-      - name: Export barrel regressions
+        run: cargo check --locked --no-default-features 2>&1 | tee "$RUNNER_TEMP/qualification-no-default.log"
+      - name: Combined-head focused regressions
         if: success() || failure()
-        run: cargo test --locked --test web_export_regressions -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-exports.log"
-      - name: Export source and validation receipts
+        run: |
+          set -o pipefail
+          cargo test --locked --lib upstream_repair -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/qualification-unit.log"
+          cargo test --locked --test upstream_regressions --test web_export_regressions --test find_symbol_id_contracts -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/qualification-integration.log"
+      - name: Export reviewed source and receipts
         if: always()
-        run: git archive --format=tar HEAD > "$RUNNER_TEMP/repaired-source.tar"
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/qualified-source.tar"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fork-repair-evidence
+          name: fork-qualification-evidence
           path: |
-            ${{ runner.temp }}/repair-*.log
-            ${{ runner.temp }}/repair-head.txt
-            ${{ runner.temp }}/repaired-source.tar
+            ${{ runner.temp }}/qualification-*.log
+            ${{ runner.temp }}/qualification-head.txt
+            ${{ runner.temp }}/qualified-source.tar
           retention-days: 2
