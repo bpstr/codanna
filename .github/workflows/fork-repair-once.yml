@@ -1,0 +1,24 @@
+# Temporary branch-only workspace transfer; removed by the repair commit.
+name: Fork repair workspace
+on:
+  push:
+    branches: [fix/upstream-regressions-20260928]
+    paths: [.github/workflows/fork-repair-once.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/fix/upstream-regressions-20260928'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export tracked public source without Git credentials
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/fork-source.tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fork-source
+          path: ${{ runner.temp }}/fork-source.tar
+          retention-days: 1
