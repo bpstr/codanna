@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "finding": "F07",
-  "status": "prepared_not_run",
+  "status": "executed_local",
   "provider_requests": 0,
   "cases": [
     {
@@ -10,6 +10,7 @@
         "Allow.Authorize",
         "Deny.Authorize"
       ],
+      "relationship": "DispatchCandidate",
       "forbid": "definite_concrete_calls_without_binding"
     },
     {

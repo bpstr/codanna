@@ -15,6 +15,10 @@ pub enum RelationKind {
     DefinedIn,
     References,
     ReferencedBy,
+    /// A possible dynamic-dispatch target backed by structural type evidence.
+    DispatchCandidate,
+    /// Reverse edge of [`Self::DispatchCandidate`].
+    DispatchCandidateOf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,6 +92,8 @@ impl RelationKind {
             Self::DefinedIn => Self::Defines,
             Self::References => Self::ReferencedBy,
             Self::ReferencedBy => Self::References,
+            Self::DispatchCandidate => Self::DispatchCandidateOf,
+            Self::DispatchCandidateOf => Self::DispatchCandidate,
         }
     }
 
@@ -107,6 +113,8 @@ impl RelationKind {
                 | Self::UsedBy
                 | Self::References
                 | Self::ReferencedBy
+                | Self::DispatchCandidate
+                | Self::DispatchCandidateOf
         )
     }
 }
@@ -227,6 +235,10 @@ mod tests {
             RelationKind::References.inverse(),
             RelationKind::ReferencedBy
         );
+        assert_eq!(
+            RelationKind::DispatchCandidate.inverse(),
+            RelationKind::DispatchCandidateOf
+        );
     }
 
     #[test]
@@ -242,6 +254,7 @@ mod tests {
         assert!(RelationKind::CalledBy.is_usage());
         assert!(RelationKind::Uses.is_usage());
         assert!(RelationKind::References.is_usage());
+        assert!(RelationKind::DispatchCandidate.is_usage());
 
         // Not usage or hierarchical
         assert!(!RelationKind::Defines.is_usage());

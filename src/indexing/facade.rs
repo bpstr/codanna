@@ -857,6 +857,15 @@ impl IndexFacade {
             .unwrap_or_default()
     }
 
+    /// Get possible dynamic-dispatch targets with their source evidence.
+    pub fn get_dispatch_candidates_with_metadata(
+        &self,
+        symbol_id: SymbolId,
+    ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
+        self.graph_neighbors(symbol_id, RelationKind::DispatchCandidate, false, None)
+            .unwrap_or_default()
+    }
+
     /// Get implementations of a trait/interface.
     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol> {
         self.graph_neighbors(trait_id, RelationKind::Implements, true, None)
@@ -922,6 +931,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -936,6 +946,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -1017,6 +1028,10 @@ impl IndexFacade {
             if !referenced_by.is_empty() {
                 relationships.referenced_by = Some(referenced_by);
             }
+            let dispatch_candidates = self.get_dispatch_candidates_with_metadata(symbol_id);
+            if !dispatch_candidates.is_empty() {
+                relationships.dispatch_candidates = Some(dispatch_candidates);
+            }
         }
 
         if include.contains(ContextIncludes::EXTENDS) {
@@ -1055,6 +1070,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Defines,
@@ -1080,6 +1096,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
         ] {

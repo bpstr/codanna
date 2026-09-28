@@ -65,6 +65,8 @@ pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
         "DefinedIn" => RelationKind::DefinedIn,
         "References" => RelationKind::References,
         "ReferencedBy" => RelationKind::ReferencedBy,
+        "DispatchCandidate" => RelationKind::DispatchCandidate,
+        "DispatchCandidateOf" => RelationKind::DispatchCandidateOf,
         _ => return None,
     })
 }

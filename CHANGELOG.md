@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Go interface-field calls expose structurally valid concrete methods as
+  `DispatchCandidate` relationships, separate from definite `Calls`. Python
+  `typing.cast` arguments record imported protocol aliases as `Uses` while
+  respecting parameter shadowing. Existing indexes require a full rebuild;
+  emission semantics advance to v7.
 - MCP `find_symbol` accepts a typed positive `symbol_id` for definition
   disambiguation, alongside name lookup and the legacy `name=symbol_id:N` form.
   Unknown IDs and language mismatches return no matches; conflicting targets

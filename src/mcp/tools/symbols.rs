@@ -206,6 +206,10 @@ impl CodeIntelligenceServer {
                     for (label, edges) in [
                         ("References", &ctx.relationships.references),
                         ("Referenced by", &ctx.relationships.referenced_by),
+                        (
+                            "Dispatch candidates",
+                            &ctx.relationships.dispatch_candidates,
+                        ),
                     ] {
                         if let Some(edges) = edges.as_ref().filter(|edges| !edges.is_empty()) {
                             result.push_str(&format!("{label}: {} symbol(s)\n", edges.len()));

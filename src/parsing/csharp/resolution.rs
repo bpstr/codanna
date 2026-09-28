@@ -272,7 +272,7 @@ impl ResolutionScope for CSharpResolutionContext {
                 // C#: classes inherit from classes
                 self.resolve(to_name)
             }
-            RelationKind::Uses | RelationKind::References => {
+            RelationKind::Uses | RelationKind::References | RelationKind::DispatchCandidate => {
                 // General usage/reference
                 self.resolve(to_name)
             }
@@ -293,6 +293,7 @@ impl ResolutionScope for CSharpResolutionContext {
                 // Reverse relationships - typically used for finding references
                 self.resolve(to_name)
             }
+            RelationKind::DispatchCandidateOf => self.resolve(to_name),
         }
     }
 

@@ -792,6 +792,10 @@ pub fn retrieve_describe(
     if !referenced_by.is_empty() {
         context.relationships.referenced_by = Some(referenced_by);
     }
+    let dispatch_candidates = indexer.get_dispatch_candidates_with_metadata(symbol.id);
+    if !dispatch_candidates.is_empty() {
+        context.relationships.dispatch_candidates = Some(dispatch_candidates);
+    }
 
     // Get defines for this specific symbol
     let deps = indexer.get_dependencies(symbol.id);

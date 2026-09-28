@@ -1,6 +1,7 @@
 //! Production graph regressions beyond the original investigation corpus.
 //! All fixtures run with semantic search disabled and use local source only.
 
+use codanna::symbol::context::ContextIncludes;
 use codanna::{RelationKind, ScopeContext, Settings, Symbol, indexing::facade::IndexFacade};
 use std::{fs, path::Path, sync::Arc};
 
@@ -84,6 +85,120 @@ fn replace(facade: &mut IndexFacade, root: &Path, name: &str, source: &str) {
     let path = root.join("src").join(name);
     fs::write(&path, source).unwrap();
     facade.index_file(path).unwrap();
+}
+
+fn owner_name(symbol: &Symbol) -> Option<&str> {
+    match symbol.scope_context.as_ref() {
+        Some(ScopeContext::ClassMember {
+            class_name: Some(name),
+        }) => Some(name.as_ref()),
+        _ => None,
+    }
+}
+
+fn dispatch_candidate_owners(facade: &IndexFacade, caller: &str) -> Vec<String> {
+    let mut owners: Vec<_> = facade
+        .get_dispatch_candidates_with_metadata(symbol(facade, caller).id)
+        .into_iter()
+        .map(|(target, metadata)| {
+            let owner = owner_name(&target).unwrap().to_owned();
+            let metadata = metadata.unwrap();
+            assert_eq!(
+                metadata.context.as_deref(),
+                Some("go_interface_dispatch_candidate")
+            );
+            assert_eq!(
+                metadata.receiver.as_deref(),
+                Some(owner.as_str()),
+                "candidate metadata should name the possible concrete receiver"
+            );
+            owner
+        })
+        .collect();
+    owners.sort();
+    owners
+}
+
+#[test]
+fn f07_tracks_go_dispatch_candidates_and_python_cast_type_uses_without_calls() {
+    let (temp, mut facade) = project(&[
+        (
+            "dispatch.go",
+            include_str!("fixtures/retrieval_findings/f07/dispatch.go"),
+        ),
+        (
+            "protocol.py",
+            include_str!("fixtures/retrieval_findings/f07/protocol.py"),
+        ),
+        (
+            "consumer.py",
+            include_str!("fixtures/retrieval_findings/f07/consumer.py"),
+        ),
+    ]);
+
+    assert_eq!(
+        dispatch_candidate_owners(&facade, "Handle"),
+        ["Allow", "Deny"]
+    );
+    let context = facade
+        .get_symbol_context(symbol(&facade, "Handle").id, ContextIncludes::REFERENCES)
+        .unwrap();
+    assert_eq!(
+        context
+            .relationships
+            .dispatch_candidates
+            .as_ref()
+            .map(Vec::len),
+        Some(2)
+    );
+    assert!(
+        facade
+            .get_called_functions(symbol(&facade, "Handle").id)
+            .into_iter()
+            .all(|target| owner_name(&target) != Some("Allow")
+                && owner_name(&target) != Some("Deny")),
+        "structural candidates must never become definite concrete calls"
+    );
+    let interface_references = facade.get_references_with_metadata(symbol(&facade, "Handle").id);
+    assert!(interface_references.iter().any(|(target, metadata)| {
+        target.name.as_ref() == "Authorizer.Authorize"
+            && metadata
+                .as_ref()
+                .and_then(|metadata| metadata.context.as_deref())
+                == Some("go_interface_dispatch")
+    }));
+
+    let run_store = symbol(&facade, "RunStore");
+    assert!(
+        facade
+            .get_uses(symbol(&facade, "load").id)
+            .iter()
+            .any(|target| target.id == run_store.id)
+    );
+    assert!(
+        facade
+            .get_uses(symbol(&facade, "shadow").id)
+            .iter()
+            .all(|target| target.id != run_store.id),
+        "a parameter named Store shadows the imported type alias"
+    );
+    for caller in ["load", "shadow"] {
+        assert!(
+            facade
+                .get_called_functions(symbol(&facade, caller).id)
+                .iter()
+                .all(|target| target.id != run_store.id),
+            "cast type arguments are type uses, not calls"
+        );
+    }
+
+    replace(
+        &mut facade,
+        temp.path(),
+        "dispatch.go",
+        "package fixture\ntype Authorizer interface { Authorize(string) bool }\ntype Routes struct { service Authorizer }\nfunc (r Routes) Handle(token string) bool { return r.service.Authorize(token) }\ntype Allow struct{}\nfunc (Allow) Authorize(string) bool { return true }\ntype Deny struct{}\nfunc (Deny) Authorize(int) bool { return false }\n",
+    );
+    assert_eq!(dispatch_candidate_owners(&facade, "Handle"), ["Allow"]);
 }
 
 #[test]

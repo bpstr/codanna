@@ -210,6 +210,111 @@ impl ContextStage {
         Ok(implementations.len())
     }
 
+    /// Rebuild possible concrete targets for calls through Go interface fields.
+    /// The parser records a source-grounded reference to the interface method;
+    /// structural `Implements` and `Defines` edges then identify every possible
+    /// concrete method without claiming that any one target was invoked.
+    pub fn rebuild_go_dispatch_candidates(&self) -> IndexResult<usize> {
+        let mut symbols = Vec::new();
+        self.index
+            .for_each_symbol::<crate::storage::StorageError>(|symbol| {
+                if symbol.language_id.is_some_and(|l| l.as_str() == "go") {
+                    symbols.push(symbol);
+                }
+                Ok(())
+            })?;
+        if symbols.is_empty() {
+            return Ok(0);
+        }
+        let by_id: HashMap<_, _> = symbols
+            .iter()
+            .map(|symbol| (symbol.id, symbol.clone()))
+            .collect();
+        let mut candidates = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for caller in &symbols {
+            for (_, interface_method_id, marker) in self
+                .index
+                .get_relationships_from(caller.id, RelationKind::References)?
+            {
+                if marker
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.context.as_deref())
+                    != Some("go_interface_dispatch")
+                {
+                    continue;
+                }
+                let Some(interface_method) = by_id.get(&interface_method_id) else {
+                    continue;
+                };
+                let Some(crate::ScopeContext::ClassMember {
+                    class_name: Some(interface_name),
+                }) = interface_method.scope_context.as_ref()
+                else {
+                    continue;
+                };
+                let mut interface_matches = symbols.iter().filter(|symbol| {
+                    symbol.kind == crate::SymbolKind::Interface
+                        && symbol.name.as_ref() == interface_name.as_ref()
+                        && symbol.module_path == interface_method.module_path
+                });
+                let Some(interface) = interface_matches.next() else {
+                    continue;
+                };
+                if interface_matches.next().is_some() {
+                    continue;
+                }
+                for (implementor_id, _, _) in self
+                    .index
+                    .get_relationships_to(interface.id, RelationKind::Implements)?
+                {
+                    for (_, method_id, _) in self
+                        .index
+                        .get_relationships_from(implementor_id, RelationKind::Defines)?
+                    {
+                        let Some(method) = by_id.get(&method_id) else {
+                            continue;
+                        };
+                        if method.name.as_ref()
+                            == interface_method.name.rsplit('.').next().unwrap_or("")
+                            && seen.insert((caller.id, method_id))
+                        {
+                            candidates.push((caller.id, method_id, marker.metadata.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.index.start_batch()?;
+        for symbol in &symbols {
+            self.index.delete_outgoing_relationships_of_kind(
+                symbol.id,
+                RelationKind::DispatchCandidate,
+            )?;
+        }
+        for (from, to, metadata) in &candidates {
+            let mut metadata = metadata.clone().unwrap_or_default();
+            metadata.context = Some("go_interface_dispatch_candidate".into());
+            metadata.receiver = by_id.get(to).and_then(|method| {
+                let crate::ScopeContext::ClassMember {
+                    class_name: Some(name),
+                } = method.scope_context.as_ref()?
+                else {
+                    return None;
+                };
+                Some(Box::<str>::from(name.as_ref()))
+            });
+            let relationship =
+                crate::relationship::Relationship::new(RelationKind::DispatchCandidate)
+                    .with_metadata(metadata);
+            self.index.store_relationship(*from, *to, &relationship)?;
+        }
+        self.index.commit_batch()?;
+        Ok(candidates.len())
+    }
+
     /// Build resolution contexts from unresolved relationships.
     ///
     /// Groups relationships by file_id and enriches each context with:
