@@ -137,15 +137,23 @@ fn unsupported_object_method_keys_preserve_nested_named_declarations() {
             "nested declaration {name} must survive an unsupported method key"
         );
     }
-    assert!(symbols.iter().all(|symbol| symbol.kind != SymbolKind::Method));
+    assert!(
+        symbols
+            .iter()
+            .all(|symbol| symbol.kind != SymbolKind::Method)
+    );
 }
 
 #[test]
 fn object_method_parameter_defaults_preserve_nested_declarations() {
-    let code = "function factory() { return { run(arg = { nested() { function helper() {} } }) {} }; }";
+    let code =
+        "function factory() { return { run(arg = { nested() { function helper() {} } }) {} }; }";
     let mut parser = TypeScriptParser::new().unwrap();
     let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
-    for (name, kind) in [("helper", SymbolKind::Function), ("nested", SymbolKind::Method)] {
+    for (name, kind) in [
+        ("helper", SymbolKind::Function),
+        ("nested", SymbolKind::Method),
+    ] {
         assert_eq!(
             symbols
                 .iter()
@@ -237,6 +245,20 @@ fn named_control_resolves_to_the_imported_implementation() {
     );
     let reference = target(&index, "reference.ts", "mergePage");
     assert!(index.get_calling_functions(reference.id).is_empty());
+    let local = target(&index, "bound-object.ts", "mergePage");
+    let local_callers: HashSet<_> = index
+        .get_calling_functions(local.id)
+        .into_iter()
+        .map(|symbol| (symbol.name.to_string(), symbol.id))
+        .collect();
+    assert_eq!(
+        local_callers,
+        HashSet::from([(
+            "unrelated".to_owned(),
+            target(&index, "bound-object.ts", "unrelated").id,
+        )]),
+        "the nested declaration shadows the import only inside its own enclosure"
+    );
 }
 
 #[test]
@@ -250,12 +272,12 @@ fn persisted_callers_include_object_methods_without_namesake_leakage() {
         ("bound-object.ts", "listBoundColumn"),
     ]
     .into_iter()
-    .map(|(path, name)| target(&index, path, name).id)
+    .map(|(path, name)| (name.to_owned(), target(&index, path, name).id))
     .collect();
     let actual: HashSet<_> = index
         .get_calling_functions(implementation.id)
         .into_iter()
-        .map(|symbol| symbol.id)
+        .map(|symbol| (symbol.name.to_string(), symbol.id))
         .collect();
     assert_eq!(
         actual, expected,
@@ -263,7 +285,7 @@ fn persisted_callers_include_object_methods_without_namesake_leakage() {
     );
     let reference = target(&index, "reference.ts", "mergePage");
     assert!(index.get_calling_functions(reference.id).is_empty());
-    for id in expected {
+    for (_, id) in expected {
         assert!(
             index
                 .get_called_functions(id)
