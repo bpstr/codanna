@@ -425,17 +425,17 @@ impl TypeScriptParser {
             "method_definition"
                 if node
                     .parent()
-                    .is_some_and(|parent| parent.kind() == "object") =>
+                    .is_some_and(|parent| parent.kind() == "object")
+                    && node
+                        .child_by_field_name("name")
+                        .is_some_and(|name| name.kind() == "property_identifier") =>
             {
                 self.register_node_recursively(node);
-                // Dynamic keys have no stable lexical identity. Do not turn
-                // their source text into a globally resolvable method name.
+                // Other keys use normal descendant traversal without emitting
+                // a method endpoint, preserving nested named declarations.
                 let Some(name_node) = node.child_by_field_name("name") else {
                     return;
                 };
-                if name_node.kind() != "property_identifier" {
-                    return;
-                }
                 let method_name = code[name_node.byte_range()].to_string();
                 if let Some(mut symbol) =
                     self.process_method(node, code, file_id, counter, module_path)
@@ -452,14 +452,15 @@ impl TypeScriptParser {
                     });
                     symbols.push(symbol);
                 }
-                if let Some(body) = node.child_by_field_name("body") {
-                    let saved_function = self.context.current_function().map(str::to_string);
-                    let saved_class = self.context.current_class().map(str::to_string);
-                    self.context.enter_scope(ScopeType::function());
-                    self.context.set_current_function(Some(method_name));
-                    self.context.set_current_class(None);
+                let saved_function = self.context.current_function().map(str::to_string);
+                let saved_class = self.context.current_class().map(str::to_string);
+                self.context.enter_scope(ScopeType::function());
+                self.context.set_current_function(Some(method_name));
+                self.context.set_current_class(None);
+                // Parameter defaults can contain nested declarations too.
+                for child in node.named_children(&mut node.walk()) {
                     self.extract_symbols_from_node(
-                        body,
+                        child,
                         code,
                         file_id,
                         counter,
@@ -467,10 +468,10 @@ impl TypeScriptParser {
                         module_path,
                         depth + 1,
                     );
-                    self.context.exit_scope();
-                    self.context.set_current_function(saved_function);
-                    self.context.set_current_class(saved_class);
                 }
+                self.context.exit_scope();
+                self.context.set_current_function(saved_function);
+                self.context.set_current_class(saved_class);
             }
             "function_expression" => {
                 // Register function_expression and all its children for audit

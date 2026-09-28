@@ -7,7 +7,7 @@ application implementation or private evaluation content.
 
 The executable oracle is `tests/retrieval_object_method_regressions.rs`.
 
-| Layer | Expected result | Test status |
+| Layer | Expected result | Initial test status |
 | --- | --- | --- |
 | Raw calls | Three `mergePage` sites in adapter.ts, owned by listColumn, loadTasks and testHelper; source coordinates point to the call expressions | Active, not run |
 | Named control | testHelper resolves to page.ts:mergePage in both directions; reference.ts has no callers | Active, not run |
@@ -18,15 +18,17 @@ The executable oracle is `tests/retrieval_object_method_regressions.rs`.
 | Unsupported shapes | No guessed endpoints for computed keys or function-valued properties; getters/setters have separate ranges | Active, not run |
 | Persistence and updates | Duplicate method names resolve independently after reopening; an edited call removes its prior target edge | Active, not run |
 
-All tests specify intended behavior, not an observed failure or a passing
-qualification. Compilation and execution remain deferred because local resources
-are constrained.
+The status column records the original unexecuted fixture state. All 12 regression
+tests passed locally on 2026-09-28 after correcting a test compilation error,
+skipped declarations under unsupported method keys and parameter defaults, and an
+imported caller redirected to an unrelated nested namesake. The new tests failed
+before their fixes; earlier failed-run logs are retained separately.
 Assertions remain outside the indexed corpus. Both index fixtures explicitly
 disable semantic search; parser checks instantiate only the TypeScript parser.
 No provider transport, model download, credential loading or fixture recording is
 needed.
 
-After local execution is authorized and resources are available, start with:
+Run the deterministic regression suite with:
 
 ```sh
 cargo test --test retrieval_object_method_regressions
@@ -48,10 +50,10 @@ exist without a corresponding method symbol. In
 `src/indexing/pipeline/stages/collect.rs`, `create_unresolved_relationship` looks
 up the caller by name/range. `ResolveStage::resolve_one` in
 `src/indexing/pipeline/stages/resolve.rs` returns early for a missing `from_id`.
-This is a source-grounded mechanism for lost persisted callers; execution is
-still needed to check for additional resolution problems.
+This mechanism was confirmed by the prepared tests. Execution also exposed a
+file-wide scope lookup that let a nested namesake replace an imported target.
 
-## Implementation and remaining verification
+## Implementation and verification
 
 1. Ordinary variable initializers now traverse for nested declarations. Object
    methods with identifier keys reuse method signature extraction and retain
@@ -62,16 +64,19 @@ still needed to check for additional resolution problems.
 3. Tests cover duplicate method names in separate objects, computed keys,
    getters/setters, function-valued properties and class-scope restoration.
    Computed keys and function-valued properties remain unsupported as object
-   callable endpoints; they are not guessed from global namesakes.
+   callable endpoints; they are not guessed from global namesakes. Computed and
+   quoted keys retain descendant traversal, and parameter defaults are visited.
+   Bare imported TypeScript calls retain a nested function shadow only within
+   that function's enclosing callable.
 4. `EMISSION_SEMANTICS_VERSION` in `src/storage/metadata.rs` advances to v5.
    Existing version gates require rebuilding older indexes instead of silently
    retaining stale caller rows. No rebuild has been performed in this session.
-5. All witnesses are active. Call-site metadata, persistence and edit scenarios
-   are prepared. Run them and the normal repository checks when resources permit.
+5. All 12 witnesses pass, including call-site metadata, persistence and edits.
+   The local shadow and imported target each retain their correct callers.
 
 This PR changes TypeScript symbol emission and the index compatibility stamp.
-It makes no measured performance claim. Scope/fidelity and runtime costs remain
-unverified until the prepared tests and repository gates can run.
+It makes no measured performance or real-application retrieval quality claim.
+The fixture results establish only the deterministic behaviors covered above.
 
 ## Other retrieval causes to investigate separately
 
