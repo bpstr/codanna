@@ -24,6 +24,15 @@ or provider is required.
 
 ## Remaining findings
 
+The code-semantic endpoints now add a structured `retrieval` record to successful
+and empty responses. It identifies the code-symbol corpus, requested/effective
+floor, configured floor, post-top-K filter stage and unassessed support. Omitting
+a floor preserves existing nearest-neighbor behavior; the configured value is
+not implicitly applied. Graph counts describe distinct indexed symbols, with
+call-site totals and unresolved/external-call coverage explicitly unreported.
+Impact metadata remains present alongside the new record. Compilation and
+execution remain deferred.
+
 The object-method emission fix is tracked separately. Other open work needs
 independent evidence before broad changes:
 
