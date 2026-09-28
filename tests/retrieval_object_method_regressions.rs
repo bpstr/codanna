@@ -141,6 +141,23 @@ fn unsupported_object_method_keys_preserve_nested_named_declarations() {
 }
 
 #[test]
+fn object_method_parameter_defaults_preserve_nested_declarations() {
+    let code = "function factory() { return { run(arg = { nested() { function helper() {} } }) {} }; }";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    for (name, kind) in [("helper", SymbolKind::Function), ("nested", SymbolKind::Method)] {
+        assert_eq!(
+            symbols
+                .iter()
+                .filter(|symbol| symbol.name.as_ref() == name && symbol.kind == kind)
+                .count(),
+            1,
+            "parameter default declaration {name} must remain discoverable"
+        );
+    }
+}
+
+#[test]
 fn accessors_keep_separate_ranges_and_signatures() {
     let code = "const object = { get value() { return 1; }, set value(next: number) {} };";
     let mut parser = TypeScriptParser::new().unwrap();
