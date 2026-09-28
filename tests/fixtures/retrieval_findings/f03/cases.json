@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "finding": "F03",
+  "status": "prepared_not_run",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "lazy-cached-member",
+      "expected_dependency": [
+        "view.tsx:Picker",
+        "provider.tsx:Calendar"
+      ],
+      "relation": "composition_not_immediate_call",
+      "excluded": [
+        "reference.tsx:Calendar"
+      ]
+    },
+    {
+      "id": "external-import",
+      "excluded_dependency": [
+        "external.tsx:ExternalPicker",
+        "provider.tsx:Calendar"
+      ]
+    }
+  ]
+}
