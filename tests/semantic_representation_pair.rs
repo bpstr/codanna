@@ -15,7 +15,7 @@ fn body_v2_retains_behavior_missing_from_documentation_without_embedding() {
     settings.semantic_search.code_representation = CodeEmbeddingPolicy::SymbolBodyV2;
     let settings = Arc::new(settings);
     init_parser_cache(settings.clone());
-    let parsed = ParseStage::new(settings).parse_file(FileContent::new(
+    let parsed = ParseStage::new(settings).parse(FileContent::new(
         temp.path().join("page.ts"), source.into(), calculate_hash(source)
     )).unwrap();
     let mut retained = 0;
@@ -31,8 +31,9 @@ fn body_v2_retains_behavior_missing_from_documentation_without_embedding() {
         } else {
             assert!(!CodeEmbeddingPolicy::DocComment.eligible(symbol.kind, symbol.doc_comment.is_some()));
         }
-        assert!(input.retained_bytes() <= MAX_SYMBOL_SOURCE_BYTES);
-        retained += input.retained_bytes();
+        let bytes = input.header.len() + input.fragments.iter().map(|fragment| fragment.text.len()).sum::<usize>();
+        assert!(bytes <= MAX_SYMBOL_SOURCE_BYTES);
+        retained += bytes;
     }
     assert!(retained <= MAX_FILE_SOURCE_BYTES);
 }
