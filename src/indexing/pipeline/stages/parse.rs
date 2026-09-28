@@ -624,7 +624,36 @@ pub fn compute_hash(content: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::TypeScriptParser;
     use crate::types::Range;
+
+    #[test]
+    fn incomplete_deferred_validation_claims_jsx_before_ordinary_fallback() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let nested_assignment = format!(
+                    "{}pending = import('./other');{}",
+                    "{".repeat(510),
+                    "}".repeat(510)
+                );
+                let code = format!(
+                    "import {{ lazy }} from 'react';\nlet pending;\nconst Calendar = lazy(() => (pending ??= import('./provider')).then(module => ({{ default: module.Calendar }})));\n{nested_assignment}\nexport function Picker() {{ return <Calendar />; }}"
+                );
+                let mut parser = TypeScriptParser::new().unwrap();
+                let relationships = extract_relationships(&mut parser, &code);
+                assert!(
+                    relationships.iter().all(|relationship| {
+                        relationship.kind != crate::RelationKind::Uses
+                            || relationship.to_name.as_ref() != "Calendar"
+                    }),
+                    "depth exhaustion must not re-enable a namesake Uses fallback: {relationships:?}"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn test_select_strip_base_workspace_wins_in_tree() {

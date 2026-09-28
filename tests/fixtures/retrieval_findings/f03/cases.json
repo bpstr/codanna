@@ -52,6 +52,7 @@
         "wrapper-reassigned.tsx",
         "wrapper-shadowed.tsx",
         "cache-initialized.tsx",
+        "cache-shorthand.tsx",
         "local-scope.tsx",
         "missing.tsx",
         "type-only.tsx",

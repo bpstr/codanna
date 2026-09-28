@@ -2907,12 +2907,13 @@ impl TypeScriptParser {
         if node.kind() == kind {
             found.push(node);
         }
+        let mut complete = true;
         for child in node.named_children(&mut node.walk()) {
             if !Self::collect_nodes_bounded(child, kind, found, depth + 1) {
-                return false;
+                complete = false;
             }
         }
-        true
+        complete
     }
 
     fn binding_is_immutable(root: Node<'_>, declaration: Node<'_>, name: &str, code: &str) -> bool {
@@ -2974,8 +2975,14 @@ impl TypeScriptParser {
             return false;
         }
         let mut identifiers = Vec::new();
-        if !Self::collect_nodes(root, "identifier", &mut identifiers) {
-            return false;
+        for kind in [
+            "identifier",
+            "shorthand_property_identifier",
+            "shorthand_property_identifier_pattern",
+        ] {
+            if !Self::collect_nodes(root, kind, &mut identifiers) {
+                return false;
+            }
         }
         let declaration_name = declaration
             .child_by_field_name("name")
@@ -3147,9 +3154,7 @@ impl TypeScriptParser {
             return Vec::new();
         }
         let mut declarations = Vec::new();
-        if !Self::collect_nodes(root, "variable_declarator", &mut declarations) {
-            return Vec::new();
-        }
+        let complete = Self::collect_nodes(root, "variable_declarator", &mut declarations);
         let mut candidates = std::collections::HashMap::new();
         for declaration in declarations {
             let Some(name) = declaration.child_by_field_name("name") else {
@@ -3173,7 +3178,8 @@ impl TypeScriptParser {
                 continue;
             }
             let binding = code[name.byte_range()].to_owned();
-            let target = (Self::is_module_scope_declarator(declaration)
+            let target = (complete
+                && Self::is_module_scope_declarator(declaration)
                 && Self::binding_is_immutable(root, declaration, &binding, code)
                 && Self::name_has_assignment(root, wrapper, code) == Some(false))
             .then(|| Self::lazy_projection_target(root, value, code))

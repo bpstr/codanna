@@ -79,6 +79,7 @@ fn assert_graph(index: &IndexFacade) {
         ("wrapper-reassigned.tsx", "WrapperReassignedPicker"),
         ("wrapper-shadowed.tsx", "ShadowedWrapperPicker"),
         ("cache-initialized.tsx", "InitializedCachePicker"),
+        ("cache-shorthand.tsx", "ShorthandCachePicker"),
         ("local-scope.tsx", "FunctionShadowPicker"),
         ("local-scope.tsx", "ClassShadowPicker"),
         ("local-scope.tsx", "NestedLazyPicker"),
@@ -132,7 +133,9 @@ fn incomplete_depth_scan_rejects_composition_inference() {
         "import {{ lazy }} from 'react';\nlet pending;\n{nested_assignment}\nconst Calendar = lazy(() => (pending ??= import('./provider')).then(module => ({{ default: module.Calendar }})));\nfunction Picker() {{ return <Calendar />; }}"
     );
     let mut parser = TypeScriptParser::new().unwrap();
-    assert!(parser.find_deferred_compositions(&code).is_empty());
+    let claims = parser.find_deferred_compositions(&code);
+    assert_eq!(claims.len(), 1);
+    assert!(claims[0].target.is_none());
 }
 
 #[test]
