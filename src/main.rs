@@ -247,6 +247,16 @@ async fn main() {
             );
             std::process::exit(2);
         }
+        // The router and workspace administration are metadata-only, but a
+        // private reader can lazily create embedding sessions in this process.
+        if matches!(
+            action,
+            codanna::cli::workspace::WorkspaceAction::Reader { .. }
+        ) && let Err(error) = codanna::embedding_runtime::configure_embedding_runtime()
+        {
+            eprintln!("codanna: {error}");
+            std::process::exit(2);
+        }
         let result = codanna::cli::workspace::run(action);
         exit_workspace_command(result);
     }
