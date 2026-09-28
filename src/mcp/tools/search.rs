@@ -951,6 +951,7 @@ impl CodeIntelligenceServer {
             .map_err(|_| McpError::internal_error("Document index is busy; retry the query", None))?
             .query_snapshot();
         crate::runtime::blocking(move || {
+            let retrieval_mode = store.retrieval_mode();
             let search_query = DocSearchQuery {
                 text: query.clone(),
                 collection,
@@ -961,10 +962,21 @@ impl CodeIntelligenceServer {
 
             match store.search(search_query) {
                 Ok(results) => {
+                    let retrieval = serde_json::json!({
+                        "mode": retrieval_mode,
+                        "corpus": "document_chunks",
+                        "effective_score_floor": null,
+                        "support_status": "not_assessed",
+                        "candidate_status": if results.is_empty() { "none" } else { "returned" },
+                        "returned_chunks": results.len(),
+                        "scores_are_probabilities": false,
+                    });
                     if results.is_empty() {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                        let mut response = CallToolResult::success(vec![ContentBlock::text(format!(
                             "No documents found for: {query}"
-                        ))]));
+                        ))]);
+                        response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                        return Ok(response);
                     }
 
                     let mut output = format!(
@@ -993,7 +1005,10 @@ impl CodeIntelligenceServer {
                         output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
                     }
 
-                    Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                    output.push_str("Retrieval candidates only; supporting evidence and authority have not been assessed.\n");
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    Ok(response)
                 }
                 Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Document search failed: {e}"

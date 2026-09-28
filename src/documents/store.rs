@@ -1009,6 +1009,15 @@ impl DocumentStore {
         self.file_states.keys().cloned().collect()
     }
 
+    /// Query strategy currently selected, without loading or invoking a backend.
+    pub fn retrieval_mode(&self) -> &'static str {
+        if self.embedding_generator.is_some() {
+            "semantic_nearest_neighbors"
+        } else {
+            "lexical"
+        }
+    }
+
     /// Mark indexed collections for replacement without discarding their source
     /// ownership. A selected force operation must preserve other collections.
     pub fn clear_file_states(&mut self) {
