@@ -1,5 +1,7 @@
 //! MCP tool request types.
 
+pub use crate::documents::DocumentDriftRequest;
+
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
@@ -81,8 +83,13 @@ fn deserialize_conversation_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Res
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindSymbolRequest {
-    /// Name of the symbol to find
+    /// Name to find, or legacy symbol_id:N form. Supply name or symbol_id.
+    #[serde(default)]
     pub name: String,
+    /// Positive symbol ID for unambiguous definition lookup in this workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub symbol_id: Option<u32>,
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
@@ -96,6 +103,45 @@ pub struct FindSymbolRequest {
     /// Number of matching symbols to skip after language and owner filtering.
     #[serde(default)]
     pub offset: u32,
+}
+
+impl FindSymbolRequest {
+    pub fn target_name(&self) -> Result<std::borrow::Cow<'_, str>, rmcp::model::ErrorData> {
+        if let Some(id) = self.symbol_id {
+            if id == 0 {
+                return Err(rmcp::model::ErrorData::invalid_params(
+                    "symbol_id must be positive",
+                    None,
+                ));
+            }
+            let target = format!("symbol_id:{id}");
+            if !self.name.is_empty() && self.name != target {
+                return Err(rmcp::model::ErrorData::invalid_params(
+                    "Supply either name or symbol_id, not conflicting targets",
+                    None,
+                ));
+            }
+            return Ok(std::borrow::Cow::Owned(target));
+        }
+        if self.name.trim().is_empty() {
+            return Err(rmcp::model::ErrorData::invalid_params(
+                "find_symbol requires name or symbol_id",
+                None,
+            ));
+        }
+        if self
+            .name
+            .strip_prefix("symbol_id:")
+            .and_then(|id| id.parse::<u32>().ok())
+            == Some(0)
+        {
+            return Err(rmcp::model::ErrorData::invalid_params(
+                "symbol_id must be positive",
+                None,
+            ));
+        }
+        Ok(std::borrow::Cow::Borrowed(&self.name))
+    }
 }
 
 fn default_symbol_limit() -> u32 {
@@ -237,7 +283,16 @@ impl schemars::JsonSchema for GetIndexInfoRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchDocumentsRequest {
-    /// Natural language search query
+    /// Match a case-sensitive literal substring in indexed chunk content, without embeddings.
+    #[serde(default)]
+    pub literal: bool,
+    /// Inclusive floor in native score units (cosine, lexical rank, or literal match 1).
+    pub score_floor: Option<f32>,
+    /// Exact indexed source paths that receive an authority tiebreak after
+    /// query-term coverage. Omitted by default; authority is never inferred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authority_sources: Vec<std::path::PathBuf>,
+    /// Natural language query, or exact case-sensitive substring when literal is true
     pub query: String,
     /// Filter by collection name (optional)
     #[serde(skip_serializing_if = "Option::is_none")]

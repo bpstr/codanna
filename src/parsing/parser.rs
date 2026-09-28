@@ -10,6 +10,23 @@ use std::any::Any;
 use std::collections::HashSet;
 use tree_sitter::Node;
 
+/// A JSX use claimed by a deferred component declaration. `target` is absent
+/// when a lazy binding fails the bounded identity checks; callers suppress
+/// ordinary same-name fallback for that use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCompositionUse {
+    pub owner: String,
+    pub local_binding: String,
+    pub usage_range: Range,
+    pub target: Option<DeferredCompositionTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCompositionTarget {
+    pub module_path: String,
+    pub export_name: String,
+}
+
 /// Common interface for all language parsers
 pub trait LanguageParser: Send + Sync {
     /// Parse source code and extract symbols
@@ -55,6 +72,11 @@ pub trait LanguageParser: Send + Sync {
 
     /// Find value references without asserting that the target is called.
     fn find_references(&mut self, _code: &str) -> Vec<crate::parsing::references::Reference> {
+        Vec::new()
+    }
+
+    /// Find deferred component uses with a source-grounded module/export target.
+    fn find_deferred_compositions(&mut self, _code: &str) -> Vec<DeferredCompositionUse> {
         Vec::new()
     }
 

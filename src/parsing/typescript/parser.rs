@@ -422,6 +422,57 @@ impl TypeScriptParser {
                     symbols.push(symbol);
                 }
             }
+            "method_definition"
+                if node
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "object")
+                    && node
+                        .child_by_field_name("name")
+                        .is_some_and(|name| name.kind() == "property_identifier") =>
+            {
+                self.register_node_recursively(node);
+                // Other keys use normal descendant traversal without emitting
+                // a method endpoint, preserving nested named declarations.
+                let Some(name_node) = node.child_by_field_name("name") else {
+                    return;
+                };
+                let method_name = code[name_node.byte_range()].to_string();
+                if let Some(mut symbol) =
+                    self.process_method(node, code, file_id, counter, module_path)
+                {
+                    // An object inside a class is not a member of that class.
+                    // Its callable endpoint belongs to its lexical enclosure.
+                    symbol.scope_context = Some(crate::ScopeContext::Local {
+                        hoisted: false,
+                        parent_name: self.context.current_function().map(Into::into),
+                        parent_kind: self
+                            .context
+                            .current_function()
+                            .map(|_| SymbolKind::Function),
+                    });
+                    symbols.push(symbol);
+                }
+                let saved_function = self.context.current_function().map(str::to_string);
+                let saved_class = self.context.current_class().map(str::to_string);
+                self.context.enter_scope(ScopeType::function());
+                self.context.set_current_function(Some(method_name));
+                self.context.set_current_class(None);
+                // Parameter defaults can contain nested declarations too.
+                for child in node.named_children(&mut node.walk()) {
+                    self.extract_symbols_from_node(
+                        child,
+                        code,
+                        file_id,
+                        counter,
+                        symbols,
+                        module_path,
+                        depth + 1,
+                    );
+                }
+                self.context.exit_scope();
+                self.context.set_current_function(saved_function);
+                self.context.set_current_class(saved_class);
+            }
             "function_expression" => {
                 // Register function_expression and all its children for audit
                 self.register_node_recursively(node);
@@ -1102,6 +1153,19 @@ impl TypeScriptParser {
                                     }
                                 }
                             }
+                        } else if let Some(value) = value_node {
+                            // Ordinary initializers may contain object methods.
+                            // Function bindings above already traverse their
+                            // bodies and must not be emitted twice.
+                            self.extract_symbols_from_node(
+                                value,
+                                code,
+                                file_id,
+                                counter,
+                                symbols,
+                                module_path,
+                                depth + 1,
+                            );
                         }
                     }
                 }
@@ -2629,6 +2693,45 @@ impl TypeScriptParser {
         false
     }
 
+    /// Simple local declarations shadow a top-level deferred component. Stop at
+    /// the program boundary so the deferred declaration itself is not a shadow.
+    fn jsx_local_identifier_is_rebound(mut node: Node, name: &str, code: &str) -> bool {
+        while let Some(parent) = node.parent() {
+            if parent.kind() == "program" {
+                break;
+            }
+            if parent.kind() == "statement_block" {
+                for declaration in parent.named_children(&mut parent.walk()) {
+                    if matches!(
+                        declaration.kind(),
+                        "function_declaration"
+                            | "generator_function_declaration"
+                            | "class_declaration"
+                    ) && declaration
+                        .child_by_field_name("name")
+                        .is_some_and(|local| &code[local.byte_range()] == name)
+                    {
+                        return true;
+                    }
+                    if matches!(
+                        declaration.kind(),
+                        "lexical_declaration" | "variable_declaration"
+                    ) {
+                        for binding in declaration.named_children(&mut declaration.walk()) {
+                            if binding.child_by_field_name("name").is_some_and(|local| {
+                                local.kind() == "identifier" && &code[local.byte_range()] == name
+                            }) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            node = parent;
+        }
+        false
+    }
+
     fn extract_function_name<'a>(node: &tree_sitter::Node, code: &'a str) -> Option<&'a str> {
         match node.kind() {
             "identifier" => Some(&code[node.byte_range()]),
@@ -2710,6 +2813,387 @@ impl TypeScriptParser {
         for child in node.children(&mut node.walk()) {
             self.extract_jsx_uses_recursive(&child, code, func_context, uses);
         }
+    }
+
+    fn unwrapped(mut node: Node<'_>) -> Node<'_> {
+        while node.kind() == "parenthesized_expression" {
+            let Some(child) = node.named_child(0) else {
+                break;
+            };
+            node = child;
+        }
+        node
+    }
+
+    fn named_arguments(node: Node<'_>) -> Vec<Node<'_>> {
+        node.child_by_field_name("arguments")
+            .map(|arguments| arguments.named_children(&mut arguments.walk()).collect())
+            .unwrap_or_default()
+    }
+
+    fn single_arrow_parameter<'a>(arrow: Node<'_>, code: &'a str) -> Option<&'a str> {
+        if let Some(parameter) = arrow.child_by_field_name("parameter") {
+            return (parameter.kind() == "identifier").then(|| &code[parameter.byte_range()]);
+        }
+        let parameters = arrow.child_by_field_name("parameters")?;
+        let values: Vec<_> = parameters.named_children(&mut parameters.walk()).collect();
+        (values.len() == 1 && values[0].kind() == "required_parameter")
+            .then(|| values[0].child_by_field_name("pattern"))
+            .flatten()
+            .or_else(|| (values.len() == 1).then_some(values[0]))
+            .filter(|value| value.kind() == "identifier")
+            .map(|value| &code[value.byte_range()])
+    }
+
+    fn zero_arrow_parameters(arrow: Node<'_>) -> bool {
+        arrow.child_by_field_name("parameter").is_none()
+            && arrow
+                .child_by_field_name("parameters")
+                .is_none_or(|parameters| parameters.named_child_count() == 0)
+    }
+
+    fn dynamic_import_path<'a>(node: Node<'_>, code: &'a str) -> Option<&'a str> {
+        let node = Self::unwrapped(node);
+        if node.kind() != "call_expression" {
+            return None;
+        }
+        let function = node.child_by_field_name("function")?;
+        if &code[function.byte_range()] != "import" {
+            return None;
+        }
+        let args = Self::named_arguments(node);
+        if args.len() != 1 || args[0].kind() != "string" {
+            return None;
+        }
+        Some(code[args[0].byte_range()].trim_matches(['\'', '"']))
+    }
+
+    fn assignment_to(node: Node<'_>, name: &str, code: &str) -> bool {
+        matches!(
+            node.kind(),
+            "assignment_expression" | "augmented_assignment_expression"
+        ) && node
+            .child_by_field_name("left")
+            .is_some_and(|left| &code[left.byte_range()] == name)
+    }
+
+    fn is_module_scope_declarator(declaration: Node<'_>) -> bool {
+        let Some(statement) = declaration.parent() else {
+            return false;
+        };
+        let Some(container) = statement.parent() else {
+            return false;
+        };
+        container.kind() == "program"
+            || (container.kind() == "export_statement"
+                && container
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "program"))
+    }
+
+    fn collect_nodes<'tree>(node: Node<'tree>, kind: &str, found: &mut Vec<Node<'tree>>) -> bool {
+        Self::collect_nodes_bounded(node, kind, found, 0)
+    }
+
+    fn collect_nodes_bounded<'tree>(
+        node: Node<'tree>,
+        kind: &str,
+        found: &mut Vec<Node<'tree>>,
+        depth: usize,
+    ) -> bool {
+        if !check_recursion_depth(depth, node) {
+            return false;
+        }
+        if node.kind() == kind {
+            found.push(node);
+        }
+        let mut complete = true;
+        for child in node.named_children(&mut node.walk()) {
+            if !Self::collect_nodes_bounded(child, kind, found, depth + 1) {
+                complete = false;
+            }
+        }
+        complete
+    }
+
+    fn binding_is_immutable(root: Node<'_>, declaration: Node<'_>, name: &str, code: &str) -> bool {
+        let parent = declaration
+            .parent()
+            .map(|parent| &code[parent.byte_range()]);
+        if !parent.is_some_and(|text| text.trim_start().starts_with("const ")) {
+            return false;
+        }
+        let mut assignments = Vec::new();
+        if !Self::collect_nodes(root, "assignment_expression", &mut assignments)
+            || !Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments)
+        {
+            return false;
+        }
+        !assignments
+            .into_iter()
+            .any(|node| Self::assignment_to(node, name, code))
+    }
+
+    fn name_has_assignment(root: Node<'_>, name: &str, code: &str) -> Option<bool> {
+        let mut assignments = Vec::new();
+        if !Self::collect_nodes(root, "assignment_expression", &mut assignments)
+            || !Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments)
+        {
+            return None;
+        }
+        Some(
+            assignments
+                .into_iter()
+                .any(|node| Self::assignment_to(node, name, code)),
+        )
+    }
+
+    fn cache_is_bounded(
+        root: Node<'_>,
+        cache_name: &str,
+        allowed_assignment: Node<'_>,
+        code: &str,
+    ) -> bool {
+        let mut declarations = Vec::new();
+        if !Self::collect_nodes(root, "variable_declarator", &mut declarations) {
+            return false;
+        }
+        let matches: Vec<_> = declarations
+            .into_iter()
+            .filter(|node| {
+                node.child_by_field_name("name")
+                    .is_some_and(|name| &code[name.byte_range()] == cache_name)
+            })
+            .collect();
+        if matches.len() != 1 {
+            return false;
+        }
+        let declaration = matches[0];
+        if !Self::is_module_scope_declarator(declaration)
+            || declaration.child_by_field_name("value").is_some()
+        {
+            return false;
+        }
+        let mut identifiers = Vec::new();
+        for kind in [
+            "identifier",
+            "shorthand_property_identifier",
+            "shorthand_property_identifier_pattern",
+        ] {
+            if !Self::collect_nodes(root, kind, &mut identifiers) {
+                return false;
+            }
+        }
+        let declaration_name = declaration
+            .child_by_field_name("name")
+            .unwrap()
+            .byte_range();
+        let allowed = allowed_assignment.byte_range();
+        identifiers.into_iter().all(|identifier| {
+            &code[identifier.byte_range()] != cache_name
+                || identifier.byte_range() == declaration_name
+                || allowed.contains(&identifier.byte_range().start)
+        })
+    }
+
+    fn lazy_projection_target(
+        root: Node<'_>,
+        lazy_call: Node<'_>,
+        code: &str,
+    ) -> Option<crate::parsing::DeferredCompositionTarget> {
+        let factories = Self::named_arguments(lazy_call);
+        if factories.len() != 1 {
+            return None;
+        }
+        let factory = factories[0];
+        if factory.kind() != "arrow_function" || !Self::zero_arrow_parameters(factory) {
+            return None;
+        }
+        let body = Self::unwrapped(factory.child_by_field_name("body")?);
+        if body.kind() != "call_expression" {
+            return None;
+        }
+        let then = body.child_by_field_name("function")?;
+        if then.kind() != "member_expression"
+            || then
+                .child_by_field_name("property")
+                .is_none_or(|property| &code[property.byte_range()] != "then")
+        {
+            return None;
+        }
+        let base = Self::unwrapped(then.child_by_field_name("object")?);
+        let module_path = if let Some(path) = Self::dynamic_import_path(base, code) {
+            path
+        } else if matches!(
+            base.kind(),
+            "assignment_expression" | "augmented_assignment_expression"
+        ) && code[base.byte_range()].contains("??=")
+        {
+            let left = base.child_by_field_name("left")?;
+            let right = base.child_by_field_name("right")?;
+            let cache_name = &code[left.byte_range()];
+            if left.kind() != "identifier" || !Self::cache_is_bounded(root, cache_name, base, code)
+            {
+                return None;
+            }
+            Self::dynamic_import_path(right, code)?
+        } else {
+            return None;
+        };
+        if !(module_path.starts_with("./") || module_path.starts_with("../")) {
+            return None;
+        }
+        let callbacks = Self::named_arguments(body);
+        if callbacks.len() != 1 || callbacks[0].kind() != "arrow_function" {
+            return None;
+        }
+        let callback = callbacks[0];
+        let parameter = Self::single_arrow_parameter(callback, code)?;
+        let object = Self::unwrapped(callback.child_by_field_name("body")?);
+        if object.kind() != "object" || object.named_child_count() != 1 {
+            return None;
+        }
+        let pair = object.named_child(0)?;
+        if pair.kind() != "pair"
+            || pair
+                .child_by_field_name("key")
+                .is_none_or(|key| &code[key.byte_range()] != "default")
+        {
+            return None;
+        }
+        let projection = pair.child_by_field_name("value")?;
+        if projection.kind() != "member_expression" {
+            return None;
+        }
+        let object = projection.child_by_field_name("object")?;
+        let property = projection.child_by_field_name("property")?;
+        if object.kind() != "identifier"
+            || &code[object.byte_range()] != parameter
+            || property.kind() != "property_identifier"
+        {
+            return None;
+        }
+        Some(crate::parsing::DeferredCompositionTarget {
+            module_path: module_path.to_owned(),
+            export_name: code[property.byte_range()].to_owned(),
+        })
+    }
+
+    fn deferred_jsx_uses_recursive(
+        node: Node<'_>,
+        code: &str,
+        current_fn: Option<&str>,
+        candidates: &std::collections::HashMap<
+            String,
+            Option<crate::parsing::DeferredCompositionTarget>,
+        >,
+        uses: &mut Vec<crate::parsing::DeferredCompositionUse>,
+        depth: usize,
+    ) {
+        if !check_recursion_depth(depth, node) {
+            return;
+        }
+        let func_context = match node.kind() {
+            "arrow_function" => node
+                .parent()
+                .filter(|parent| parent.kind() == "variable_declarator")
+                .and_then(|parent| parent.child_by_field_name("name"))
+                .filter(|name| name.kind() == "identifier")
+                .map(|name| &code[name.byte_range()])
+                .or(current_fn),
+            "function_declaration" | "generator_function_declaration" | "method_definition" => node
+                .child_by_field_name("name")
+                .map(|name| &code[name.byte_range()])
+                .or(current_fn),
+            _ => current_fn,
+        };
+        if let Some(component) = Self::jsx_component_name(node, code)
+            && let Some(target) = candidates.get(component)
+            && let Some(owner) = func_context
+        {
+            let shadowed =
+                crate::parsing::references::has_unresolved_binding(node, component, code)
+                    || Self::jsx_local_identifier_is_rebound(node, component, code);
+            uses.push(crate::parsing::DeferredCompositionUse {
+                owner: owner.to_owned(),
+                local_binding: component.to_owned(),
+                usage_range: Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u32,
+                    node.end_position().row as u32,
+                    node.end_position().column as u32,
+                ),
+                target: (!shadowed).then(|| target.clone()).flatten(),
+            });
+        }
+        for child in node.named_children(&mut node.walk()) {
+            Self::deferred_jsx_uses_recursive(
+                child,
+                code,
+                func_context,
+                candidates,
+                uses,
+                depth + 1,
+            );
+        }
+    }
+
+    pub(crate) fn deferred_compositions_from_root(
+        root: Node<'_>,
+        code: &str,
+        imports: &[Import],
+    ) -> Vec<crate::parsing::DeferredCompositionUse> {
+        let lazy_aliases: std::collections::HashSet<_> = imports
+            .iter()
+            .filter(|import| import.path == "react" && !import.is_type_only)
+            .filter(|import| import.imported_name.as_deref() == Some("lazy"))
+            .filter_map(|import| import.alias.as_ref().or(import.imported_name.as_ref()))
+            .cloned()
+            .collect();
+        if lazy_aliases.is_empty() {
+            return Vec::new();
+        }
+        let mut declarations = Vec::new();
+        let complete = Self::collect_nodes(root, "variable_declarator", &mut declarations);
+        let mut candidates = std::collections::HashMap::new();
+        for declaration in declarations {
+            let Some(name) = declaration.child_by_field_name("name") else {
+                continue;
+            };
+            let Some(value) = declaration.child_by_field_name("value") else {
+                continue;
+            };
+            if name.kind() != "identifier" {
+                continue;
+            }
+            let value = Self::unwrapped(value);
+            if value.kind() != "call_expression" {
+                continue;
+            }
+            let Some(function) = value.child_by_field_name("function") else {
+                continue;
+            };
+            let wrapper = &code[function.byte_range()];
+            if function.kind() != "identifier" || !lazy_aliases.contains(wrapper) {
+                continue;
+            }
+            let binding = code[name.byte_range()].to_owned();
+            let target = (complete
+                && Self::is_module_scope_declarator(declaration)
+                && Self::binding_is_immutable(root, declaration, &binding, code)
+                && Self::name_has_assignment(root, wrapper, code) == Some(false))
+            .then(|| Self::lazy_projection_target(root, value, code))
+            .flatten();
+            if candidates.insert(binding.clone(), target).is_some() {
+                candidates.insert(binding, None);
+            }
+        }
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let mut uses = Vec::new();
+        Self::deferred_jsx_uses_recursive(root, code, None, &candidates, &mut uses, 0);
+        uses
     }
 }
 
@@ -2849,6 +3333,17 @@ impl LanguageParser for TypeScriptParser {
         self.syntax_tree(code)
             .map(|tree| crate::parsing::references::argument_references(tree.root_node(), code))
             .unwrap_or_default()
+    }
+
+    fn find_deferred_compositions(
+        &mut self,
+        code: &str,
+    ) -> Vec<crate::parsing::DeferredCompositionUse> {
+        let imports = self.find_imports(code, FileId::new(1).expect("one is a valid file id"));
+        let Some(tree) = self.syntax_tree(code) else {
+            return Vec::new();
+        };
+        Self::deferred_compositions_from_root(tree.root_node(), code, &imports)
     }
 
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

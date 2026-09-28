@@ -21,6 +21,10 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 const MAX_DELTAS: usize = 64;
 const MAX_DELTA_IDS: usize = 4096;
 const MAX_MANIFEST: u64 = 128 * 1024;
@@ -59,6 +63,8 @@ struct Journal {
     base: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     segments_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance_sha256: Option<String>,
     deltas: Vec<Artifact>,
 }
 
@@ -76,6 +82,8 @@ struct Delta {
     entries: Vec<DeltaEntry>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     symbol_segments: HashMap<u32, Vec<super::simple::SymbolSegment>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    provenance: HashMap<u32, super::simple::SemanticProvenance>,
 }
 type DeltaEntry = (u32, Option<(Vec<f32>, Option<String>)>);
 
@@ -83,6 +91,7 @@ pub(super) struct Snapshot {
     pub embeddings: HashMap<SymbolId, Vec<f32>>,
     pub languages: HashMap<SymbolId, String>,
     pub symbol_segments: super::simple::SymbolSegments,
+    pub provenance: super::simple::SymbolProvenance,
     pub metadata: SemanticMetadata,
     pub persistence: Persistence,
 }
@@ -124,14 +133,22 @@ fn valid_name(name: &str) -> bool {
 
 fn manifest(bytes: &[u8]) -> Result<Manifest, SemanticSearchError> {
     let value: Manifest = serde_json::from_slice(bytes).map_err(error)?;
-    if !(1..=4).contains(&value.metadata.version) {
+    if !(1..=5).contains(&value.metadata.version) {
         return Err(error("unsupported semantic metadata version"));
     }
     super::validate_code_embedding_dimension(value.metadata.dimension)?;
     if let Some(j) = &value.journal {
-        if !(2..=4).contains(&value.metadata.version)
+        if !(2..=5).contains(&value.metadata.version)
             || (value.metadata.version == 4
                 && j.segments_sha256
+                    .as_ref()
+                    .is_none_or(|digest| digest.len() != 64))
+            || (value.metadata.version == 5
+                && j.segments_sha256
+                    .as_ref()
+                    .is_some_and(|digest| digest.len() != 64))
+            || (value.metadata.version == 5
+                && j.provenance_sha256
                     .as_ref()
                     .is_none_or(|digest| digest.len() != 64))
             || j.version != 1
@@ -144,9 +161,9 @@ fn manifest(bytes: &[u8]) -> Result<Manifest, SemanticSearchError> {
             return Err(error("invalid semantic journal manifest"));
         }
     }
-    if value.metadata.version == 4 && value.journal.is_none() {
+    if value.metadata.version >= 4 && value.journal.is_none() {
         return Err(error(
-            "symbol segment metadata requires a committed journal",
+            "versioned semantic metadata requires a committed journal",
         ));
     }
     Ok(value)
@@ -209,11 +226,18 @@ pub(super) fn save(
     embeddings: &HashMap<SymbolId, std::sync::Arc<[f32]>>,
     symbol_segments: &super::simple::SymbolSegments,
     languages: &HashMap<SymbolId, String>,
+    provenance: &super::simple::SymbolProvenance,
     mut metadata: SemanticMetadata,
 ) -> Result<(), SemanticSearchError> {
     // Reject even the first/empty checkpoint before creating a directory, lock,
     // generation file or cache. Reader and writer use the same code contract.
     super::validate_code_embedding_dimension(metadata.dimension)?;
+    if provenance
+        .iter()
+        .any(|(id, value)| !embeddings.contains_key(id) || !valid_sha256(&value.source_sha256))
+    {
+        return Err(error("invalid semantic provenance"));
+    }
     fs::create_dir_all(path).map_err(error)?;
     let canonical = path.canonicalize().map_err(error)?;
     let same_path = state.saved.as_ref().is_some_and(|(p, _)| p == &canonical);
@@ -247,10 +271,15 @@ pub(super) fn save(
                     .ok()
                     .is_some_and(|value| value.get("source_input_policy").is_some())
             });
+    let target_version = if provenance.is_empty() {
+        if uses_segments { 4 } else { 3 }
+    } else {
+        5
+    };
     let incremental = same_path
         && current
             .as_ref()
-            .is_some_and(|m| (m.metadata.version == 4) == uses_segments)
+            .is_some_and(|m| m.metadata.version == target_version)
         && current
             .as_ref()
             .and_then(|m| m.journal.as_ref())
@@ -280,9 +309,15 @@ pub(super) fn save(
                     .map(|parts| (id.value(), parts.to_vec()))
             })
             .collect();
+        let provenance = state
+            .dirty
+            .iter()
+            .filter_map(|id| provenance.get(id).cloned().map(|value| (id.value(), value)))
+            .collect();
         let bytes = serde_json::to_vec(&Delta {
             entries,
             symbol_segments,
+            provenance,
         })
         .map_err(error)?;
         if bytes.len() as u64 > MAX_DELTA_BYTES {
@@ -350,6 +385,28 @@ pub(super) fn save(
         } else {
             None
         };
+        let provenance_sha256 = if provenance.is_empty() {
+            None
+        } else {
+            let borrowed: std::collections::BTreeMap<u32, &super::simple::SemanticProvenance> =
+                provenance
+                    .iter()
+                    .map(|(id, value)| (id.value(), value))
+                    .collect();
+            let mut file =
+                File::create(dir.path().join("semantic-provenance.json")).map_err(error)?;
+            let digest = {
+                let mut writer = BoundedHashWriter {
+                    writer: &mut file,
+                    digest: Sha256::new(),
+                    written: 0,
+                };
+                serde_json::to_writer(&mut writer, &borrowed).map_err(error)?;
+                hex::encode(writer.digest.finalize())
+            };
+            file.sync_all().map_err(error)?;
+            Some(digest)
+        };
         sync_dir(dir.path())?;
         let base = dir
             .path()
@@ -362,11 +419,12 @@ pub(super) fn save(
             version: 1,
             base,
             segments_sha256,
+            provenance_sha256,
             deltas: Vec::new(),
         }
     };
     sync_dir(path)?;
-    metadata.version = if uses_segments { 4 } else { 3 };
+    metadata.version = target_version;
     let next = Manifest {
         metadata,
         journal: Some(journal),
@@ -423,7 +481,12 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
     }
     let mut languages = SimpleSemanticSearch::load_symbol_languages(&base)?;
     let mut symbol_segments = super::simple::SymbolSegments::new();
-    if current.metadata.version == 4 {
+    if current
+        .journal
+        .as_ref()
+        .and_then(|journal| journal.segments_sha256.as_ref())
+        .is_some()
+    {
         let bytes = read_bounded(&base.join("symbol-segments.json"), MAX_DELTA_BYTES)?;
         let expected = current
             .journal
@@ -438,6 +501,26 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
             let id = SymbolId::new(raw).ok_or_else(|| error("zero symbol segment parent ID"))?;
             let parts = validate_segments(parts, current.metadata.dimension)?;
             symbol_segments.insert(id, std::sync::Arc::from(parts));
+        }
+    }
+    let mut provenance = super::simple::SymbolProvenance::new();
+    if current.metadata.version == 5 {
+        let bytes = read_bounded(&base.join("semantic-provenance.json"), MAX_DELTA_BYTES)?;
+        let expected = current
+            .journal
+            .as_ref()
+            .and_then(|journal| journal.provenance_sha256.as_deref());
+        if expected != Some(sha256(&bytes).as_str()) {
+            return Err(error("semantic provenance checkpoint checksum mismatch"));
+        }
+        let records: HashMap<u32, super::simple::SemanticProvenance> =
+            serde_json::from_slice(&bytes).map_err(error)?;
+        for (raw, value) in records {
+            let id = SymbolId::new(raw).ok_or_else(|| error("zero semantic provenance ID"))?;
+            if !valid_sha256(&value.source_sha256) || !embeddings.contains_key(&id) {
+                return Err(error("invalid semantic provenance checkpoint"));
+            }
+            provenance.insert(id, value);
         }
     }
     if let Some(j) = &current.journal {
@@ -457,6 +540,7 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
                     return Err(error("duplicate ID in semantic delta"));
                 }
                 symbol_segments.remove(&id);
+                provenance.remove(&id);
                 match value {
                     Some((v, language)) => {
                         if v.len() != current.metadata.dimension || v.iter().any(|x| !x.is_finite())
@@ -476,7 +560,7 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
                     }
                 }
             }
-            if current.metadata.version != 4 && !delta.symbol_segments.is_empty() {
+            if current.metadata.version < 4 && !delta.symbol_segments.is_empty() {
                 return Err(error("symbol segments require format version 4"));
             }
             for (raw, parts) in delta.symbol_segments {
@@ -487,6 +571,21 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
                 }
                 let parts = validate_segments(parts, current.metadata.dimension)?;
                 symbol_segments.insert(id, std::sync::Arc::from(parts));
+            }
+            if current.metadata.version != 5 && !delta.provenance.is_empty() {
+                return Err(error("semantic provenance requires format version 5"));
+            }
+            for (raw, value) in delta.provenance {
+                let id = SymbolId::new(raw).ok_or_else(|| error("zero semantic provenance ID"))?;
+                if !seen.contains(&id)
+                    || !embeddings.contains_key(&id)
+                    || !valid_sha256(&value.source_sha256)
+                {
+                    return Err(error(
+                        "semantic provenance delta has no changed live parent",
+                    ));
+                }
+                provenance.insert(id, value);
             }
         }
     }
@@ -513,6 +612,7 @@ pub(super) fn load(path: &Path) -> Result<Snapshot, SemanticSearchError> {
         embeddings,
         languages,
         symbol_segments,
+        provenance,
         metadata: current.metadata,
         persistence: Persistence {
             dirty: HashSet::new(),
