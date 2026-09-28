@@ -100,11 +100,13 @@ embedding identity digest, and vector presence/count. Text output includes a
 compact membership and alignment summary. Unknown definitions return no rows.
 
 Vector presence is a lookup by numeric symbol ID. It does not establish that the
-vector represents the current definition or source. Metadata-only readers report
-membership as `unknown`, even when aggregate vector counts are available. The
-current persistence format has no producing code generation: `vector_code_generation`
-is null, `generation_alignment` is `unknown_untracked`, and freshness is `unknown`.
-These diagnostics do not load models, contact providers, rebuild, or repair indexes.
+vector represents the current definition or source. Metadata-only and legacy
+readers report provenance as unknown. Version-5 semantic indexes record each
+vector's indexed source hash and producing code generation. `find_symbol`
+compares those values with the current code commit and a bounded, symlink-safe
+source observation; only matching hashes and generations report verified
+freshness. These diagnostics do not load models, contact providers, rebuild, or
+repair indexes, and they do not claim cross-directory atomic publication.
 
 The new opt-in policy is:
 

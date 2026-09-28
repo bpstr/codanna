@@ -635,7 +635,7 @@ mod pipeline_contracts {
                     let inputs: Vec<_> = batch
                         .body_candidates
                         .iter()
-                        .flat_map(|(_, source, _)| {
+                        .flat_map(|(_, source, _, _)| {
                             source
                                 .inputs(&InputBudget::remote(Some(2048), None).unwrap())
                                 .unwrap()

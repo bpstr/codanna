@@ -117,6 +117,14 @@ impl DocumentIndex {
         self.reader.searcher().generation().generation_id()
     }
 
+    /// Durable identity of the latest committed Tantivy state.
+    ///
+    /// Unlike [`Self::generation`], this value survives reader reloads and
+    /// process restarts, so persisted semantic data can safely reference it.
+    pub fn commit_opstamp(&self) -> StorageResult<u64> {
+        Ok(self.index.load_metas()?.opstamp)
+    }
+
     /// Metadata from one pinned reader. Segment IDs and delete opstamps identify
     /// its stored documents even when an unchanged reload advances generation.
     pub(crate) fn reader_snapshot(&self) -> tantivy::SearcherGeneration {

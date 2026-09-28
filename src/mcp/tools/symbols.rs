@@ -324,10 +324,14 @@ impl CodeIntelligenceServer {
             let semantic_definitions = indexer.semantic_definition_status(&symbols);
             for status in &semantic_definitions {
                 result.push_str(&format!(
-                    "\nSemantic symbol_id:{}: eligible={}, vectors={} ({}), representation={}, generation_alignment={}, freshness={}.\n",
+                    "\nSemantic symbol_id:{}: eligible={}, vectors={} ({}), representation={}, source_freshness={}, generation_alignment={}, freshness={}, indexed_hash={}, current_hash={}, vector_hash={}, reader_generation={}.\n",
                     status.symbol_id, status.eligible, status.vector_presence,
                     status.vector_presence_basis, status.representation_status,
-                    status.generation_alignment, status.freshness,
+                    status.source_freshness, status.generation_alignment, status.freshness,
+                    status.indexed_content_hash.as_deref().unwrap_or("unknown"),
+                    status.current_content_hash.as_deref().unwrap_or("unknown"),
+                    status.vector_source_hash.as_deref().unwrap_or("unknown"),
+                    status.reader_generation,
                 ));
             }
             let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);

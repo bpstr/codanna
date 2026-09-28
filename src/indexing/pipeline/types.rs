@@ -382,13 +382,14 @@ impl Default for IndexBatch {
 /// Contains symbols that have doc_comments suitable for embedding.
 #[derive(Debug)]
 pub struct EmbeddingBatch {
-    /// Embedding candidates: (symbol_id, doc_comment, language)
-    pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
+    /// Embedding candidates: (symbol_id, doc_comment, language, source SHA-256)
+    pub candidates: Vec<(SymbolId, CompactString, Box<str>, String)>,
     /// Opt-in source snapshots, partitioned against the real backend input budget.
     pub body_candidates: Vec<(
         SymbolId,
         crate::symbol_representation::SymbolSource,
         Box<str>,
+        String,
     )>,
 }
 

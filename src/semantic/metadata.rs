@@ -176,11 +176,11 @@ impl SemanticMetadata {
             })?;
 
         // Check version compatibility
-        if metadata.version > 4 {
+        if metadata.version > 5 {
             return Err(SemanticSearchError::StorageError {
                 message: format!(
                     "Metadata version {} is newer than supported version {}",
-                    metadata.version, 4
+                    metadata.version, 5
                 ),
                 suggestion: "Update the code to support the newer metadata format".to_string(),
             });

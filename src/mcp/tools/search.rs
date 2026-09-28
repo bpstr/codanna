@@ -93,6 +93,11 @@ impl CodeIntelligenceServer {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             };
+            let display_generation = |value: Option<u64>| {
+                value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
             let model = semantic.model_name.as_deref().unwrap_or("unknown");
             let dimension = semantic
                 .dimension
@@ -124,7 +129,7 @@ impl CodeIntelligenceServer {
                 display(semantic.eligible_without_vector),
                 display(semantic.vector_without_current_symbol),
                 input_policy,
-                semantic.code_generation,
+                display_generation(semantic.code_generation),
                 semantic.generation_alignment,
                 semantic.freshness,
                 timestamp_info,
