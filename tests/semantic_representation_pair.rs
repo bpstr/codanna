@@ -62,14 +62,13 @@ fn body_v2_retains_behavior_missing_from_documentation_without_embedding() {
                     .eligible(symbol.kind, symbol.doc_comment.is_some())
             );
         }
-        let bytes = input.header.len()
-            + input
-                .fragments
-                .iter()
-                .map(|fragment| fragment.text.len())
-                .sum::<usize>();
-        assert!(bytes <= MAX_SYMBOL_SOURCE_BYTES);
-        retained += bytes;
+        let source_bytes = input
+            .fragments
+            .iter()
+            .map(|fragment| fragment.text.len())
+            .sum::<usize>();
+        assert!(source_bytes <= MAX_SYMBOL_SOURCE_BYTES);
+        retained += input.header.len() + source_bytes;
     }
     assert!(retained <= MAX_FILE_SOURCE_BYTES);
 }

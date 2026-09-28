@@ -116,6 +116,10 @@ pub struct SemanticCoverageStatus {
     pub freshness: &'static str,
 }
 
+#[path = "semantic_diagnostics.rs"]
+mod semantic_diagnostics;
+pub use semantic_diagnostics::SemanticDefinitionStatus;
+
 /// IndexFacade - Unified interface for code intelligence operations
 ///
 /// This facade wraps DocumentIndex (for queries) and Pipeline (for indexing),

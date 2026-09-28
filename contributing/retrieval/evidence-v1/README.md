@@ -93,6 +93,19 @@ links, missing endpoints and unknown parser/source coverage remain visible.
 status and an explicit recovery action in JSON and text. Missing legacy policy is
 unknown; documentation-only vectors do not imply implementation coverage.
 
+`find_symbol` adds `semantic_definitions` to MCP structured content and CLI JSON
+`meta`, with one row for each returned definition on the current page. Rows carry
+the symbol ID, path, name, configured eligibility, recorded policy compatibility,
+embedding identity digest, and vector presence/count. Text output includes a
+compact membership and alignment summary. Unknown definitions return no rows.
+
+Vector presence is a lookup by numeric symbol ID. It does not establish that the
+vector represents the current definition or source. Metadata-only readers report
+membership as `unknown`, even when aggregate vector counts are available. The
+current persistence format has no producing code generation: `vector_code_generation`
+is null, `generation_alignment` is `unknown_untracked`, and freshness is `unknown`.
+These diagnostics do not load models, contact providers, rebuild, or repair indexes.
+
 The new opt-in policy is:
 
 ```toml
@@ -102,7 +115,8 @@ code_representation = "symbol_body_v2"
 
 V2 retains head, middle and tail source fragments within the same 16 KiB/symbol,
 1 MiB/file and eight-segment limits. Final segment selection also includes the
-middle. Its context fields contain parser-observed language and declaration role,
+middle. The per-symbol byte limit covers source fragments; separately bounded
+identity headers also count toward the file budget. Its context fields contain parser-observed language and declaration role,
 with an explicit observation basis. It makes no model-generated behavior claims.
 Each segment keeps the actual source byte range. V1 inputs and identities remain
 unchanged; V2 has a new policy identity and requires an explicit rebuild before

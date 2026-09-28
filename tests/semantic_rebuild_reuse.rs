@@ -515,3 +515,62 @@ fn semantic_cli_json_reports_retrieval_for_populated_and_empty_results() {
         }
     }
 }
+
+#[test]
+fn definition_cli_reports_unknown_membership_without_loading_vectors_or_contacting_provider() {
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.rebuild();
+    assert_inputs(&endpoint, 2);
+    for (name, count) in [("calendar_owner", 1), ("absent_definition", 0)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codanna"));
+        command
+            .env_clear()
+            .env("HOME", workspace.root().join(".home"));
+        for key in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let output = command
+            .current_dir(workspace.root())
+            .args([
+                "--config",
+                ".codanna/settings.toml",
+                "mcp",
+                "find_symbol",
+                name,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if count == 0 { 1 } else { 0 }),
+            "{response}"
+        );
+        let rows = response["meta"]["semantic_definitions"].as_array().unwrap();
+        assert_eq!(rows.len(), count);
+        if count == 1 {
+            let row = &rows[0];
+            assert_eq!(row["name"], name);
+            assert_eq!(row["symbol_id"], response["data"][0]["symbol"]["id"]);
+            assert_eq!(row["eligible"], true);
+            assert_eq!(row["state"], "metadata_only");
+            assert_eq!(row["vector_presence"], "unknown");
+            assert_eq!(row["generation_alignment"], "unknown_untracked");
+            assert!(row["embedding_identity_sha256"].is_string());
+        }
+    }
+    assert!(
+        endpoint.take_inputs().is_empty(),
+        "definition lookup must not embed"
+    );
+}
