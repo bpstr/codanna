@@ -174,58 +174,6 @@ struct CallRelation {
     call_column: Option<u32>,
 }
 
-/// Symbol info extracted from search result for consistent JSON shape.
-/// Matches the nested `symbol: {...}` pattern used by semantic_search_docs.
-#[derive(Debug, Serialize)]
-struct SymbolInfo {
-    id: crate::types::SymbolId,
-    name: String,
-    kind: crate::types::SymbolKind,
-    file_path: String,
-    line: u32,
-    column: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    doc_comment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    signature: Option<String>,
-    module_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    language_id: Option<String>,
-}
-
-/// Search result with nested symbol for consistent JSON output.
-/// Standardizes on `symbol: {...}` rather than flat `symbol_id: ...`.
-#[derive(Debug, Serialize)]
-struct SearchSymbolResult {
-    symbol: SymbolInfo,
-    score: f32,
-    highlights: Vec<crate::storage::tantivy::TextHighlight>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    context: Option<String>,
-}
-
-impl From<crate::storage::tantivy::SearchResult> for SearchSymbolResult {
-    fn from(sr: crate::storage::tantivy::SearchResult) -> Self {
-        Self {
-            symbol: SymbolInfo {
-                id: sr.symbol_id,
-                name: sr.name,
-                kind: sr.kind,
-                file_path: sr.file_path,
-                line: sr.line,
-                column: sr.column,
-                doc_comment: sr.doc_comment,
-                signature: sr.signature,
-                module_path: sr.module_path,
-                language_id: sr.language_id,
-            },
-            score: sr.score,
-            highlights: sr.highlights,
-            context: sr.context,
-        }
-    }
-}
-
 /// Run the MCP direct tool invocation command.
 pub async fn run(
     tool: String,
