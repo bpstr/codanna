@@ -134,6 +134,8 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             args,
             collection,
             limit,
+            literal,
+            score_floor,
             json,
             fields,
         } => {
@@ -163,7 +165,41 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             // Collection can come from --collection flag or collection:name
             let final_collection = collection.or_else(|| params.get("collection").cloned());
 
-            let mut store = match create_store_with_embeddings() {
+            let invalid = |message: String| -> ! {
+                let envelope: Envelope<()> = Envelope::error(ResultCode::InvalidQuery, message);
+                print_json(&envelope);
+                std::process::exit(2);
+            };
+            let literal = literal
+                || params
+                    .get("literal")
+                    .map(|value| {
+                        value
+                            .parse::<bool>()
+                            .unwrap_or_else(|_| invalid("literal must be true or false".into()))
+                    })
+                    .unwrap_or(false);
+            let score_floor = score_floor.or_else(|| {
+                params.get("score_floor").map(|value| {
+                    value
+                        .parse::<f32>()
+                        .unwrap_or_else(|_| invalid("score_floor must be a finite number".into()))
+                })
+            });
+            let options = crate::documents::DocumentSearchOptions {
+                literal,
+                score_floor,
+            };
+            if let Err(error) = options.validate() {
+                invalid(error.to_string());
+            }
+            let opened = if literal {
+                crate::documents::open_literal_from_settings(config)
+                    .map_err(|error| error.to_string())
+            } else {
+                create_store_with_embeddings().map(|store| store.query_snapshot())
+            };
+            let mut store = match opened {
                 Ok(s) => s,
                 Err(e) => {
                     if json {
@@ -187,7 +223,7 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             };
 
             let start = Instant::now();
-            match store.search(search_query) {
+            match store.search_with_options(search_query, &options) {
                 Ok(results) => {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     let count = results.len();
@@ -210,7 +246,11 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
                                     "Use the file paths and byte ranges to read specific sections",
                                 )
                         };
-                        let output = super::mcp::render_envelope_json(&envelope, fields.as_ref());
+                        let output = super::mcp::render_document_envelope(
+                            &envelope,
+                            store.retrieval_metadata(&options, count),
+                            fields.as_ref(),
+                        );
                         println!("{output}");
                     } else if results.is_empty() {
                         eprintln!("No results found.");

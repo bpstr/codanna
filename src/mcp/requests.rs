@@ -272,7 +272,12 @@ impl schemars::JsonSchema for GetIndexInfoRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchDocumentsRequest {
-    /// Natural language search query
+    /// Match a case-sensitive literal substring in indexed chunk content, without embeddings.
+    #[serde(default)]
+    pub literal: bool,
+    /// Inclusive floor in native score units (cosine, lexical rank, or literal match 1).
+    pub score_floor: Option<f32>,
+    /// Natural language query, or exact case-sensitive substring when literal is true
     pub query: String,
     /// Filter by collection name (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
