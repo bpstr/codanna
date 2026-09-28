@@ -1,24 +1,98 @@
-# Temporary branch-only workspace transfer; removed by the repair commit.
-name: Fork repair workspace
+# Temporary branch-only repair runner. Removed before the PR is finalized.
+name: Fork repair validation
 on:
   push:
     branches: [fix/upstream-regressions-20260928]
     paths: [.github/workflows/fork-repair-once.yml]
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: fork-repair-20260928
+  cancel-in-progress: false
 jobs:
-  snapshot:
+  repair:
     if: github.repository == 'bpstr/codanna' && github.ref == 'refs/heads/fix/upstream-regressions-20260928'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
-      - name: Export tracked public source without Git credentials
-        run: git archive --format=tar HEAD > "$RUNNER_TEMP/fork-source.tar"
-      - uses: actions/upload-artifact@v4
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: fork-source
-          path: ${{ runner.temp }}/fork-source.tar
-          retention-days: 1
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: fork-repair-20260928
+      - name: Apply reviewed edits with exact source and patch checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          entries = []
+          for n in range(1, 7):
+              entries.extend(json.loads(pathlib.Path(f'.fork-repair-{n}.json').read_text()))
+          assert len(entries) == 48
+          seen = set()
+          for entry in entries:
+              path = pathlib.Path(entry['path'])
+              assert not path.is_absolute() and '..' not in path.parts
+              assert path.parts[0] in ('src', 'tests') or str(path) in ('AGENTS.md', 'UPSTREAM.md', 'CHANGELOG.md')
+              assert str(path) not in seen
+              seen.add(str(path))
+              old = path.read_bytes() if path.exists() else None
+              assert (hashlib.sha256(old).hexdigest() if old is not None else None) == entry['before'], f'Base moved: {path}'
+              lines = (old or b'').decode().splitlines(True)
+              for start, end, replacement in reversed(entry['edits']):
+                  assert 0 <= start <= end <= len(lines)
+                  lines[start:end] = replacement.splitlines(True)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(''.join(lines))
+          subprocess.run(['git', 'add', '-N', '--', *sorted(seen)], check=True)
+          diff = subprocess.check_output(['git', 'diff', '--binary', '--', 'src', 'tests', 'AGENTS.md', 'UPSTREAM.md', 'CHANGELOG.md'])
+          assert hashlib.sha256(diff).hexdigest() == 'fd11bcbc7b7383c4be4c81146b511f050456b05d33e6ea7785118647e273a8d8', 'Transferred patch differs from reviewed local patch'
+          pathlib.Path('/tmp/repair-paths.json').write_text(json.dumps(sorted(seen)))
+          PY
+          cargo fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          allowed = set(json.loads(pathlib.Path('/tmp/repair-paths.json').read_text()))
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert changed <= allowed, f'Unexpected formatting changes: {changed - allowed}'
+          subprocess.run(['git', 'add', '--', *sorted(allowed)], check=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --signoff -m 'Repair upstream-derived indexing and watcher regressions'
+          git push origin HEAD:refs/heads/fix/upstream-regressions-20260928
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git rev-parse HEAD | tee "$RUNNER_TEMP/repair-head.txt"
+      - name: Focused unit regressions
+        run: cargo test --locked --lib upstream_repair -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-unit.log"
+      - name: Upstream overlap regressions
+        if: success() || failure()
+        run: cargo test --locked --test upstream_regressions -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-upstream.log"
+      - name: Export barrel regressions
+        if: success() || failure()
+        run: cargo test --locked --test web_export_regressions -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/repair-exports.log"
+      - name: Export source and validation receipts
+        if: always()
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/repaired-source.tar"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fork-repair-evidence
+          path: |
+            ${{ runner.temp }}/repair-*.log
+            ${{ runner.temp }}/repair-head.txt
+            ${{ runner.temp }}/repaired-source.tar
+          retention-days: 2
