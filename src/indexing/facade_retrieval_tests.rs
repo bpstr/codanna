@@ -592,6 +592,72 @@ fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
 }
 
 #[tokio::test]
+async fn definition_semantics_reports_membership_without_claiming_generation_alignment() {
+    let (_temp, mut facade) = fixture();
+    let index = facade.document_index();
+    index.start_batch().unwrap();
+    for (id, documented) in [(1, true), (2, true), (3, false)] {
+        let mut symbol = named_symbol(id, "shared", SymbolKind::Function);
+        if documented {
+            symbol.doc_comment = Some("Prepared documentation".into());
+        }
+        index.index_symbol(&symbol, &format!("definition{id}.rs")).unwrap();
+    }
+    index.commit_batch().unwrap();
+    let identity = serde_json::json!({"source_input_policy": "doc_comment_present_v1"}).to_string();
+    let mut semantic = SimpleSemanticSearch::new_empty(2, "prepared-fixture");
+    semantic.set_embedding_identity(identity.clone()).unwrap();
+    semantic.store_embeddings(vec![(SymbolId::new(1).unwrap(), vec![1.0, 0.0], "rust".into())]);
+    facade.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+    let server = CodeIntelligenceServer::new(facade);
+    let response = server.find_symbol(Parameters(FindSymbolRequest {
+        name: Some("shared".into()), symbol_id: None, lang: None, limit: 2, offset: 0,
+    })).await.unwrap();
+    let data = response.structured_content.unwrap();
+    let rows = data["semantic_definitions"].as_array().expect("per-definition diagnostics");
+    assert_eq!(rows.len(), 2, "diagnostics must follow pagination");
+    for (row, presence) in rows.iter().zip(["present", "missing"]) {
+        assert_eq!(row["vector_presence"], presence);
+        assert_eq!(row["eligible"], true);
+        assert_eq!(row["representation_status"], "matched");
+        assert_eq!(row["embedding_identity_sha256"], calculate_hash(&identity));
+        assert_eq!(row["generation_alignment"], "unknown_untracked");
+        assert_eq!(row["freshness"], "unknown");
+        assert!(row["vector_code_generation"].is_null());
+        assert!(row["file_path"].as_str().unwrap().starts_with("definition"));
+    }
+    let response = server.find_symbol(Parameters(FindSymbolRequest {
+        name: None, symbol_id: Some(3), lang: None, limit: 10, offset: 0,
+    })).await.unwrap();
+    assert_eq!(response.structured_content.unwrap()["semantic_definitions"][0]["eligible"], false);
+    let response = server.find_symbol(Parameters(FindSymbolRequest {
+        name: None, symbol_id: Some(99), lang: None, limit: 10, offset: 0,
+    })).await.unwrap();
+    assert_eq!(response.structured_content.unwrap()["semantic_definitions"], serde_json::json!([]));
+}
+
+#[test]
+fn definition_semantics_keeps_unavailable_membership_and_policy_uncertainty_explicit() {
+    let (_temp, mut facade) = fixture();
+    let symbols = [named_symbol(1, "undocumented", SymbolKind::Function)];
+    for (identity, expected) in [
+        (None, "unknown_legacy_or_absent"),
+        (Some(serde_json::json!({"source_input_policy": "another-policy"}).to_string()), "mismatch"),
+    ] {
+        let mut metadata = crate::semantic::SemanticMetadata::new("prepared-fixture".into(), 2, 0);
+        metadata.embedding_identity = identity;
+        metadata.embedding_count = 100;
+        facade.semantic_metadata_snapshot = Some(metadata);
+        let rows = facade.semantic_definition_status(&symbols);
+        assert_eq!(rows[0].vector_presence, "unknown");
+        assert_eq!(rows[0].vector_count, None);
+        assert_eq!(rows[0].state, "metadata_only");
+        assert_eq!(rows[0].representation_status, expected);
+        assert_eq!(rows[0].generation_alignment, "unknown_untracked");
+    }
+}
+
+#[tokio::test]
 async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() {
     let (_temp, facade) = fixture();
     let server = CodeIntelligenceServer::new(facade);
