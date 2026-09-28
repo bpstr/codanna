@@ -145,7 +145,10 @@ fn persisted_callers_include_object_methods_without_namesake_leakage() {
         .into_iter()
         .map(|symbol| symbol.id)
         .collect();
-    assert_eq!(actual, expected, "callers are unique functions, not call sites");
+    assert_eq!(
+        actual, expected,
+        "callers are unique functions, not call sites"
+    );
     let reference = target(&index, "reference.ts", "mergePage");
     assert!(index.get_calling_functions(reference.id).is_empty());
     for id in expected {
