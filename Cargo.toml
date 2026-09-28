@@ -177,6 +177,9 @@ harness = false
 name = "kotlin_parser_bench"
 harness = false
 
+[target."cfg(unix)".dependencies]
+libc = "0.2.183"
+
 [target."cfg(windows)".dependencies]
 dunce = "1.0.5"
 

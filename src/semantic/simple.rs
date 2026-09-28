@@ -443,6 +443,14 @@ impl SimpleSemanticSearch {
     }
 
     /// Physical vector count, distinct from the number of represented parents.
+    pub(crate) fn symbol_vector_count(&self, id: SymbolId) -> usize {
+        self.symbol_segments.get(&id).map_or_else(
+            || usize::from(self.embeddings.contains_key(&id)),
+            |segments| segments.len(),
+        )
+    }
+
+    /// Physical vector count, distinct from the number of represented parents.
     pub fn vector_count(&self) -> usize {
         self.embeddings.len()
             + self

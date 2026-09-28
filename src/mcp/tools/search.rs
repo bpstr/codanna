@@ -15,6 +15,46 @@ use crate::mcp::server::{CodeIntelligenceServer, format_relative_time, generate_
 
 #[tool_router(router = search_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
+    #[tool(
+        description = "Compare committed document source hashes with current collection files without indexing or embeddings. Reports changed, missing, new, unchanged and unreadable sources, generation identity and explicit discovery/file/byte limits. Truncation is not proof of freshness."
+    )]
+    pub async fn document_drift(
+        &self,
+        Parameters(request): Parameters<crate::mcp::DocumentDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        request
+            .validate()
+            .map_err(|error| McpError::invalid_params(error, None))?;
+        let facade = self.facade.read().await;
+        let settings = facade.settings().clone();
+        let boundary = facade
+            .network_workspace
+            .clone()
+            .or_else(|| settings.workspace_root.clone());
+        drop(facade);
+        if !settings
+            .documents
+            .collections
+            .contains_key(&request.collection)
+        {
+            return Err(McpError::invalid_params(
+                "Unknown document collection",
+                None,
+            ));
+        }
+        crate::runtime::blocking(move || {
+            let report = crate::documents::drift::inspect(&settings, &request, boundary.as_deref())
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let data = serde_json::to_value(&report)
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let mut response = CallToolResult::success(vec![ContentBlock::text(data.to_string())]);
+            response.structured_content = Some(data);
+            Ok(response)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
+    }
+
     #[tool(description = "Get information about the indexed codebase")]
     pub async fn get_index_info(
         &self,
@@ -130,119 +170,117 @@ impl CodeIntelligenceServer {
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
+            tracing::debug!(
+                target: "mcp",
+                "semantic_search_docs called - symbols: {}, semantic: {}",
+                indexer.symbol_count(),
+                indexer.has_semantic_search()
+            );
 
-        tracing::debug!(
-            target: "mcp",
-            "semantic_search_docs called - symbols: {}, semantic: {}",
-            indexer.symbol_count(),
-            indexer.has_semantic_search()
-        );
-
-        if !indexer.has_semantic_search() {
-            // Check if semantic files exist
-            let semantic_path = indexer.settings().index_path.join("semantic");
-            let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("metadata.json").exists();
-            let symbol_count = indexer.symbol_count();
-
-            // Get current working directory for debugging
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
-                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
-                    .display(),
-                symbol_count,
-                metadata_exists && vectors_exist,
-                indexer.has_semantic_search(),
-                cwd
-            ))]));
-        }
-
-        let results = match threshold {
-            Some(t) => indexer.semantic_search_docs_with_threshold_and_language(
-                &query,
-                limit as usize,
-                t,
-                lang.as_deref(),
-            ),
-            None => {
-                indexer.semantic_search_docs_with_language(&query, limit as usize, lang.as_deref())
+            if !indexer.has_semantic_search() {
+                return Ok(semantic_unavailable(&indexer));
             }
-        };
 
-        match results {
-            Ok(results) => {
-                if results.is_empty() {
-                    let mut output =
-                        format!("No semantically similar documentation found for: {query}");
-                    // Add guidance for no results
-                    if let Some(guidance) =
-                        generate_mcp_guidance(indexer.settings(), "semantic_search_docs", 0)
-                    {
-                        output.push_str("\n\n---\nGuidance: ");
-                        output.push_str(&guidance);
-                        output.push('\n');
-                    }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
-                }
+            let results = match threshold {
+                Some(t) => indexer.semantic_search_docs_with_threshold_and_language(
+                    &query,
+                    limit as usize,
+                    t,
+                    lang.as_deref(),
+                ),
+                None => indexer.semantic_search_docs_with_language(
+                    &query,
+                    limit as usize,
+                    lang.as_deref(),
+                ),
+            };
 
-                let mut result = format!(
-                    "Found {} semantically similar result(s) for '{}':\n\n",
-                    results.len(),
-                    query
-                );
-
-                for (i, (symbol, score)) in results.iter().enumerate() {
-                    result.push_str(&format!(
-                        "{}. {} ({:?}) - Similarity: {:.3}\n",
-                        i + 1,
-                        symbol.name,
-                        symbol.kind,
-                        score
-                    ));
-                    result.push_str(&format!(
-                        "   File: {}:{}\n",
-                        symbol.file_path,
-                        symbol.range.start_line + 1
-                    ));
-
-                    if let Some(ref doc) = symbol.doc_comment {
-                        // Show first 3 lines of doc
-                        let preview: Vec<&str> = doc.lines().take(3).collect();
-                        let doc_preview = if doc.lines().count() > 3 {
-                            format!("{}...", preview.join(" "))
-                        } else {
-                            preview.join(" ")
-                        };
-                        result.push_str(&format!("   Doc: {doc_preview}\n"));
+            match results {
+                Ok(results) => {
+                    let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                        threshold,
+                        indexer.settings().semantic_search.threshold,
+                        results.len(),
+                    );
+                    if results.is_empty() {
+                        let mut output =
+                            format!("No semantically similar documentation found for: {query}");
+                        // Add guidance for no results
+                        if let Some(guidance) =
+                            generate_mcp_guidance(indexer.settings(), "semantic_search_docs", 0)
+                        {
+                            output.push_str("\n\n---\nGuidance: ");
+                            output.push_str(&guidance);
+                            output.push('\n');
+                        }
+                        let mut response =
+                            CallToolResult::success(vec![ContentBlock::text(output)]);
+                        response.structured_content =
+                            Some(serde_json::json!({ "retrieval": retrieval }));
+                        return Ok(response);
                     }
 
-                    if let Some(ref sig) = symbol.signature {
-                        result.push_str(&format!("   Signature: {sig}\n"));
+                    let mut result = format!(
+                        "Found {} semantically similar result(s) for '{}':\n\n",
+                        results.len(),
+                        query
+                    );
+
+                    for (i, (symbol, score)) in results.iter().enumerate() {
+                        result.push_str(&format!(
+                            "{}. {} ({:?}) - Similarity: {:.3}\n",
+                            i + 1,
+                            symbol.name,
+                            symbol.kind,
+                            score
+                        ));
+                        result.push_str(&format!(
+                            "   File: {}:{}\n",
+                            symbol.file_path,
+                            symbol.range.start_line + 1
+                        ));
+
+                        if let Some(ref doc) = symbol.doc_comment {
+                            // Show first 3 lines of doc
+                            let preview: Vec<&str> = doc.lines().take(3).collect();
+                            let doc_preview = if doc.lines().count() > 3 {
+                                format!("{}...", preview.join(" "))
+                            } else {
+                                preview.join(" ")
+                            };
+                            result.push_str(&format!("   Doc: {doc_preview}\n"));
+                        }
+
+                        if let Some(ref sig) = symbol.signature {
+                            result.push_str(&format!("   Signature: {sig}\n"));
+                        }
+
+                        result.push('\n');
                     }
 
-                    result.push('\n');
-                }
+                    // Add system guidance
+                    if let Some(guidance) = generate_mcp_guidance(
+                        indexer.settings(),
+                        "semantic_search_docs",
+                        results.len(),
+                    ) {
+                        result.push_str("\n---\nGuidance: ");
+                        result.push_str(&guidance);
+                        result.push('\n');
+                    }
 
-                // Add system guidance
-                if let Some(guidance) =
-                    generate_mcp_guidance(indexer.settings(), "semantic_search_docs", results.len())
-                {
-                    result.push_str("\n---\nGuidance: ");
-                    result.push_str(&guidance);
-                    result.push('\n');
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+                    response.structured_content =
+                        Some(serde_json::json!({ "retrieval": retrieval }));
+                    Ok(response)
                 }
-
-                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Semantic search failed: {e}"
+                ))])),
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {e}"
-            ))])),
-        }
-        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(
@@ -272,20 +310,7 @@ impl CodeIntelligenceServer {
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path).display(),
                 indexer.has_semantic_search()
             );
-            // Check if semantic files exist
-            let semantic_path = indexer.settings().index_path.join("semantic");
-            let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("metadata.json").exists();
-
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
-                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
-                    .display(),
-                indexer.has_semantic_search(),
-                crate::parsing::paths::render_absolute_path(&semantic_path).display(),
-                metadata_exists,
-                vectors_exist
-            ))]));
+            return Ok(semantic_unavailable(&indexer));
         }
 
         // First, perform semantic search
@@ -303,6 +328,9 @@ impl CodeIntelligenceServer {
 
         match search_results {
             Ok(results) => {
+                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                    threshold, indexer.settings().semantic_search.threshold, results.len(),
+                );
                 if results.is_empty() {
                     let mut output = format!("No documentation found matching query: {query}");
                     // Add guidance for no results
@@ -313,7 +341,9 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    return Ok(response);
                 }
 
                 let mut output = String::new();
@@ -794,7 +824,9 @@ impl CodeIntelligenceServer {
                 }
 
                 let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
-                response.structured_content = Some(serde_json::json!({ "impact": impact_contexts }));
+                response.structured_content = Some(serde_json::json!({
+                    "impact": impact_contexts, "retrieval": retrieval
+                }));
                 Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
@@ -919,7 +951,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Search indexed documents (markdown, text files) using natural language queries. Returns relevant chunks with context and highlighted keywords."
+        description = "Retrieve indexed document chunks using configured semantic/lexical search or a case-sensitive literal substring without embeddings. Optional finite score_floor uses native score units. Returned candidates do not certify supporting evidence or authority."
     )]
     pub async fn search_documents(
         &self,
@@ -927,29 +959,42 @@ impl CodeIntelligenceServer {
             query,
             collection,
             limit,
+            literal,
+            score_floor,
         }): Parameters<SearchDocumentsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
-        let store = match &self.document_store {
-            Some(s) => s,
-            None => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(
-                    "Document search not available. No document collections are indexed.\n\n\
-                    To enable:\n\
-                    1. Add a collection: codanna documents add-collection docs docs/\n\
-                    2. Index it: codanna documents index\n\
-                    3. Restart the MCP server",
-                )]));
-            }
+        let options = crate::documents::DocumentSearchOptions {
+            literal,
+            score_floor,
         };
-
-        let preview_config = self.facade.read().await.settings().documents.search.clone();
-        // Queries never perform auto-index mutations. A document writer owns its
-        // mmap state exclusively; fail fast rather than waiting behind a full sync.
-        let mut store = store
-            .try_read()
-            .map_err(|_| McpError::internal_error("Document index is busy; retry the query", None))?
-            .query_snapshot();
+        options
+            .validate()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let facade = self.facade.read().await;
+        let mut settings = (**facade.settings()).clone();
+        settings.workspace_root = facade.network_workspace.clone().or(settings.workspace_root);
+        drop(facade);
+        let preview_config = settings.documents.search.clone();
+        let mut store = if let Some(store) = &self.document_store {
+            store
+                .try_read()
+                .map_err(|_| {
+                    McpError::internal_error("Document index is busy; retry the query", None)
+                })?
+                .query_snapshot()
+        } else if literal && settings.documents.enabled {
+            crate::runtime::blocking(move || {
+                crate::documents::open_literal_from_settings(&settings)
+            })
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?
+        } else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Document search not available. Run 'codanna documents index' to create the index.",
+            )]));
+        };
         crate::runtime::blocking(move || {
             let search_query = DocSearchQuery {
                 text: query.clone(),
@@ -959,12 +1004,15 @@ impl CodeIntelligenceServer {
                 preview_config: Some(preview_config),
             };
 
-            match store.search(search_query) {
+            match store.search_with_options(search_query, &options) {
                 Ok(results) => {
+                    let retrieval = store.retrieval_metadata(&options, results.len());
                     if results.is_empty() {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "No documents found for: {query}"
-                        ))]));
+                        let mut response = CallToolResult::success(vec![ContentBlock::text(format!(
+                            "No documents found for: {query}. Supporting evidence and authority have not been assessed."
+                        ))]);
+                        response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
+                        return Ok(response);
                     }
 
                     let mut output = format!(
@@ -993,7 +1041,10 @@ impl CodeIntelligenceServer {
                         output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
                     }
 
-                    Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                    output.push_str("Retrieval candidates only; supporting evidence and authority have not been assessed.\n");
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
+                    Ok(response)
                 }
                 Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Document search failed: {e}"
@@ -1002,5 +1053,50 @@ impl CodeIntelligenceServer {
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
+    }
+}
+
+/// Keep host paths in local tracing; MCP clients receive only availability facts.
+fn semantic_unavailable(indexer: &crate::indexing::facade::IndexFacade) -> CallToolResult {
+    let semantic_path = indexer.settings().index_path.join("semantic");
+    let metadata_exists = semantic_path.join("metadata.json").is_file();
+    let vectors_exist = crate::semantic::SemanticVectorStorage::vectors_exist(&semantic_path);
+    tracing::debug!(index_path = %indexer.settings().index_path.display(), metadata_exists, vectors_exist, "semantic search unavailable");
+    CallToolResult::error(vec![ContentBlock::text(format!(
+        "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nAvailability:\n- Metadata exists: {metadata_exists}\n- Vectors exist: {vectors_exist}"
+    ))])
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_search_reports_vector_presence_without_host_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = crate::Settings {
+            index_path: temp.path().join("private-index"),
+            ..Default::default()
+        };
+        let facade =
+            crate::indexing::facade::IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        let semantic = facade.settings().index_path.join("semantic");
+        std::fs::create_dir_all(&semantic).unwrap();
+        for (metadata, vectors) in [(false, false), (true, false), (true, true)] {
+            if metadata {
+                std::fs::write(semantic.join("metadata.json"), b"{}").unwrap();
+            }
+            if vectors {
+                std::fs::write(semantic.join("segment_0.vec"), b"fixture").unwrap();
+            }
+            let response = semantic_unavailable(&facade);
+            let ContentBlock::Text(text) = &response.content[0] else {
+                panic!("expected text")
+            };
+            assert!(text.text.contains(&format!("Metadata exists: {metadata}")));
+            assert!(text.text.contains(&format!("Vectors exist: {vectors}")));
+            assert!(!text.text.contains(&temp.path().display().to_string()));
+            assert!(!text.text.contains("private-index"));
+        }
     }
 }
