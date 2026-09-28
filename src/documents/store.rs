@@ -109,6 +109,24 @@ pub struct EmbeddingDiagnostics {
     pub compacted_vector_bytes: u64,
 }
 
+/// Read-only comparison against caller-supplied current collection paths.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceDriftReport {
+    pub generation: Option<String>,
+    pub candidate_files: usize,
+    pub truncated: bool,
+    pub bytes_read: usize,
+    pub files: Vec<SourceDriftEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceDriftEntry {
+    pub path: PathBuf,
+    pub status: &'static str,
+    pub indexed_sha256: Option<String>,
+    pub current_sha256: Option<String>,
+}
+
 /// Query parameters for document search.
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -1007,6 +1025,67 @@ impl DocumentStore {
     /// Get all indexed file paths.
     pub fn get_indexed_paths(&self) -> Vec<PathBuf> {
         self.file_states.keys().cloned().collect()
+    }
+
+    /// Compare a bounded set of source contents without ingestion or embeddings.
+    /// Current paths must be enumerated by the caller for the named collection;
+    /// this method does not recursively scan a workspace.
+    pub fn source_drift(
+        &self, collection: &str, current_paths: &[PathBuf],
+        max_files: usize, max_bytes: usize,
+    ) -> SourceDriftReport {
+        use std::io::Read;
+        let max_files = max_files.min(1000);
+        let max_bytes = max_bytes.min(64 * 1024 * 1024);
+        let paths: std::collections::BTreeSet<_> = self.file_states.iter()
+            .filter(|(_, state)| state.collection == collection)
+            .map(|(path, _)| path.clone())
+            .chain(current_paths.iter().map(|path| normalize_source_path(path)))
+            .collect();
+        let mut report = SourceDriftReport {
+            generation: self.current_generation.clone(),
+            candidate_files: paths.len(),
+            truncated: paths.len() > max_files,
+            bytes_read: 0,
+            files: Vec::new(),
+        };
+        for path in paths.into_iter().take(max_files) {
+            let indexed = self.file_states.get(&path)
+                .filter(|state| state.collection == collection)
+                .map(|state| state.content_hash.clone());
+            let mut entry = SourceDriftEntry {
+                path: path.clone(), status: "unreadable",
+                indexed_sha256: indexed, current_sha256: None,
+            };
+            match std::fs::File::open(&path) {
+                Ok(file) => {
+                    let remaining = max_bytes.saturating_sub(report.bytes_read);
+                    let mut bytes = Vec::new();
+                    match file.take(remaining as u64 + 1).read_to_end(&mut bytes) {
+                        Ok(_) if bytes.len() <= remaining => {
+                            report.bytes_read += bytes.len();
+                            if let Ok(content) = std::str::from_utf8(&bytes) {
+                                let hash = calculate_hash(content);
+                                entry.status = match entry.indexed_sha256.as_ref() {
+                                    None => "new",
+                                    Some(old) if old == &hash => "unchanged",
+                                    Some(_) => "changed",
+                                };
+                                entry.current_sha256 = Some(hash);
+                            }
+                        }
+                        Ok(_) => { entry.status = "byte_budget_exceeded"; report.truncated = true; }
+                        Err(_) => {}
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    entry.status = "missing";
+                }
+                Err(_) => {}
+            }
+            report.files.push(entry);
+        }
+        report
     }
 
     /// Mark indexed collections for replacement without discarding their source
