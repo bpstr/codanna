@@ -2,6 +2,7 @@
 //! Sources are synthetic and semantic search is disabled.
 
 use codanna::indexing::facade::IndexFacade;
+use codanna::parsing::{LanguageParser, TypeScriptParser};
 use codanna::{IndexPersistence, RelationKind, Settings, Symbol, SymbolId};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,6 +50,7 @@ fn outgoing(index: &IndexFacade, from: SymbolId, kind: RelationKind) -> Vec<Symb
 
 fn assert_graph(index: &IndexFacade) {
     let provider = exact(index, "provider.tsx", "Calendar");
+    let js_provider = exact(index, "provider-js.jsx", "Calendar");
     let reference = exact(index, "reference.tsx", "Calendar");
     for picker in [
         exact(index, "view.tsx", "Picker"),
@@ -59,6 +61,15 @@ fn assert_graph(index: &IndexFacade) {
         assert!(outgoing(index, picker.id, RelationKind::Calls).is_empty());
         assert!(!uses.iter().any(|symbol| symbol.id == reference.id));
     }
+    let js_picker = exact(index, "lazy-js.jsx", "JavaScriptPicker");
+    assert_eq!(
+        outgoing(index, js_picker.id, RelationKind::Uses)
+            .iter()
+            .map(|symbol| symbol.id)
+            .collect::<Vec<_>>(),
+        [js_provider.id]
+    );
+    assert!(outgoing(index, js_picker.id, RelationKind::Calls).is_empty());
     for (path, name) in [
         ("external.tsx", "ExternalPicker"),
         ("shadowed.tsx", "ShadowedPicker"),
@@ -67,6 +78,10 @@ fn assert_graph(index: &IndexFacade) {
         ("computed.tsx", "ComputedPicker"),
         ("wrapper-reassigned.tsx", "WrapperReassignedPicker"),
         ("wrapper-shadowed.tsx", "ShadowedWrapperPicker"),
+        ("cache-initialized.tsx", "InitializedCachePicker"),
+        ("local-scope.tsx", "FunctionShadowPicker"),
+        ("local-scope.tsx", "ClassShadowPicker"),
+        ("local-scope.tsx", "NestedLazyPicker"),
         ("missing.tsx", "MissingPicker"),
         ("type-only.tsx", "TypeOnlyPicker"),
         ("duplicate.tsx", "DuplicatePicker"),
@@ -76,7 +91,8 @@ fn assert_graph(index: &IndexFacade) {
         let picker = exact(index, path, name);
         assert!(
             outgoing(index, picker.id, RelationKind::Uses).is_empty(),
-            "{path}:{name}"
+            "{path}:{name}: {:?}",
+            outgoing(index, picker.id, RelationKind::Uses)
         );
         assert!(
             outgoing(index, picker.id, RelationKind::Calls).is_empty(),
@@ -103,6 +119,20 @@ fn assert_graph(index: &IndexFacade) {
             .collect::<Vec<_>>(),
         [provider.id]
     );
+}
+
+#[test]
+fn incomplete_depth_scan_rejects_composition_inference() {
+    let nested_assignment = format!(
+        "{}pending = import('./reference');{}",
+        "{".repeat(510),
+        "}".repeat(510)
+    );
+    let code = format!(
+        "import {{ lazy }} from 'react';\nlet pending;\n{nested_assignment}\nconst Calendar = lazy(() => (pending ??= import('./provider')).then(module => ({{ default: module.Calendar }})));\nfunction Picker() {{ return <Calendar />; }}"
+    );
+    let mut parser = TypeScriptParser::new().unwrap();
+    assert!(parser.find_deferred_compositions(&code).is_empty());
 }
 
 #[test]

@@ -2702,17 +2702,27 @@ impl TypeScriptParser {
             }
             if parent.kind() == "statement_block" {
                 for declaration in parent.named_children(&mut parent.walk()) {
-                    if !matches!(
+                    if matches!(
+                        declaration.kind(),
+                        "function_declaration"
+                            | "generator_function_declaration"
+                            | "class_declaration"
+                    ) && declaration
+                        .child_by_field_name("name")
+                        .is_some_and(|local| &code[local.byte_range()] == name)
+                    {
+                        return true;
+                    }
+                    if matches!(
                         declaration.kind(),
                         "lexical_declaration" | "variable_declaration"
                     ) {
-                        continue;
-                    }
-                    for binding in declaration.named_children(&mut declaration.walk()) {
-                        if binding.child_by_field_name("name").is_some_and(|local| {
-                            local.kind() == "identifier" && &code[local.byte_range()] == name
-                        }) {
-                            return true;
+                        for binding in declaration.named_children(&mut declaration.walk()) {
+                            if binding.child_by_field_name("name").is_some_and(|local| {
+                                local.kind() == "identifier" && &code[local.byte_range()] == name
+                            }) {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -2867,8 +2877,22 @@ impl TypeScriptParser {
             .is_some_and(|left| &code[left.byte_range()] == name)
     }
 
-    fn collect_nodes<'tree>(node: Node<'tree>, kind: &str, found: &mut Vec<Node<'tree>>) {
-        Self::collect_nodes_bounded(node, kind, found, 0);
+    fn is_module_scope_declarator(declaration: Node<'_>) -> bool {
+        let Some(statement) = declaration.parent() else {
+            return false;
+        };
+        let Some(container) = statement.parent() else {
+            return false;
+        };
+        container.kind() == "program"
+            || (container.kind() == "export_statement"
+                && container
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "program"))
+    }
+
+    fn collect_nodes<'tree>(node: Node<'tree>, kind: &str, found: &mut Vec<Node<'tree>>) -> bool {
+        Self::collect_nodes_bounded(node, kind, found, 0)
     }
 
     fn collect_nodes_bounded<'tree>(
@@ -2876,16 +2900,19 @@ impl TypeScriptParser {
         kind: &str,
         found: &mut Vec<Node<'tree>>,
         depth: usize,
-    ) {
+    ) -> bool {
         if !check_recursion_depth(depth, node) {
-            return;
+            return false;
         }
         if node.kind() == kind {
             found.push(node);
         }
         for child in node.named_children(&mut node.walk()) {
-            Self::collect_nodes_bounded(child, kind, found, depth + 1);
+            if !Self::collect_nodes_bounded(child, kind, found, depth + 1) {
+                return false;
+            }
         }
+        true
     }
 
     fn binding_is_immutable(root: Node<'_>, declaration: Node<'_>, name: &str, code: &str) -> bool {
@@ -2896,20 +2923,28 @@ impl TypeScriptParser {
             return false;
         }
         let mut assignments = Vec::new();
-        Self::collect_nodes(root, "assignment_expression", &mut assignments);
-        Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments);
+        if !Self::collect_nodes(root, "assignment_expression", &mut assignments)
+            || !Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments)
+        {
+            return false;
+        }
         !assignments
             .into_iter()
             .any(|node| Self::assignment_to(node, name, code))
     }
 
-    fn name_has_assignment(root: Node<'_>, name: &str, code: &str) -> bool {
+    fn name_has_assignment(root: Node<'_>, name: &str, code: &str) -> Option<bool> {
         let mut assignments = Vec::new();
-        Self::collect_nodes(root, "assignment_expression", &mut assignments);
-        Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments);
-        assignments
-            .into_iter()
-            .any(|node| Self::assignment_to(node, name, code))
+        if !Self::collect_nodes(root, "assignment_expression", &mut assignments)
+            || !Self::collect_nodes(root, "augmented_assignment_expression", &mut assignments)
+        {
+            return None;
+        }
+        Some(
+            assignments
+                .into_iter()
+                .any(|node| Self::assignment_to(node, name, code)),
+        )
     }
 
     fn cache_is_bounded(
@@ -2919,7 +2954,9 @@ impl TypeScriptParser {
         code: &str,
     ) -> bool {
         let mut declarations = Vec::new();
-        Self::collect_nodes(root, "variable_declarator", &mut declarations);
+        if !Self::collect_nodes(root, "variable_declarator", &mut declarations) {
+            return false;
+        }
         let matches: Vec<_> = declarations
             .into_iter()
             .filter(|node| {
@@ -2931,14 +2968,15 @@ impl TypeScriptParser {
             return false;
         }
         let declaration = matches[0];
-        if declaration
-            .child_by_field_name("value")
-            .is_some_and(|value| &code[value.byte_range()] != "undefined")
+        if !Self::is_module_scope_declarator(declaration)
+            || declaration.child_by_field_name("value").is_some()
         {
             return false;
         }
         let mut identifiers = Vec::new();
-        Self::collect_nodes(root, "identifier", &mut identifiers);
+        if !Self::collect_nodes(root, "identifier", &mut identifiers) {
+            return false;
+        }
         let declaration_name = declaration
             .child_by_field_name("name")
             .unwrap()
@@ -3035,7 +3073,6 @@ impl TypeScriptParser {
     }
 
     fn deferred_jsx_uses_recursive(
-        &self,
         node: Node<'_>,
         code: &str,
         current_fn: Option<&str>,
@@ -3083,7 +3120,7 @@ impl TypeScriptParser {
             });
         }
         for child in node.named_children(&mut node.walk()) {
-            self.deferred_jsx_uses_recursive(
+            Self::deferred_jsx_uses_recursive(
                 child,
                 code,
                 func_context,
@@ -3092,6 +3129,65 @@ impl TypeScriptParser {
                 depth + 1,
             );
         }
+    }
+
+    pub(crate) fn deferred_compositions_from_root(
+        root: Node<'_>,
+        code: &str,
+        imports: &[Import],
+    ) -> Vec<crate::parsing::DeferredCompositionUse> {
+        let lazy_aliases: std::collections::HashSet<_> = imports
+            .iter()
+            .filter(|import| import.path == "react" && !import.is_type_only)
+            .filter(|import| import.imported_name.as_deref() == Some("lazy"))
+            .filter_map(|import| import.alias.as_ref().or(import.imported_name.as_ref()))
+            .cloned()
+            .collect();
+        if lazy_aliases.is_empty() {
+            return Vec::new();
+        }
+        let mut declarations = Vec::new();
+        if !Self::collect_nodes(root, "variable_declarator", &mut declarations) {
+            return Vec::new();
+        }
+        let mut candidates = std::collections::HashMap::new();
+        for declaration in declarations {
+            let Some(name) = declaration.child_by_field_name("name") else {
+                continue;
+            };
+            let Some(value) = declaration.child_by_field_name("value") else {
+                continue;
+            };
+            if name.kind() != "identifier" {
+                continue;
+            }
+            let value = Self::unwrapped(value);
+            if value.kind() != "call_expression" {
+                continue;
+            }
+            let Some(function) = value.child_by_field_name("function") else {
+                continue;
+            };
+            let wrapper = &code[function.byte_range()];
+            if function.kind() != "identifier" || !lazy_aliases.contains(wrapper) {
+                continue;
+            }
+            let binding = code[name.byte_range()].to_owned();
+            let target = (Self::is_module_scope_declarator(declaration)
+                && Self::binding_is_immutable(root, declaration, &binding, code)
+                && Self::name_has_assignment(root, wrapper, code) == Some(false))
+            .then(|| Self::lazy_projection_target(root, value, code))
+            .flatten();
+            if candidates.insert(binding.clone(), target).is_some() {
+                candidates.insert(binding, None);
+            }
+        }
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let mut uses = Vec::new();
+        Self::deferred_jsx_uses_recursive(root, code, None, &candidates, &mut uses, 0);
+        uses
     }
 }
 
@@ -3237,59 +3333,11 @@ impl LanguageParser for TypeScriptParser {
         &mut self,
         code: &str,
     ) -> Vec<crate::parsing::DeferredCompositionUse> {
-        let lazy_aliases: std::collections::HashSet<_> = self
-            .find_imports(code, FileId::new(1).expect("one is a valid file id"))
-            .into_iter()
-            .filter(|import| import.path == "react" && !import.is_type_only)
-            .filter(|import| import.imported_name.as_deref() == Some("lazy"))
-            .filter_map(|import| import.alias.or(import.imported_name))
-            .collect();
-        if lazy_aliases.is_empty() {
-            return Vec::new();
-        }
+        let imports = self.find_imports(code, FileId::new(1).expect("one is a valid file id"));
         let Some(tree) = self.syntax_tree(code) else {
             return Vec::new();
         };
-        let root = tree.root_node();
-        let mut declarations = Vec::new();
-        Self::collect_nodes(root, "variable_declarator", &mut declarations);
-        let mut candidates = std::collections::HashMap::new();
-        for declaration in declarations {
-            let Some(name) = declaration.child_by_field_name("name") else {
-                continue;
-            };
-            let Some(value) = declaration.child_by_field_name("value") else {
-                continue;
-            };
-            if name.kind() != "identifier" {
-                continue;
-            }
-            let value = Self::unwrapped(value);
-            if value.kind() != "call_expression" {
-                continue;
-            }
-            let Some(function) = value.child_by_field_name("function") else {
-                continue;
-            };
-            let wrapper = &code[function.byte_range()];
-            if function.kind() != "identifier" || !lazy_aliases.contains(wrapper) {
-                continue;
-            }
-            let binding = code[name.byte_range()].to_owned();
-            let target = (Self::binding_is_immutable(root, declaration, &binding, code)
-                && !Self::name_has_assignment(root, wrapper, code))
-            .then(|| Self::lazy_projection_target(root, value, code))
-            .flatten();
-            if candidates.insert(binding.clone(), target).is_some() {
-                candidates.insert(binding, None);
-            }
-        }
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-        let mut uses = Vec::new();
-        self.deferred_jsx_uses_recursive(root, code, None, &candidates, &mut uses, 0);
-        uses
+        Self::deferred_compositions_from_root(tree.root_node(), code, &imports)
     }
 
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

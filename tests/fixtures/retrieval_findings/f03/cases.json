@@ -26,6 +26,15 @@
       "observed": "Uses only; survives save and reopen"
     },
     {
+      "id": "javascript-lazy-member",
+      "expected_dependency": [
+        "lazy-js.jsx:JavaScriptPicker",
+        "provider-js.jsx:Calendar"
+      ],
+      "relation": "Uses",
+      "observed": "Uses only; survives save and reopen"
+    },
+    {
       "id": "external-import",
       "excluded_dependency": [
         "external.tsx:ExternalPicker",
@@ -42,12 +51,18 @@
         "computed.tsx",
         "wrapper-reassigned.tsx",
         "wrapper-shadowed.tsx",
+        "cache-initialized.tsx",
+        "local-scope.tsx",
         "missing.tsx",
         "type-only.tsx",
         "duplicate.tsx",
         "block.tsx"
       ],
       "observed": "no Uses or Calls"
+    },
+    {
+      "id": "depth-exhaustion",
+      "observed": "no deferred composition fact when a validation scan exceeds the AST depth bound"
     },
     {
       "id": "static-compatibility",
