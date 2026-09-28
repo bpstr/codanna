@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Apply exact authored changes
         shell: bash
         run: |
@@ -51,7 +52,7 @@ jobs:
         with:
           cache-on-failure: true
           cache-all-crates: true
-      - name: Format and publish implementation on the isolated branch
+      - name: Format and publish code without changing workflows
         env:
           GH_WRITE_TOKEN: ${{ github.token }}
         shell: bash
@@ -61,20 +62,21 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, subprocess
           allowed = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'compact-paths.json').read_text())
+          allowed = [p for p in allowed if not p.startswith('.github/workflows/')]
           changed = subprocess.check_output(['git', 'diff', '--name-only']).decode().splitlines()
           for path in changed:
-              if path not in allowed and path != '.github/workflows/compact-output-transfer.yml':
+              if path not in allowed:
                   subprocess.run(['git', 'restore', '--', path], check=True)
           subprocess.run(['git', 'add', '--', *allowed], check=True)
           PY
-          git rm .github/compact-output-transfer.part* .github/workflows/compact-output-transfer.yml
+          git rm .github/compact-output-transfer.part*
           git diff --cached --check
           git config user.name 'Fent Jani'
           git config user.email '37303771+bpstr@users.noreply.github.com'
           git commit -m 'Keep search results compact and directly addressable'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/compact-tested-sha.txt"
           header=$(printf 'x-access-token:%s' "$GH_WRITE_TOKEN" | base64 -w0)
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $header" push origin HEAD:refs/heads/codex/compact-budgeted-tool-results
-          git rev-parse HEAD | tee "$RUNNER_TEMP/compact-tested-sha.txt"
       - name: Compile all targets and features
         shell: bash
         run: |
@@ -102,9 +104,9 @@ jobs:
         if: always()
         shell: bash
         run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/compact-source-sha.txt"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/compact-source.tar.gz"
           git diff 48417cd2039227dc7ab372d3035d8c44e3d31ce3 HEAD > "$RUNNER_TEMP/compact-qualified.patch"
-          git rev-parse HEAD > "$RUNNER_TEMP/compact-source-sha.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
