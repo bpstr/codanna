@@ -1062,7 +1062,11 @@ impl DocumentStore {
                 Ok(file) => {
                     let remaining = max_bytes.saturating_sub(report.bytes_read);
                     let length = file.metadata().ok().map(|metadata| metadata.len());
-                    if length.is_none_or(|length| length > remaining as u64) {
+                    if length.is_none() {
+                        report.files.push(entry);
+                        continue;
+                    }
+                    if length.is_some_and(|length| length > remaining as u64) {
                         entry.status = "byte_budget_exceeded";
                         report.truncated = true;
                         report.files.push(entry);
@@ -1087,7 +1091,7 @@ impl DocumentStore {
                             entry.status = "changed_during_read";
                             report.truncated = true;
                         }
-                        Err(_) => {}
+                        Err(_) => { report.bytes_read += bytes.len(); }
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
