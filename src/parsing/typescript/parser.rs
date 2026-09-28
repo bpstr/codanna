@@ -2858,7 +2858,7 @@ impl TypeScriptParser {
         Some(code[args[0].byte_range()].trim_matches(['\'', '"']))
     }
 
-    fn assignment_to<'a>(node: Node<'_>, name: &'a str, code: &str) -> bool {
+    fn assignment_to(node: Node<'_>, name: &str, code: &str) -> bool {
         matches!(
             node.kind(),
             "assignment_expression" | "augmented_assignment_expression"
