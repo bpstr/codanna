@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "finding": "F05",
+  "status": "prepared_not_run",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "broad-symbol-concept",
+      "query": "calendar settings",
+      "expected_top5": [
+        "symbols.ts:readCalendarSettings"
+      ]
+    },
+    {
+      "id": "canonical-authority",
+      "query": "account calendar settings first day each week",
+      "expected_top1": [
+        "canonical.md"
+      ],
+      "preserve_access": [
+        "historical.md"
+      ],
+      "ranking_policy": "opt_in_authority_prior"
+    }
+  ]
+}
