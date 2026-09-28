@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Go interface-field calls expose structurally valid concrete methods as
+  `DispatchCandidate` relationships, separate from definite `Calls`. Python
+  `typing.cast` arguments record imported protocol aliases as `Uses` while
+  respecting parameter shadowing. Existing indexes require a full rebuild;
+  emission semantics advance to v7.
+- MCP `find_symbol` accepts a typed positive `symbol_id` for definition
+  disambiguation, alongside name lookup and the legacy `name=symbol_id:N` form.
+  Unknown IDs and language mismatches return no matches; conflicting targets
+  are rejected. IDs remain local to the selected workspace/index.
+
+### Fixed
+
+- TypeScript object methods with identifier keys now have callable symbol
+  endpoints, including methods in returned objects and variable initializers.
+  Calls inside anonymous callbacks retain the enclosing method as their owner.
+  Nested declarations in parameter defaults and unsupported method keys remain
+  discoverable. Unrelated nested functions no longer hide imported call targets.
+  Existing indexes require a full rebuild (`codanna index --force`) to recover
+  missing caller relationships; emission semantics advance to v5. Computed
+  object keys and function-valued properties remain outside this change.
+
 ## [0.16.0] - 2026-08-29
 
 Receiver-typed call resolution reaches seven more languages: local and parameter declarations now supply receiver types for PHP, Java, Kotlin, Go, Swift, GDScript, and C#. Index format and emission semantics are unchanged (v3); receiver bindings are resolved in memory and never persisted.

@@ -151,7 +151,7 @@ impl SemanticEmbedStage {
         let items: Vec<_> = batch
             .candidates
             .iter()
-            .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
+            .map(|(id, doc, lang, _)| (*id, doc.as_ref(), lang.as_ref()))
             .collect();
         let missing = {
             let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
@@ -231,9 +231,19 @@ impl SemanticEmbedStage {
             offset = end;
         }
 
-        for (id, source, language) in &batch.body_candidates {
+        for (id, source, language, _) in &batch.body_candidates {
             self.process_symbol_source(*id, source, language, &body_hits)?;
             stored += 1;
+        }
+        let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
+            path: std::path::PathBuf::new(),
+            reason: "Failed to lock semantic search".to_string(),
+        })?;
+        for (id, _, _, source_sha256) in &batch.candidates {
+            semantic.record_source_provenance(*id, source_sha256.clone());
+        }
+        for (id, _, _, source_sha256) in &batch.body_candidates {
+            semantic.record_source_provenance(*id, source_sha256.clone());
         }
         Ok(stored)
     }
@@ -246,7 +256,7 @@ impl SemanticEmbedStage {
         batch: &EmbeddingBatch,
     ) -> PipelineResult<std::collections::HashMap<String, Arc<[f32]>>> {
         let mut hits = std::collections::HashMap::new();
-        for (_, source, _) in &batch.body_candidates {
+        for (_, source, _, _) in &batch.body_candidates {
             if crate::memory::MemoryBudget::current().under_pressure() {
                 return Err(PipelineError::Parse {
                     path: Default::default(),
@@ -382,5 +392,77 @@ mod tests {
 
         stats.skipped = 1;
         assert!(!stats.is_complete()); // 8 + 1 != 10
+    }
+
+    #[tokio::test]
+    async fn cached_batch_records_source_provenance_without_provider_requests() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let id = crate::SymbolId::new(1).unwrap();
+        let input = "prepared documentation";
+        let mut search = SimpleSemanticSearch::new_empty(2, "fixture");
+        search.store_embeddings_with_inputs(
+            vec![(id, vec![1.0, 0.0], "go".into())],
+            &[(id, input, "go")],
+        );
+        assert!(search.cached_symbol_input(input).is_some());
+        let search = Arc::new(Mutex::new(search));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mock = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let read = socket.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            assert!(
+                !String::from_utf8_lossy(&request)
+                    .to_lowercase()
+                    .contains("authorization:")
+            );
+            let body = r#"{"data":[{"index":0,"embedding":[1.0,0.0]}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        // The loopback fixture answers only the constructor's dimension probe.
+        // The indexed candidate must be satisfied from the prepared cache.
+        let remote = crate::semantic::RemoteEmbedder::new(
+            &format!("http://{address}"),
+            "fixture",
+            Some(2),
+            None,
+        )
+        .await
+        .unwrap();
+        mock.await.unwrap();
+        let stage = SemanticEmbedStage::new(
+            Arc::new(EmbeddingBackend::Remote(Arc::new(remote))),
+            Arc::clone(&search),
+        );
+        let source_sha256 = crate::indexing::calculate_hash("package fixture\nfunc f() {}\n");
+        let mut batch = EmbeddingBatch::new();
+        batch
+            .candidates
+            .push((id, input.into(), "go".into(), source_sha256.clone()));
+        assert_eq!(stage.process_batch(&batch).unwrap(), 1);
+        let mut search = search.lock().unwrap();
+        assert!(search.symbol_provenance(id).is_none());
+        search.bind_code_generation(7);
+        let provenance = search.symbol_provenance(id).unwrap();
+        assert_eq!(provenance.source_sha256, source_sha256);
+        assert_eq!(provenance.code_generation, 7);
     }
 }

@@ -429,3 +429,148 @@ mod retrieval_body;
 
 #[path = "support/ticket_evidence.rs"]
 mod ticket_evidence;
+
+#[test]
+fn semantic_cli_json_reports_retrieval_for_populated_and_empty_results() {
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.rebuild();
+    for tool in ["semantic_search_docs", "semantic_search_with_context"] {
+        for floor in [None, Some("0.9"), Some("1.1")] {
+            for language in [None, Some("python")] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_codanna"));
+                command
+                    .env_clear()
+                    .env("HOME", workspace.root().join(".home"));
+                for name in [
+                    "PATH",
+                    "LD_LIBRARY_PATH",
+                    "DYLD_LIBRARY_PATH",
+                    "SYSTEMROOT",
+                    "WINDIR",
+                ] {
+                    if let Some(value) = std::env::var_os(name) {
+                        command.env(name, value);
+                    }
+                }
+                command.current_dir(workspace.root()).args([
+                    "--config",
+                    ".codanna/settings.toml",
+                    "mcp",
+                    tool,
+                    "query:alpha",
+                    "limit:2",
+                    "--json",
+                ]);
+                if let Some(floor) = floor {
+                    command.arg(format!("threshold:{floor}"));
+                }
+                if let Some(language) = language {
+                    command.arg(format!("lang:{language}"));
+                }
+                let output = command.output().unwrap();
+                let response: Value =
+                    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+                        panic!(
+                            "{error}: {}\n{}",
+                            String::from_utf8_lossy(&output.stdout),
+                            String::from_utf8_lossy(&output.stderr)
+                        )
+                    });
+                let count = if language.is_some() {
+                    0
+                } else {
+                    match floor {
+                        None => 2,
+                        Some("0.9") => 1,
+                        _ => 0,
+                    }
+                };
+                assert_eq!(
+                    output.status.code(),
+                    Some(if count == 0 { 1 } else { 0 }),
+                    "{response}"
+                );
+                let retrieval = &response["meta"]["retrieval"];
+                let requested = floor.map(|floor| floor.parse::<f32>().unwrap());
+                assert_eq!(retrieval["requested_score_floor"], json!(requested));
+                assert_eq!(retrieval["effective_score_floor"], json!(requested));
+                assert_eq!(retrieval["returned_symbols"], count);
+                assert_eq!(retrieval["mode"], "semantic_nearest_neighbors");
+                assert_eq!(retrieval["configured_floor_applied"], false);
+                assert_eq!(
+                    retrieval["floor_stage"],
+                    if floor.is_some() {
+                        "after_top_k"
+                    } else {
+                        "not_applied"
+                    }
+                );
+                assert_eq!(retrieval["support_status"], "not_assessed");
+                assert_eq!(retrieval["scores_are_probabilities"], false);
+                if count > 0 {
+                    assert_eq!(response["data"].as_array().unwrap().len(), count as usize);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn definition_cli_reports_unknown_membership_without_loading_vectors_or_contacting_provider() {
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.rebuild();
+    assert_inputs(&endpoint, 2);
+    for (name, count) in [("calendar_owner", 1), ("absent_definition", 0)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codanna"));
+        command
+            .env_clear()
+            .env("HOME", workspace.root().join(".home"));
+        for key in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let output = command
+            .current_dir(workspace.root())
+            .args([
+                "--config",
+                ".codanna/settings.toml",
+                "mcp",
+                "find_symbol",
+                name,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if count == 0 { 1 } else { 0 }),
+            "{response}"
+        );
+        let rows = response["meta"]["semantic_definitions"].as_array().unwrap();
+        assert_eq!(rows.len(), count);
+        if count == 1 {
+            let row = &rows[0];
+            assert_eq!(row["name"], name);
+            assert_eq!(row["symbol_id"], response["data"][0]["symbol"]["id"]);
+            assert_eq!(row["eligible"], true);
+            assert_eq!(row["state"], "metadata_only");
+            assert_eq!(row["vector_presence"], "unknown");
+            assert_eq!(row["generation_alignment"], "unknown_untracked");
+            assert!(row["embedding_identity_sha256"].is_string());
+        }
+    }
+    assert!(
+        endpoint.take_inputs().is_empty(),
+        "definition lookup must not embed"
+    );
+}

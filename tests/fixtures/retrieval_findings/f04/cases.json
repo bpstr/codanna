@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "finding": "F04",
+  "status": "executed_local",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "before-publication-after-edit",
+      "expected_source_fidelity": "stale",
+      "require": [
+        "indexed_content_hash != current_content_hash",
+        "source_freshness == stale",
+        "freshness == stale_source",
+        "reader_generation"
+      ],
+      "forbid": "claim_current_before_refresh"
+    },
+    {
+      "id": "after-publication",
+      "expected_source_fidelity": "matching_observed_hashes",
+      "require": [
+        "indexed_content_hash == current_content_hash",
+        "vector_source_hash == indexed_content_hash",
+        "vector_code_generation == code_generation",
+        "generation_alignment == matched",
+        "freshness == verified"
+      ],
+      "forbid": "claim_atomic_workspace_snapshot"
+    },
+    {
+      "id": "missing-source-negative-control",
+      "expected_source_fidelity": "missing",
+      "forbid": "claim_current_source_hash"
+    },
+    {
+      "id": "legacy-vector-negative-control",
+      "expected_generation_alignment": "unknown_untracked",
+      "forbid": "infer_provenance_from_numeric_symbol_id"
+    }
+  ]
+}

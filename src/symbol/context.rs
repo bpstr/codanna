@@ -52,6 +52,13 @@ pub struct SymbolRelationships {
         serialize_with = "serialize_call_edges"
     )]
     pub referenced_by: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
+    /// Possible concrete targets of a dynamic dispatch. These are candidates,
+    /// never assertions that the source called a specific implementation.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_call_edges"
+    )]
+    pub dispatch_candidates: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
 }
 
 /// `relationshipMetadata.line` is 1-indexed at the JSON boundary like every
@@ -406,6 +413,11 @@ impl SymbolContext {
         for (label, edges, incoming) in [
             ("References", &self.relationships.references, false),
             ("Referenced by", &self.relationships.referenced_by, true),
+            (
+                "Dispatch candidates",
+                &self.relationships.dispatch_candidates,
+                false,
+            ),
         ] {
             let Some(edges) = edges.as_ref().filter(|edges| !edges.is_empty()) else {
                 continue;

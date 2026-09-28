@@ -1,10 +1,14 @@
 use crate::storage::{MetadataKey, StorageError, StorageResult};
 use crate::{FileId, RelationKind, Relationship, SymbolId, SymbolKind};
+use std::collections::BinaryHeap;
 use std::path::PathBuf;
 use tantivy::{
     TantivyDocument as Document, Term,
     collector::{Count, DocSetCollector, TopDocs},
-    query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery, TermSetQuery},
+    query::{
+        BooleanQuery, EnableScoring, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery,
+        TermSetQuery,
+    },
     schema::{IndexRecordOption, Value},
 };
 
@@ -61,6 +65,8 @@ pub(super) fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
         "DefinedIn" => RelationKind::DefinedIn,
         "References" => RelationKind::References,
         "ReferencedBy" => RelationKind::ReferencedBy,
+        "DispatchCandidate" => RelationKind::DispatchCandidate,
+        "DispatchCandidateOf" => RelationKind::DispatchCandidateOf,
         _ => return None,
     })
 }
@@ -344,7 +350,11 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(2).order_by_score())?;
+
+        if top_docs.len() > 1 {
+            return Err(StorageError::DuplicateSymbolId { id: id.value() });
+        }
 
         if let Some((_score, doc_address)) = top_docs.first() {
             let doc = searcher.doc::<Document>(*doc_address)?;
@@ -360,34 +370,12 @@ impl DocumentIndex {
         id: SymbolId,
         language: &str,
     ) -> StorageResult<Option<crate::Symbol>> {
-        let searcher = self.reader.searcher();
-
-        // Build a compound query: symbol_id AND language
-        let query = BooleanQuery::from(vec![
-            (
-                Occur::Must,
-                Box::new(TermQuery::new(
-                    Term::from_field_u64(self.schema.symbol_id, id.0 as u64),
-                    IndexRecordOption::Basic,
-                )) as Box<dyn Query>,
-            ),
-            (
-                Occur::Must,
-                Box::new(TermQuery::new(
-                    Term::from_field_text(self.schema.language, language),
-                    IndexRecordOption::Basic,
-                )) as Box<dyn Query>,
-            ),
-        ]);
-
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
-
-        if let Some((_score, doc_address)) = top_docs.first() {
-            let doc = searcher.doc::<Document>(*doc_address)?;
-            Ok(Some(self.document_to_symbol(&doc)?))
-        } else {
-            Ok(None)
-        }
+        Ok(self.find_symbol_by_id(id)?.filter(|symbol| {
+            symbol
+                .language_id
+                .as_ref()
+                .is_some_and(|actual| actual.as_str() == language)
+        }))
     }
 
     /// Find symbols by name
@@ -457,6 +445,147 @@ impl DocumentIndex {
                 ))
         });
         Ok(symbols)
+    }
+
+    /// Return a stable exact-name page and its exact filtered total.
+    ///
+    /// One searcher snapshot supplies both rows and count. Existing schemas do
+    /// not have fast path/column fields, so candidate documents are streamed
+    /// for ordering keys; only the requested page is hydrated as symbols.
+    /// Retained ordering state is bounded by `offset + limit`.
+    pub fn find_symbols_by_name_page(
+        &self,
+        name: &str,
+        language_filter: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> StorageResult<(Vec<crate::Symbol>, usize)> {
+        self.find_symbols_by_name_page_impl(name, language_filter, offset, limit, None)
+    }
+
+    /// Apply an identity filter before counting and paging exact-name matches.
+    /// Filtered candidates are hydrated transiently to evaluate the predicate.
+    pub fn find_symbols_by_name_filtered_page(
+        &self,
+        name: &str,
+        language_filter: Option<&str>,
+        offset: usize,
+        limit: usize,
+        predicate: impl Fn(&crate::Symbol) -> bool,
+    ) -> StorageResult<(Vec<crate::Symbol>, usize)> {
+        self.find_symbols_by_name_page_impl(name, language_filter, offset, limit, Some(&predicate))
+    }
+
+    fn find_symbols_by_name_page_impl(
+        &self,
+        name: &str,
+        language_filter: Option<&str>,
+        offset: usize,
+        limit: usize,
+        predicate: Option<&dyn Fn(&crate::Symbol) -> bool>,
+    ) -> StorageResult<(Vec<crate::Symbol>, usize)> {
+        let capacity =
+            offset
+                .checked_add(limit)
+                .ok_or_else(|| StorageError::InvalidFieldValue {
+                    field: "offset".into(),
+                    reason: "offset plus limit exceeds the supported page range".into(),
+                })?;
+        let searcher = self.reader.searcher();
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.name, name),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.doc_type, "symbol"),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ];
+        if let Some(language) = language_filter {
+            clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.language, language),
+                    IndexRecordOption::Basic,
+                )),
+            ));
+        }
+        let query = BooleanQuery::new(clauses);
+        let known_total = if predicate.is_none() {
+            let count = searcher.search(&query, &Count)?;
+            if limit == 0 || offset >= count {
+                return Ok((Vec::new(), count));
+            }
+            Some(count)
+        } else {
+            None
+        };
+        let weight = query.weight(EnableScoring::disabled_from_searcher(&searcher))?;
+        let mut heap = BinaryHeap::new();
+        let mut total = known_total.unwrap_or_default();
+        for (segment_ord, segment) in searcher.segment_readers().iter().enumerate() {
+            let mut scorer = weight.scorer(segment, 1.0)?;
+            while scorer.doc() != tantivy::TERMINATED {
+                let doc_id = scorer.doc();
+                if segment
+                    .alive_bitset()
+                    .is_none_or(|alive| alive.is_alive(doc_id))
+                {
+                    let address = tantivy::DocAddress::new(segment_ord as u32, doc_id);
+                    let doc = searcher.doc::<Document>(address)?;
+                    let matches = match predicate {
+                        Some(filter) => filter(&self.document_to_symbol(&doc)?),
+                        None => true,
+                    };
+                    if matches {
+                        if known_total.is_none() {
+                            total += 1;
+                        }
+                        if capacity > 0 && limit > 0 {
+                            let key = (
+                                doc.get_first(self.schema.file_path)
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                doc.get_first(self.schema.line_number)
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or_default(),
+                                doc.get_first(self.schema.column)
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or_default(),
+                                doc.get_first(self.schema.symbol_id)
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or_default(),
+                                address,
+                            );
+                            if heap.len() < capacity {
+                                heap.push(key);
+                            } else if heap.peek().is_some_and(|largest| &key < largest) {
+                                heap.pop();
+                                heap.push(key);
+                            }
+                        }
+                    }
+                }
+                scorer.advance();
+            }
+        }
+        let rows = heap
+            .into_sorted_vec()
+            .into_iter()
+            .skip(offset)
+            .map(|(_, _, _, _, address)| {
+                self.document_to_symbol(&searcher.doc::<Document>(address)?)
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        Ok((rows, total))
     }
 
     /// Find a symbol by name, file, and range
@@ -1333,6 +1462,118 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn duplicate_live_symbol_ids_require_repair_across_languages() {
+        let temp = TempDir::new().unwrap();
+        let index = DocumentIndex::new(temp.path(), &crate::Settings::default()).unwrap();
+        let id = SymbolId::new(1).unwrap();
+        index.start_batch().unwrap();
+        for (name, language, path) in [("first", "rust", "a.rs"), ("second", "python", "b.py")] {
+            let symbol = crate::Symbol::new(
+                id,
+                name,
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                crate::Range::new(0, 0, 1, 0),
+            )
+            .with_language_id(LanguageId::new(language));
+            index.index_symbol(&symbol, path).unwrap();
+        }
+        index.commit_batch().unwrap();
+        for result in [
+            index.find_symbol_by_id(id),
+            index.find_symbol_by_id_with_language(id, "rust"),
+        ] {
+            assert!(matches!(
+                result,
+                Err(StorageError::DuplicateSymbolId { id: 1 })
+            ));
+        }
+        assert!(
+            index
+                .find_symbol_by_id(id)
+                .unwrap_err()
+                .to_string()
+                .contains("codanna index . --force")
+        );
+        index.start_batch().unwrap();
+        index.delete_symbol(id).unwrap();
+        let symbol = crate::Symbol::new(
+            id,
+            "replacement",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 1, 0),
+        );
+        index.index_symbol(&symbol, "replacement.rs").unwrap();
+        index.commit_batch().unwrap();
+        assert_eq!(
+            index.find_symbol_by_id(id).unwrap().unwrap().name.as_ref(),
+            "replacement"
+        );
+    }
+
+    #[test]
+    fn exact_name_pages_preserve_order_and_filtered_totals() {
+        let temp = TempDir::new().unwrap();
+        let index = DocumentIndex::new(temp.path(), &crate::Settings::default()).unwrap();
+        index.start_batch().unwrap();
+        for number in (1..=140).rev() {
+            let language = if number % 2 == 0 { "rust" } else { "python" };
+            let symbol = crate::Symbol::new(
+                SymbolId::new(number).unwrap(),
+                "shared",
+                SymbolKind::Method,
+                FileId::new(1).unwrap(),
+                crate::Range::new(number % 3, number % 5, number % 3 + 1, 0),
+            )
+            .with_language_id(LanguageId::new(language));
+            index
+                .index_symbol(&symbol, &format!("src/{}.rs", number % 7))
+                .unwrap();
+        }
+        index.commit_batch().unwrap();
+        for language in [None, Some("rust"), Some("unknown")] {
+            let full = index.find_symbols_by_name("shared", language).unwrap();
+            for offset in [0, 1, 31, 140, 200] {
+                let (rows, total) = index
+                    .find_symbols_by_name_page("shared", language, offset, 3)
+                    .unwrap();
+                assert_eq!(total, full.len());
+                assert_eq!(
+                    rows,
+                    full.iter()
+                        .skip(offset)
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                );
+            }
+            let (rows, total) = index
+                .find_symbols_by_name_page("shared", language, 0, 0)
+                .unwrap();
+            assert!(rows.is_empty());
+            assert_eq!(total, full.len());
+        }
+        let full = index.find_symbols_by_name("shared", None).unwrap();
+        let filtered: Vec<_> = full.into_iter().filter(|s| s.id.value() % 3 == 0).collect();
+        let (rows, total) = index
+            .find_symbols_by_name_filtered_page("shared", None, 2, 4, |s| s.id.value() % 3 == 0)
+            .unwrap();
+        assert_eq!(total, filtered.len());
+        assert_eq!(
+            rows,
+            filtered.into_iter().skip(2).take(4).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            index
+                .find_symbols_by_name_page("missing", None, 0, 1)
+                .unwrap()
+                .1,
+            0
+        );
+    }
 
     #[test]
     fn test_add_and_search_document() {

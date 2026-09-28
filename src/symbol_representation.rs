@@ -12,6 +12,9 @@ use std::ops::Range as ByteRange;
 use std::path::Path;
 
 pub const MAX_SYMBOL_SOURCE_BYTES: usize = 16 * 1024;
+#[cfg(test)]
+#[path = "symbol_representation_pair_tests.rs"]
+mod pair_tests;
 pub const MAX_FILE_SOURCE_BYTES: usize = 1024 * 1024;
 pub const MAX_SYMBOL_SEGMENTS: usize = 8;
 pub const SOURCE_POLICY_ID: &str =
@@ -632,7 +635,7 @@ mod pipeline_contracts {
                     let inputs: Vec<_> = batch
                         .body_candidates
                         .iter()
-                        .flat_map(|(_, source, _)| {
+                        .flat_map(|(_, source, _, _)| {
                             source
                                 .inputs(&InputBudget::remote(Some(2048), None).unwrap())
                                 .unwrap()

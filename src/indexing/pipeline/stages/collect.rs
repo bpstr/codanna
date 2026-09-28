@@ -347,6 +347,7 @@ impl CollectStage {
 
         // Register file
         let mtime = crate::indexing::file_info::get_file_mtime(&parsed.path).unwrap_or(0);
+        let source_sha256 = parsed.content_hash.clone();
         state
             .current_batch
             .file_registrations
@@ -377,6 +378,7 @@ impl CollectStage {
                             symbol_id,
                             doc.clone(),
                             state.current_language.clone(),
+                            source_sha256.clone(),
                         ));
                     }
                 }
@@ -388,6 +390,7 @@ impl CollectStage {
                             symbol_id,
                             source,
                             state.current_language.clone(),
+                            source_sha256.clone(),
                         ));
                     }
                 }
@@ -488,6 +491,7 @@ fn create_unresolved_relationship(
         kind: raw.kind,
         metadata: raw.metadata,
         to_range: Some(raw.to_range),
+        composition_target: raw.composition_target,
     }
 }
 

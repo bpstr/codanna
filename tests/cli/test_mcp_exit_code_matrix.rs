@@ -243,6 +243,31 @@ fn mcp_exit_codes_match_envelope_across_tools_outcomes_and_modes() {
         .as_u64()
         .expect("symbol id in envelope data");
     let id_arg = format!("symbol_id:{id}");
+    for request in [
+        serde_json::json!({"symbol_id": id}),
+        serde_json::json!({"symbol_id": id.to_string()}),
+        serde_json::json!({"name": format!("symbol_id:{id}"), "symbol_id": id.to_string()}),
+        serde_json::json!({"name": "", "symbol_id": id}),
+    ] {
+        let id_json = request.to_string();
+        for json_output in [true, false] {
+            let mut args = vec!["mcp", "find_symbol", "--args", id_json.as_str()];
+            if json_output {
+                args.push("--json");
+            }
+            let (code, stdout, stderr) = run_cli(workspace.path(), &args);
+            assert_eq!(
+                code, 0,
+                "typed ID must resolve: {args:?}\n{stdout}\n{stderr}"
+            );
+            if json_output {
+                let result: Value = serde_json::from_str(&stdout).unwrap();
+                assert_eq!(result["data"][0]["symbol"]["id"], id);
+            } else {
+                assert!(stdout.contains("named 'unique_target'"), "{stdout}");
+            }
+        }
+    }
 
     let (code, stdout, stderr) = run_cli(
         workspace.path(),
@@ -264,6 +289,25 @@ fn mcp_exit_codes_match_envelope_across_tools_outcomes_and_modes() {
         stdout.contains("named 'unique_target'"),
         "id-form header names the resolved symbol, not the raw query\nstdout:\n{stdout}"
     );
+
+    for request in [
+        serde_json::json!({"name":"symbol_id:0"}),
+        serde_json::json!({"symbol_id":"0"}),
+        serde_json::json!({"name":"unique_target","symbol_id":id.to_string()}),
+    ] {
+        let request = request.to_string();
+        for json_output in [true, false] {
+            let mut args = vec!["mcp", "find_symbol", "--args", request.as_str()];
+            if json_output {
+                args.push("--json");
+            }
+            let (code, stdout, stderr) = run_cli(workspace.path(), &args);
+            assert_eq!(
+                code, 2,
+                "invalid legacy target: {args:?}\n{stdout}\n{stderr}"
+            );
+        }
+    }
 
     // Unreachable and non-numeric ids: not_found class in both modes.
     for id_case in ["symbol_id:4294967295", "symbol_id:abc"] {

@@ -1572,6 +1572,8 @@ impl LanguageParser for PythonParser {
             node: Node,
             code: &'a str,
             owner: &'a str,
+            inherited_bindings: &HashSet<&'a str>,
+            cast_names: &HashSet<&'a str>,
             uses: &mut Vec<(&'a str, &'a str, Range)>,
         ) {
             let owner = if matches!(node.kind(), "function_definition" | "class_definition") {
@@ -1581,19 +1583,98 @@ impl LanguageParser for PythonParser {
             } else {
                 owner
             };
+            let mut bindings = inherited_bindings.clone();
+            if node.kind() == "function_definition"
+                && let Some(parameters) = node.child_by_field_name("parameters")
+            {
+                fn collect<'a>(node: Node<'_>, code: &'a str, names: &mut HashSet<&'a str>) {
+                    if node.kind() == "type" {
+                        return;
+                    }
+                    if matches!(node.kind(), "default_parameter" | "typed_default_parameter")
+                        && let Some(name) = node.child_by_field_name("name")
+                    {
+                        collect(name, code, names);
+                        return;
+                    }
+                    if node.kind() == "identifier" {
+                        names.insert(&code[node.byte_range()]);
+                        return;
+                    }
+                    let mut cursor = node.walk();
+                    for child in node.named_children(&mut cursor) {
+                        collect(child, code, names);
+                    }
+                }
+                collect(parameters, code, &mut bindings);
+            }
             if node.kind() == "type" {
                 annotation_names(node, code, owner, uses);
                 return;
             }
+            if node.kind() == "call"
+                && let Some(function) = node.child_by_field_name("function")
+                && cast_names.contains(&code[function.byte_range()])
+                && !bindings.contains(&code[function.byte_range()])
+                && let Some(arguments) = node.child_by_field_name("arguments")
+                && let Some(target) = arguments.named_child(0)
+                && matches!(target.kind(), "identifier" | "attribute")
+            {
+                let target_name = &code[target.byte_range()];
+                if !bindings.contains(target_name) {
+                    uses.push((
+                        owner,
+                        target_name,
+                        Range::new(
+                            target.start_position().row as u32,
+                            target.start_position().column as u32,
+                            target.end_position().row as u32,
+                            target.end_position().column as u32,
+                        ),
+                    ));
+                }
+            }
             for child in node.named_children(&mut node.walk()) {
-                walk(child, code, owner, uses);
+                walk(child, code, owner, &bindings, cast_names, uses);
             }
         }
         let Some(tree) = self.parser.parse(code, None) else {
             return Vec::new();
         };
+        let root = tree.root_node();
+        let mut cast_names = HashSet::new();
+        let mut cursor = root.walk();
+        for import in root.named_children(&mut cursor) {
+            if import.kind() != "import_from_statement"
+                || import
+                    .child_by_field_name("module_name")
+                    .is_none_or(|module| &code[module.byte_range()] != "typing")
+            {
+                continue;
+            }
+            let mut children = import.walk();
+            for child in import.named_children(&mut children) {
+                if child.kind() == "dotted_name" && &code[child.byte_range()] == "cast" {
+                    cast_names.insert("cast");
+                } else if child.kind() == "aliased_import"
+                    && child
+                        .child_by_field_name("name")
+                        .is_some_and(|name| &code[name.byte_range()] == "cast")
+                    && let Some(alias) = child.child_by_field_name("alias")
+                {
+                    cast_names.insert(&code[alias.byte_range()]);
+                }
+            }
+        }
         let mut uses = Vec::new();
-        walk(tree.root_node(), code, "<module>", &mut uses);
+        walk(
+            root,
+            code,
+            "<module>",
+            &HashSet::new(),
+            &cast_names,
+            &mut uses,
+        );
         uses
     }
 
