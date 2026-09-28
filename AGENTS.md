@@ -59,6 +59,13 @@ Before upstream-related fixes, dependency adoption, or an upstream review:
 5. Before opening or refreshing the PR, recheck fork main and open-PR heads for
    overlap. If they moved, review the new diffs before claiming coverage.
 
+Ordinary fork work must also update an affected row when it changes the recorded
+behavior, compatibility, or evidence path. During PR lifecycle work, reconcile
+pending rows with the verified merge/close result; do not leave merged work marked
+as an open proposal. This does not require a full upstream scan for every code edit:
+keep the last upstream review date intact unless that review was actually repeated,
+and mark an affected upstream status unverified when it could not be checked.
+
 Never advance `Last reviewed` or inspected SHAs without completing those reads.
 If access or coverage is incomplete, retain the last successful review and add a
 scoped gap; missing data is not evidence of no change. Unrelated tasks need not
