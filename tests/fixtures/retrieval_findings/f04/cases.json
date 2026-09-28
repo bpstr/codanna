@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding": "F04",
+  "status": "prepared_not_run",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "before-publication-after-edit",
+      "expected_source_fidelity": "stale",
+      "require": [
+        "indexed_content_hash",
+        "current_content_hash",
+        "reader_generation"
+      ],
+      "forbid": "claim_current_before_refresh"
+    },
+    {
+      "id": "after-publication",
+      "expected_source_fidelity": "matching_observed_hashes",
+      "forbid": "claim_atomic_workspace_snapshot"
+    }
+  ]
+}
