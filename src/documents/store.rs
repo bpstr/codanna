@@ -1031,17 +1031,30 @@ impl DocumentStore {
     /// Current paths must be enumerated by the caller for the named collection;
     /// this method does not recursively scan a workspace.
     pub fn source_drift(
-        &self, collection: &str, current_paths: &[PathBuf],
-        max_files: usize, max_bytes: usize,
+        &self,
+        collection: &str,
+        current_paths: &[PathBuf],
+        max_files: usize,
+        max_bytes: usize,
     ) -> SourceDriftReport {
         use std::io::Read;
         let max_files = max_files.min(1000);
         let max_bytes = max_bytes.min(64 * 1024 * 1024);
-        let paths: std::collections::BTreeSet<_> = self.file_states.iter()
+        let paths: std::collections::BTreeSet<_> = self
+            .file_states
+            .iter()
             .filter(|(_, state)| state.collection == collection)
             .map(|(path, _)| path.clone())
-            .chain(current_paths.iter().map(|path| normalize_source_path(path))
-                .filter(|path| self.file_states.get(path).is_none_or(|state| state.collection == collection)))
+            .chain(
+                current_paths
+                    .iter()
+                    .map(|path| normalize_source_path(path))
+                    .filter(|path| {
+                        self.file_states
+                            .get(path)
+                            .is_none_or(|state| state.collection == collection)
+                    }),
+            )
             .collect();
         let mut report = SourceDriftReport {
             generation: self.current_generation.clone(),
@@ -1051,12 +1064,16 @@ impl DocumentStore {
             files: Vec::new(),
         };
         for path in paths.into_iter().take(max_files) {
-            let indexed = self.file_states.get(&path)
+            let indexed = self
+                .file_states
+                .get(&path)
                 .filter(|state| state.collection == collection)
                 .map(|state| state.content_hash.clone());
             let mut entry = SourceDriftEntry {
-                path: path.clone(), status: "unreadable",
-                indexed_sha256: indexed, current_sha256: None,
+                path: path.clone(),
+                status: "unreadable",
+                indexed_sha256: indexed,
+                current_sha256: None,
             };
             match std::fs::File::open(&path) {
                 Ok(file) => {
@@ -1091,7 +1108,9 @@ impl DocumentStore {
                             entry.status = "changed_during_read";
                             report.truncated = true;
                         }
-                        Err(_) => { report.bytes_read += bytes.len(); }
+                        Err(_) => {
+                            report.bytes_read += bytes.len();
+                        }
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
