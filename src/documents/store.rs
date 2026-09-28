@@ -2613,6 +2613,10 @@ struct ClusterData {
 /// Read-only query ownership, independent of the mutable document writer.
 pub(crate) struct DocumentQuery(DocumentStore);
 impl DocumentQuery {
+    pub(crate) fn retrieval_mode(&self) -> &'static str {
+        self.0.retrieval_mode()
+    }
+
     pub(crate) fn search(&mut self, query: SearchQuery) -> StoreResult<Vec<SearchResult>> {
         self.0.search(query)
     }
