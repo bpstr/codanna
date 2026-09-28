@@ -1075,7 +1075,18 @@ mod ticket_code_fusion {
         settings.semantic_search.enabled = false;
         settings.indexing.parallelism = 1;
         settings.add_indexed_path(temp.path().join("src")).unwrap();
-        let mut index = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        let settings = std::sync::Arc::new(settings);
+        let storage =
+            crate::storage::DocumentIndex::new(settings.index_path.join("tantivy"), &settings)
+                .unwrap()
+                .with_manual_reload_for_test()
+                .unwrap();
+        let mut index = IndexFacade::from_components(
+            std::sync::Arc::new(storage),
+            crate::indexing::Pipeline::with_settings(settings.clone()),
+            None,
+            settings,
+        );
         index
             .index_directory(&temp.path().join("src"), true)
             .unwrap();
@@ -1234,11 +1245,18 @@ mod ticket_code_fusion {
                 .iter()
                 .all(|s| s.file_path.starts_with("src/active/"))
         );
-        assert!(report.items.iter().any(|row| {
-            row.relationships
-                .iter()
-                .any(|p| p.relation == "References" && p.direction == "incoming")
-        }));
+        assert!(
+            report.items.iter().any(|row| {
+                row.relationships
+                    .iter()
+                    .any(|p| p.relation == "References" && p.direction == "incoming")
+            }),
+            "warnings={:?}; generations={:?}/{:?}; expansion={:?}",
+            report.warnings,
+            report.reader_generation_before,
+            report.reader_generation_after,
+            report.expansion
+        );
         assert!(report.expansion.unwrap().excluded_by_scope > 0);
     }
 
