@@ -1040,7 +1040,8 @@ impl DocumentStore {
         let paths: std::collections::BTreeSet<_> = self.file_states.iter()
             .filter(|(_, state)| state.collection == collection)
             .map(|(path, _)| path.clone())
-            .chain(current_paths.iter().map(|path| normalize_source_path(path)))
+            .chain(current_paths.iter().map(|path| normalize_source_path(path))
+                .filter(|path| self.file_states.get(path).is_none_or(|state| state.collection == collection)))
             .collect();
         let mut report = SourceDriftReport {
             generation: self.current_generation.clone(),
@@ -1060,9 +1061,16 @@ impl DocumentStore {
             match std::fs::File::open(&path) {
                 Ok(file) => {
                     let remaining = max_bytes.saturating_sub(report.bytes_read);
+                    let length = file.metadata().ok().map(|metadata| metadata.len());
+                    if length.is_none_or(|length| length > remaining as u64) {
+                        entry.status = "byte_budget_exceeded";
+                        report.truncated = true;
+                        report.files.push(entry);
+                        continue;
+                    }
                     let mut bytes = Vec::new();
-                    match file.take(remaining as u64 + 1).read_to_end(&mut bytes) {
-                        Ok(_) if bytes.len() <= remaining => {
+                    match file.take(remaining as u64).read_to_end(&mut bytes) {
+                        Ok(_) if Some(bytes.len() as u64) == length => {
                             report.bytes_read += bytes.len();
                             if let Ok(content) = std::str::from_utf8(&bytes) {
                                 let hash = calculate_hash(content);
@@ -1074,7 +1082,11 @@ impl DocumentStore {
                                 entry.current_sha256 = Some(hash);
                             }
                         }
-                        Ok(_) => { entry.status = "byte_budget_exceeded"; report.truncated = true; }
+                        Ok(_) => {
+                            report.bytes_read += bytes.len();
+                            entry.status = "changed_during_read";
+                            report.truncated = true;
+                        }
                         Err(_) => {}
                     }
                 }
