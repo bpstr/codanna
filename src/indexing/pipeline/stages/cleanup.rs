@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 /// Every relation kind that can point at a symbol. Rebind must consider all
 /// of them: a kind omitted here is a kind that silently keeps dying on
 /// re-index.
-const ALL_RELATION_KINDS: [RelationKind; 12] = [
+const ALL_RELATION_KINDS: [RelationKind; 14] = [
     RelationKind::Calls,
     RelationKind::CalledBy,
     RelationKind::Extends,
@@ -34,6 +34,8 @@ const ALL_RELATION_KINDS: [RelationKind; 12] = [
     RelationKind::DefinedIn,
     RelationKind::References,
     RelationKind::ReferencedBy,
+    RelationKind::DispatchCandidate,
+    RelationKind::DispatchCandidateOf,
 ];
 
 /// Unique files owning inbound edges into `paths`, excluding `in_run`

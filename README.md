@@ -71,6 +71,15 @@ Ticket retrieval supports scoped semantic candidates, observed facets, persisten
 
 In JavaScript and TypeScript, passing a resolved function as an argument, such as `router.get('/health', handle)`, records a `References` relationship with the argument's source location. Find registrations and their dependents with `codanna mcp analyze_impact symbol_name:handle`; inspect source evidence with `codanna retrieve describe handle --json` under `relationships.referenced_by`. Describing the registering function exposes `relationships.references`. `get_calls` and `find_callers` continue to report explicit invocations, while dependency and impact queries also traverse references.
 
+Go calls through an interface-typed struct field record possible concrete methods
+under `relationships.dispatch_candidates`. These edges are derived from the call
+site, the interface method, structural `Implements` edges and each implementor's
+`Defines` edge. They are candidates rather than `Calls`, and are rebuilt when
+method signatures change. The current parser recognizes field, interface and
+method declarations available in the same source file. Python `typing.cast`
+type arguments record `Uses` edges, including imported aliases; a same-named
+function parameter suppresses the imported type edge.
+
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.
 
 ## What one call returns

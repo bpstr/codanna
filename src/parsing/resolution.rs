@@ -312,11 +312,11 @@ pub(crate) fn default_compatible_relationship(
             matches!(from_kind, Class | Interface | Trait | Struct | Enum)
                 && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
         }
-        References => {
+        References | DispatchCandidate => {
             // Very permissive - almost anything can reference anything
             true
         }
-        ReferencedBy => {
+        ReferencedBy | DispatchCandidateOf => {
             // Reverse of References - also permissive
             true
         }

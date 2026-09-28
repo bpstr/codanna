@@ -261,6 +261,7 @@ impl GraphView<'_> {
                     &[
                         RelationKind::Calls,
                         RelationKind::References,
+                        RelationKind::DispatchCandidate,
                         RelationKind::Uses,
                         RelationKind::Implements,
                         RelationKind::Extends,
