@@ -15,7 +15,9 @@ use crate::mcp::service::{
 
 #[tool_router(router = symbols_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
-    #[tool(description = "Find indexed symbol definitions by name or positive symbol_id. IDs are workspace-local; use a returned ID to disambiguate a definition. Language and pagination filters apply to both forms. Legacy name=symbol_id:N remains supported.")]
+    #[tool(
+        description = "Find indexed symbol definitions by name or positive symbol_id. IDs are workspace-local; use a returned ID to disambiguate a definition. Language and pagination filters apply to both forms. Legacy name=symbol_id:N remains supported."
+    )]
     pub async fn find_symbol(
         &self,
         Parameters(FindSymbolRequest {
@@ -28,7 +30,13 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         use crate::symbol::context::ContextIncludes;
         crate::mcp::requests::validate_search_limit(limit)?;
-        let request = FindSymbolRequest { name, symbol_id, lang, limit, offset };
+        let request = FindSymbolRequest {
+            name,
+            symbol_id,
+            lang,
+            limit,
+            offset,
+        };
         let name = request.target_name()?.into_owned();
         let lang = request.lang;
 

@@ -108,20 +108,23 @@ impl FindSymbolRequest {
         if let Some(id) = self.symbol_id {
             if id == 0 {
                 return Err(rmcp::model::ErrorData::invalid_params(
-                    "symbol_id must be positive", None,
+                    "symbol_id must be positive",
+                    None,
                 ));
             }
             let target = format!("symbol_id:{id}");
             if !self.name.is_empty() && self.name != target {
                 return Err(rmcp::model::ErrorData::invalid_params(
-                    "Supply either name or symbol_id, not conflicting targets", None,
+                    "Supply either name or symbol_id, not conflicting targets",
+                    None,
                 ));
             }
             return Ok(std::borrow::Cow::Owned(target));
         }
         if self.name.trim().is_empty() {
             return Err(rmcp::model::ErrorData::invalid_params(
-                "find_symbol requires name or symbol_id", None,
+                "find_symbol requires name or symbol_id",
+                None,
             ));
         }
         Ok(std::borrow::Cow::Borrowed(&self.name))

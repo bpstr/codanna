@@ -287,8 +287,14 @@ pub async fn run(
         && !map.contains_key("name")
         && let Some(id) = map.get("symbol_id")
     {
-        let id = id.as_str().map(str::to_owned).unwrap_or_else(|| id.to_string());
-        map.insert("name".into(), serde_json::Value::String(format!("symbol_id:{id}")));
+        let id = id
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| id.to_string());
+        map.insert(
+            "name".into(),
+            serde_json::Value::String(format!("symbol_id:{id}")),
+        );
     }
 
     // Validate the tool name up front: JSON mode never reaches the dispatch
@@ -384,13 +390,18 @@ pub async fn run(
         let mut map = arguments.clone().unwrap_or_default();
         // CLI symbol_id:abc retains its historical not-found exit behavior.
         // Numeric aliases are still checked for conflicting/zero targets.
-        if map.get("symbol_id").is_some_and(serde_json::Value::is_string) {
+        if map
+            .get("symbol_id")
+            .is_some_and(serde_json::Value::is_string)
+        {
             map.remove("symbol_id");
         }
         Some(
             serde_json::from_value::<crate::mcp::FindSymbolRequest>(serde_json::Value::Object(map))
                 .and_then(|request| {
-                    request.target_name().map_err(<serde_json::Error as serde::de::Error>::custom)?;
+                    request
+                        .target_name()
+                        .map_err(<serde_json::Error as serde::de::Error>::custom)?;
                     Ok(request)
                 })
                 .unwrap_or_else(|error| {
