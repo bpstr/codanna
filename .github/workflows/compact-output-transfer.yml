@@ -1,0 +1,22 @@
+name: Compact output transfer
+on:
+  push:
+    branches: [codex/compact-budgeted-tool-results]
+    paths: [.github/workflows/compact-output-transfer.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar.gz HEAD > /tmp/codanna-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codanna-source
+          path: /tmp/codanna-source.tar.gz
+          retention-days: 1
