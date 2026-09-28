@@ -11,7 +11,9 @@ use crate::indexing::facade::IndexFacade;
 /// Semantic endpoint evidence contract; configured defaults are not implicitly
 /// applied to the existing omitted-threshold nearest-neighbor route.
 pub(crate) fn semantic_retrieval_metadata(
-    requested_floor: Option<f32>, configured_floor: f32, returned: usize,
+    requested_floor: Option<f32>,
+    configured_floor: f32,
+    returned: usize,
 ) -> serde_json::Value {
     serde_json::json!({
         "mode": "semantic_nearest_neighbors",
@@ -393,7 +395,10 @@ mod tests {
         assert_eq!(explicit["returned_symbols"], 0);
         assert_eq!(explicit["graph_count_unit"], "distinct_symbols");
         assert_eq!(explicit["call_site_totals"], "not_reported");
-        assert_eq!(explicit["unresolved_external_call_coverage"], "not_reported");
+        assert_eq!(
+            explicit["unresolved_external_call_coverage"],
+            "not_reported"
+        );
     }
     use super::*;
 
