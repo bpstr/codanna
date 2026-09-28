@@ -241,6 +241,9 @@ pub enum Commands {
     #[command(about = "Display active settings from .codanna/settings.toml")]
     Config,
 
+    /// Report compiled embedding providers without loading models or configuration
+    EmbeddingInfo,
+
     /// Start MCP server
     #[command(
         about = "Start MCP server",
@@ -528,6 +531,18 @@ pub enum PluginAction {
 /// Document collection management actions
 #[derive(Subcommand)]
 pub enum DocumentAction {
+    /// Compare committed document hashes with current sources without indexing
+    Drift {
+        collection: String,
+        #[arg(long, default_value_t = 100)]
+        max_files: usize,
+        #[arg(long, default_value_t = 8 * 1024 * 1024)]
+        max_bytes: usize,
+        #[arg(long, default_value_t = 10_000)]
+        max_entries: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect recent indexing runs without loading the embedding model
     Status {
         #[arg(long)]

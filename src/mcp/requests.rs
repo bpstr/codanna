@@ -1,5 +1,7 @@
 //! MCP tool request types.
 
+pub use crate::documents::DocumentDriftRequest;
+
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
@@ -81,8 +83,13 @@ fn deserialize_conversation_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Res
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindSymbolRequest {
-    /// Name of the symbol to find
+    /// Name to find, or legacy symbol_id:N form. Supply name or symbol_id.
+    #[serde(default)]
     pub name: String,
+    /// Positive symbol ID for unambiguous definition lookup in this workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub symbol_id: Option<u32>,
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
@@ -96,6 +103,34 @@ pub struct FindSymbolRequest {
     /// Number of matching symbols to skip after language and owner filtering.
     #[serde(default)]
     pub offset: u32,
+}
+
+impl FindSymbolRequest {
+    pub fn target_name(&self) -> Result<std::borrow::Cow<'_, str>, rmcp::model::ErrorData> {
+        if let Some(id) = self.symbol_id {
+            if id == 0 {
+                return Err(rmcp::model::ErrorData::invalid_params(
+                    "symbol_id must be positive",
+                    None,
+                ));
+            }
+            let target = format!("symbol_id:{id}");
+            if !self.name.is_empty() && self.name != target {
+                return Err(rmcp::model::ErrorData::invalid_params(
+                    "Supply either name or symbol_id, not conflicting targets",
+                    None,
+                ));
+            }
+            return Ok(std::borrow::Cow::Owned(target));
+        }
+        if self.name.trim().is_empty() {
+            return Err(rmcp::model::ErrorData::invalid_params(
+                "find_symbol requires name or symbol_id",
+                None,
+            ));
+        }
+        Ok(std::borrow::Cow::Borrowed(&self.name))
+    }
 }
 
 fn default_symbol_limit() -> u32 {

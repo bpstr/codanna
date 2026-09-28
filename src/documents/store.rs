@@ -109,6 +109,30 @@ pub struct EmbeddingDiagnostics {
     pub compacted_vector_bytes: u64,
 }
 
+/// Read-only comparison against caller-supplied current collection paths.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceDriftReport {
+    pub collection: String,
+    pub max_files: usize,
+    pub max_bytes: usize,
+    pub max_entries: usize,
+    pub entries_visited: usize,
+    pub discovery_truncated: bool,
+    pub generation: Option<String>,
+    pub candidate_files: usize,
+    pub truncated: bool,
+    pub bytes_read: usize,
+    pub files: Vec<SourceDriftEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceDriftEntry {
+    pub path: PathBuf,
+    pub status: &'static str,
+    pub indexed_sha256: Option<String>,
+    pub current_sha256: Option<String>,
+}
+
 /// Query parameters for document search.
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -1016,6 +1040,30 @@ impl DocumentStore {
         } else {
             "lexical"
         }
+    }
+
+    /// Compare supplied source paths without ingestion or embedding work.
+    pub fn source_drift(
+        &self,
+        collection: &str,
+        current_paths: &[PathBuf],
+        max_files: usize,
+        max_bytes: usize,
+    ) -> SourceDriftReport {
+        let request = super::drift::DocumentDriftRequest {
+            collection: collection.to_owned(),
+            max_files: max_files.min(1000),
+            max_bytes: max_bytes.min(64 * 1024 * 1024),
+            max_entries: 0,
+        };
+        super::drift::compare_sources(
+            &self.file_states,
+            self.current_generation.as_deref(),
+            &request,
+            current_paths,
+            self.workspace_root.as_deref(),
+            self.source_exclusion.as_deref().unwrap_or(&self.base_path),
+        )
     }
 
     /// Mark indexed collections for replacement without discarding their source
@@ -2587,6 +2635,45 @@ pub struct CollectionStats {
     pub chunk_count: usize,
     /// Number of files indexed.
     pub file_count: usize,
+}
+
+/// Read only the committed provenance. Never acquire writer locks, repair mirrors,
+/// load vectors/models, or collect obsolete generations.
+pub(super) fn load_source_snapshot(
+    base: &Path,
+    boundary: Option<&Path>,
+) -> StoreResult<(Option<String>, HashMap<PathBuf, FileState>)> {
+    let check = |path: &Path| -> StoreResult<()> {
+        if let Some(root) = boundary {
+            crate::indexing::facade::IndexFacade::contained_source(root, path)
+                .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+        }
+        Ok(())
+    };
+    check(&base.join("tantivy/meta.json"))?;
+    let metadata: serde_json::Value =
+        generation::read_json(&base.join("tantivy/meta.json"), 128 * 1024 * 1024)?;
+    let payload = metadata.get("payload").and_then(serde_json::Value::as_str);
+    if let Some(name) = payload.and_then(|value| value.strip_prefix("codanna-documents-v1:")) {
+        check(&base.join("generations").join(name))?;
+    } else if payload.is_none() {
+        check(&base.join("state.json"))?;
+    }
+    let (name, state) = match generation::load(base, payload)? {
+        Some((name, generation)) => (Some(name), generation.state),
+        None => (
+            None,
+            generation::read_json::<PersistedState>(&base.join("state.json"), 128 * 1024 * 1024)?,
+        ),
+    };
+    Ok((
+        name,
+        state
+            .file_states
+            .into_iter()
+            .map(|(path, state)| (PathBuf::from(path), state))
+            .collect(),
+    ))
 }
 
 /// Persisted state for the document store.

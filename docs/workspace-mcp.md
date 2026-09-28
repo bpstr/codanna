@@ -88,7 +88,10 @@ manufactures an empty replacement index.
 
 At most four reader processes are owned per router. Physical permits remain held
 until observed child exit, including eviction. Bootstrap has a separate one-job
-limit per router. Active work pins slots. Eviction/shutdown relinquishes a reader's
+limit per router. Active work pins slots. Every thirty seconds, idle cleanup
+evicts readers unused for five minutes, even if no further queries arrive.
+The next query loads a fresh reader. The stdio router remains connected until its
+client disconnects. Eviction/shutdown relinquishes a reader's
 watch; another connected follower can elect itself. Cleanup waits for owned writes
 and child processes rather than treating map removal as process termination.
 Separate stdio clients retain separate pools; this is not a machine-wide daemon.
