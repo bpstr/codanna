@@ -1,5 +1,7 @@
 //! MCP tool request types.
 
+pub use crate::documents::DocumentDriftRequest;
+
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 

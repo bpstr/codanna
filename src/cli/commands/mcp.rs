@@ -1075,7 +1075,7 @@ pub async fn run(
     let result = if json
         && !matches!(
             tool_kind,
-            ToolKind::SearchContext | ToolKind::SearchTicketContext
+            ToolKind::SearchContext | ToolKind::SearchTicketContext | ToolKind::DocumentDrift
         ) {
         Ok(rmcp::model::CallToolResult::success(vec![]))
     } else {
@@ -1282,6 +1282,15 @@ pub async fn run(
                     }))
                     .await
             }
+            ToolKind::DocumentDrift => {
+                let request = serde_json::from_value::<crate::mcp::DocumentDriftRequest>(
+                    serde_json::Value::Object(arguments.clone().unwrap_or_default()),
+                )
+                .unwrap_or_else(|error| {
+                    exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
+                });
+                server.document_drift(Parameters(request)).await
+            }
             ToolKind::SearchDocuments => {
                 use crate::mcp::SearchDocumentsRequest;
                 let query = arguments
@@ -1356,7 +1365,14 @@ pub async fn run(
     // Print result
     match result {
         Ok(call_result) => {
-            if json && tool == "search_ticket_context" {
+            if json && tool == "document_drift" {
+                let data = call_result
+                    .structured_content
+                    .unwrap_or(serde_json::Value::Null);
+                let envelope = crate::io::envelope::Envelope::success(data)
+                    .with_message("Document source drift inspection completed");
+                println!("{}", render_envelope_json(&envelope, fields.as_ref()));
+            } else if json && tool == "search_ticket_context" {
                 use crate::io::envelope::{EntityType, Envelope};
                 let data = call_result
                     .structured_content

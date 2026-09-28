@@ -216,6 +216,29 @@ chunks without embeddings, active generation and backend/input identity. These
 counts describe committed evidence and do not establish freshness against current
 source files. Run-progress diagnostics currently cover CLI document indexing.
 
+### Inspect document source drift
+
+```bash
+codanna documents drift docs --json
+codanna documents drift docs --max-files 100 --max-bytes 8388608 --max-entries 10000
+codanna mcp document_drift collection:docs --json
+```
+
+Drift inspection compares committed source hashes with the configured collection's
+current files. It reports changed, missing, new, unchanged, unreadable and unsupported
+sources, along with the committed generation and effective limits. It reads existing
+metadata without indexing, repairing state, deleting generations or loading embeddings.
+An absent index or unknown collection is an error; inspection creates neither.
+
+Defaults are 100 files, 8 MiB of source content and 10,000 discovery entries. Maximums
+are 1,000 files, 64 MiB and 100,000 entries. Ignored entries consume the discovery
+budget; ignored directories are pruned. Discovery preserves collection globs and
+`.codannaignore` rules, with a separate 1 MiB ignore-policy budget and 64-level depth
+limit. Metadata files have a separate 128 MiB read limit. Limit exhaustion is reported
+as truncation or an explicit error. Candidate counts are not corpus totals when
+discovery is incomplete. Unsupported files, read failures and partial reports never
+establish freshness. Concurrent source edits or publication may require a retry.
+
 ## What It Does
 
 Your AI assistant gains structured knowledge of your code:

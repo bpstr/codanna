@@ -8,6 +8,7 @@
 
 pub mod chunker;
 pub mod config;
+pub(crate) mod drift;
 mod embedding;
 mod generation;
 mod ranking;
@@ -21,6 +22,7 @@ pub use config::{
     ChunkingConfig, ChunkingStrategy, CollectionConfig, DocumentsConfig, PreviewMode, SearchConfig,
     ValidatedChunkingConfig,
 };
+pub use drift::{DocumentDriftRequest, inspect_source_drift};
 pub use schema::DocumentSchema;
 pub use store::{
     CollectionStats, DocumentStore, EmbeddingDiagnostics, IndexProgress, SearchQuery, SearchResult,
