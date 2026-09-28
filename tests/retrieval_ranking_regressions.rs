@@ -9,7 +9,9 @@ mod knowledge;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use codanna::documents::{ChunkingConfig, CollectionConfig, DocumentStore, SearchQuery};
+use codanna::documents::{
+    ChunkingConfig, CollectionConfig, DocumentSearchOptions, DocumentStore, SearchQuery,
+};
 use codanna::vector::{EmbeddingGenerator, VectorDimension, VectorError};
 
 fn graph() -> knowledge::Graph {
@@ -164,6 +166,101 @@ fn query(text: &str, limit: usize) -> SearchQuery {
         limit,
         ..Default::default()
     }
+}
+
+#[test]
+fn caller_supplied_authority_breaks_lexical_ties_and_preserves_other_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = index(
+        temp.path(),
+        &[
+            (
+                "canonical.md",
+                include_str!("fixtures/retrieval_findings/f05/canonical.md").into(),
+            ),
+            (
+                "historical.md",
+                include_str!("fixtures/retrieval_findings/f05/historical.md").into(),
+            ),
+            (
+                "noise.md",
+                include_str!("fixtures/retrieval_findings/f05/noise.md").into(),
+            ),
+        ],
+    );
+    let options = DocumentSearchOptions {
+        authority_sources: vec![temp.path().join("historical.md")],
+        ..Default::default()
+    };
+
+    let tied = store
+        .search_with_options(query("calendar settings", 3), &options)
+        .unwrap();
+    assert_eq!(
+        tied[0].source_path.file_name().unwrap(),
+        "historical.md",
+        "the explicit authority source should break equal term-coverage ties"
+    );
+    assert_eq!(
+        serde_json::to_vec(&tied).unwrap(),
+        serde_json::to_vec(
+            &store
+                .search_with_options(query("calendar settings", 3), &options)
+                .unwrap()
+        )
+        .unwrap(),
+        "authority ordering must be deterministic"
+    );
+
+    let canonical = DocumentSearchOptions {
+        authority_sources: vec![temp.path().join("canonical.md")],
+        ..Default::default()
+    };
+    let ranked = store
+        .search_with_options(
+            query("account calendar settings first day each week", 3),
+            &canonical,
+        )
+        .unwrap();
+    assert_eq!(ranked[0].source_path.file_name().unwrap(), "canonical.md");
+    assert!(
+        ranked
+            .iter()
+            .any(|hit| hit.source_path.file_name().unwrap() == "historical.md"),
+        "authority must not hide accessible historical results"
+    );
+
+    let metadata = store.retrieval_metadata(&canonical, ranked.len());
+    assert_eq!(metadata["authority_prior"]["status"], "applied");
+    assert_eq!(
+        metadata["authority_prior"]["basis"],
+        "caller_supplied_source_paths_v1"
+    );
+    assert_eq!(metadata["authority_prior"]["source_count"], 1);
+    assert!(
+        metadata["ranking_constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|constraint| constraint == "caller_supplied_source_authority")
+    );
+}
+
+#[test]
+fn authority_paths_are_opt_in_and_reject_empty_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = index(temp.path(), &[("document.md", "calendar settings".into())]);
+    let metadata = store.retrieval_metadata(&DocumentSearchOptions::default(), 0);
+    assert_eq!(metadata["authority_prior"]["status"], "not_applied");
+    assert!(metadata["authority_prior"]["basis"].is_null());
+    assert!(
+        DocumentSearchOptions {
+            authority_sources: vec![PathBuf::new()],
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 #[test]

@@ -288,6 +288,10 @@ pub struct SearchDocumentsRequest {
     pub literal: bool,
     /// Inclusive floor in native score units (cosine, lexical rank, or literal match 1).
     pub score_floor: Option<f32>,
+    /// Exact indexed source paths that receive an authority tiebreak after
+    /// query-term coverage. Omitted by default; authority is never inferred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authority_sources: Vec<std::path::PathBuf>,
     /// Natural language query, or exact case-sensitive substring when literal is true
     pub query: String,
     /// Filter by collection name (optional)

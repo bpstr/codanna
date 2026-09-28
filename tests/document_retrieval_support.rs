@@ -71,6 +71,7 @@ async fn nearest_neighbors_can_return_candidates_without_literal_support() {
                     limit: 5,
                     literal: false,
                     score_floor: None,
+                    authority_sources: Vec::new(),
                 },
             ))
             .await
@@ -169,6 +170,7 @@ fn literal_search_matches_indexed_phrases_punctuation_and_unicode_without_embedd
     let options = DocumentSearchOptions {
         literal: true,
         score_floor: None,
+        authority_sources: Vec::new(),
     };
     for text in ["Account preferences", "::[]", "雪だるま", "☃"] {
         let results = store.search_with_options(query(text), &options).unwrap();
@@ -237,6 +239,7 @@ fn score_floors_include_equal_scores_reject_nonfinite_and_preserve_omitted_behav
         let at_floor = DocumentSearchOptions {
             literal,
             score_floor: Some(1.0),
+            authority_sources: Vec::new(),
         };
         assert!(
             !store
@@ -250,7 +253,7 @@ fn score_floors_include_equal_scores_reject_nonfinite_and_preserve_omitted_behav
                     query(text),
                     &DocumentSearchOptions {
                         score_floor: Some(1.1),
-                        ..at_floor
+                        ..at_floor.clone()
                     }
                 )
                 .unwrap()
@@ -263,7 +266,8 @@ fn score_floors_include_equal_scores_reject_nonfinite_and_preserve_omitted_behav
                         query(text),
                         &DocumentSearchOptions {
                             literal,
-                            score_floor: Some(floor)
+                            score_floor: Some(floor),
+                            authority_sources: Vec::new(),
                         }
                     )
                     .is_err()
@@ -289,7 +293,8 @@ fn score_floors_include_equal_scores_reject_nonfinite_and_preserve_omitted_behav
                 query("Account"),
                 &DocumentSearchOptions {
                     literal: false,
-                    score_floor: Some(highest)
+                    score_floor: Some(highest),
+                    authority_sources: Vec::new(),
                 }
             )
             .unwrap()
@@ -301,7 +306,8 @@ fn score_floors_include_equal_scores_reject_nonfinite_and_preserve_omitted_behav
                 query("Account"),
                 &DocumentSearchOptions {
                     literal: false,
-                    score_floor: Some(highest + 1.0)
+                    score_floor: Some(highest + 1.0),
+                    authority_sources: Vec::new(),
                 }
             )
             .unwrap()
@@ -327,6 +333,7 @@ async fn literal_mcp_initializes_no_embedding_backend_and_never_certifies_suppor
                     limit: 5,
                     literal: true,
                     score_floor: Some(1.0),
+                    authority_sources: Vec::new(),
                 },
             ))
             .await
@@ -418,6 +425,40 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
         assert_eq!(data["meta"]["retrieval"]["effective_score_floor"], 1.0);
         assert_eq!(data["meta"]["retrieval"]["support_status"], "not_assessed");
     }
+
+    let authority = serde_json::json!({
+        "query": "Account preferences",
+        "collection": "docs",
+        "literal": true,
+        "authority_sources": [temp.path().join("first.md")],
+    })
+    .to_string();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_codanna"))
+        .arg("--config")
+        .arg(&config)
+        .args(["mcp", "search_documents", "--args"])
+        .arg(authority)
+        .arg("--json")
+        .current_dir(temp.path())
+        .env_clear()
+        .env("HOME", temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        data["meta"]["retrieval"]["authority_prior"]["status"],
+        "applied"
+    );
+    assert_eq!(
+        data["meta"]["retrieval"]["authority_prior"]["basis"],
+        "caller_supplied_source_paths_v1"
+    );
 }
 
 #[test]

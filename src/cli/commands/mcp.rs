@@ -403,6 +403,7 @@ pub async fn run(
         let options = crate::documents::DocumentSearchOptions {
             literal: request.literal,
             score_floor: request.score_floor,
+            authority_sources: request.authority_sources.clone(),
         };
         if let Err(error) = options.validate() {
             exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json);
