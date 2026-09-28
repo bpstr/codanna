@@ -13,7 +13,8 @@
 //!
 //! By default provider registration is allowed to fall back to CPU. Set
 //! `CODANNA_EMBED_PROVIDER_STRICT=1` to fail session creation if the requested
-//! execution provider cannot be registered.
+//! execution provider cannot be registered. Strict selection also rejects invalid
+//! names, unavailable compiled capabilities, and an already initialized runtime.
 
 use fastembed::ExecutionProviderDispatch;
 use std::str::FromStr;
@@ -138,59 +139,110 @@ fn commit_runtime_provider(_dispatch: ExecutionProviderDispatch) -> Result<bool,
     Ok(false)
 }
 
-/// Configure the process-wide ONNX Runtime environment for local embeddings.
+/// Providers compiled into this binary. This does not initialize ONNX Runtime
+/// or claim that a provider can execute a particular model on an accelerator.
+pub fn compiled_embedding_providers() -> Vec<&'static str> {
+    let mut providers = vec!["cpu"];
+    if cfg!(all(feature = "gpu-embeddings", target_vendor = "apple")) {
+        providers.push("coreml");
+    }
+    if cfg!(all(
+        feature = "gpu-embeddings",
+        any(target_os = "linux", target_os = "windows")
+    )) {
+        providers.push("cuda");
+    }
+    providers
+}
+
+fn selection_failure(message: String, strict: bool) -> Result<String, String> {
+    if strict {
+        Err(message)
+    } else {
+        Ok(format!(
+            "{message}; leaving the existing runtime configuration unchanged"
+        ))
+    }
+}
+
+fn configure_provider(
+    raw: &str,
+    strict: bool,
+    available: &[&str],
+    commit: impl FnOnce(EmbeddingExecutionProvider, bool) -> Result<bool, String>,
+) -> Result<Option<String>, String> {
+    let provider = match EmbeddingExecutionProvider::from_str(raw) {
+        Ok(provider) => provider,
+        Err(error) => return selection_failure(error, strict).map(Some),
+    };
+    let name = match provider {
+        EmbeddingExecutionProvider::Cpu => return Ok(None),
+        EmbeddingExecutionProvider::CoreMl => "coreml",
+        EmbeddingExecutionProvider::Cuda => "cuda",
+        EmbeddingExecutionProvider::Auto => available
+            .iter()
+            .copied()
+            .find(|name| *name != "cpu")
+            .unwrap_or("cpu"),
+    };
+    if name == "cpu" || !available.contains(&name) {
+        return selection_failure(
+            format!(
+                "embedding provider '{raw}' is not compiled for this target (compiled: {}); \
+                 Apple builds require --features gpu-coreml",
+                available.join(", ")
+            ),
+            strict,
+        )
+        .map(Some);
+    }
+    let selected = EmbeddingExecutionProvider::from_str(name)?;
+    let message = match commit(selected, strict) {
+        Ok(true) => format!(
+            "local embedding provider {name} configured{}; session registration and actual device execution are not yet verified",
+            if strict {
+                " (strict registration)"
+            } else {
+                " with CPU fallback"
+            }
+        ),
+        Ok(false) => selection_failure(
+            "ONNX Runtime was already initialized before embedding provider selection".into(),
+            strict,
+        )?,
+        Err(error) => selection_failure(
+            format!("failed to configure {name} embedding provider: {error}"),
+            strict,
+        )?,
+    };
+    Ok(Some(message))
+}
+
+/// Configure the process-wide ONNX Runtime environment before creating models.
 ///
-/// Call this before any fastembed model is constructed. The Codanna CLI invokes
-/// it at the start of `main`; library consumers can call it explicitly when they
-/// want the same optional GPU acceleration.
-pub fn configure_embedding_runtime() {
+/// Strict selection errors are returned to the caller. Successful configuration
+/// only installs a provider preference; registration occurs during session
+/// creation and unsupported graph nodes may still execute on CPU.
+/// Library consumers must call this before constructing a fastembed model.
+pub fn configure_embedding_runtime() -> Result<(), String> {
     let raw = match std::env::var(PROVIDER_ENV) {
         Ok(value) => value,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
-
-    let provider = match EmbeddingExecutionProvider::from_str(&raw) {
-        Ok(provider) => provider,
-        Err(error) => {
-            eprintln!("codanna: {error}; using CPU embeddings");
-            return;
-        }
-    };
-
-    if provider == EmbeddingExecutionProvider::Cpu {
-        return;
+    let message = configure_provider(
+        &raw,
+        strict_provider_registration(),
+        &compiled_embedding_providers(),
+        |provider, strict| {
+            let (_, dispatch) = provider_dispatch(provider, strict)
+                .ok_or_else(|| "compiled provider dispatch is unavailable".to_string())?;
+            commit_runtime_provider(dispatch)
+        },
+    )?;
+    if let Some(message) = message {
+        eprintln!("codanna: {message}");
     }
-
-    let strict = strict_provider_registration();
-    let Some((provider_name, dispatch)) = provider_dispatch(provider, strict) else {
-        eprintln!(
-            "codanna: embedding provider '{raw}' is not compiled for this target; using CPU embeddings"
-        );
-        return;
-    };
-
-    match commit_runtime_provider(dispatch) {
-        Ok(true) => {
-            eprintln!(
-                "codanna: local embeddings configured for {provider_name}{}",
-                if strict {
-                    " (strict)"
-                } else {
-                    " with CPU fallback"
-                }
-            );
-        }
-        Ok(false) => {
-            eprintln!(
-                "codanna: ONNX Runtime was already initialized before embedding provider selection; existing runtime configuration is unchanged"
-            );
-        }
-        Err(error) => {
-            eprintln!(
-                "codanna: failed to configure {provider_name} embedding provider: {error}; using the existing ONNX Runtime configuration"
-            );
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -221,5 +273,97 @@ mod tests {
     fn rejects_unknown_execution_provider() {
         let error = EmbeddingExecutionProvider::from_str("metal").unwrap_err();
         assert!(error.contains("expected cpu, auto, coreml, or cuda"));
+    }
+
+    #[test]
+    fn unavailable_strict_provider_fails_before_runtime_initialization() {
+        for requested in ["coreml", "cuda", "auto", "metal"] {
+            let result = configure_provider(requested, true, &["cpu"], |_, _| {
+                panic!("unavailable providers must not initialize a runtime")
+            });
+            assert!(result.is_err(), "{requested}");
+        }
+    }
+
+    #[test]
+    fn unavailable_optional_provider_explains_fallback() {
+        let message = configure_provider("coreml", false, &["cpu"], |_, _| {
+            panic!("unavailable providers must not initialize a runtime")
+        })
+        .unwrap()
+        .unwrap();
+        assert!(message.contains("not compiled"));
+        assert!(message.contains("--features gpu-coreml"));
+        assert!(message.contains("runtime configuration unchanged"));
+    }
+
+    #[test]
+    fn strict_runtime_failures_are_not_swallowed() {
+        for outcome in [Ok(false), Err("prepared initialization failure".into())] {
+            assert!(
+                configure_provider("coreml", true, &["cpu", "coreml"], |_, strict| {
+                    assert!(strict);
+                    outcome
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn optional_runtime_failures_explain_unchanged_configuration() {
+        for outcome in [Ok(false), Err("prepared initialization failure".into())] {
+            let message = configure_provider("coreml", false, &["cpu", "coreml"], |_, _| outcome)
+                .unwrap()
+                .unwrap();
+            assert!(message.contains("existing runtime configuration unchanged"));
+            assert!(!message.contains("configured with CPU fallback"));
+        }
+    }
+
+    #[test]
+    fn auto_selects_compiled_accelerator_without_claiming_device_execution() {
+        for (name, provider) in [
+            ("coreml", EmbeddingExecutionProvider::CoreMl),
+            ("cuda", EmbeddingExecutionProvider::Cuda),
+        ] {
+            let message = configure_provider("auto", true, &["cpu", name], |selected, strict| {
+                assert_eq!(selected, provider);
+                assert!(strict);
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+            assert!(message.contains(name));
+            assert!(message.contains("not yet verified"));
+        }
+    }
+
+    #[test]
+    fn explicit_cpu_does_not_initialize_runtime() {
+        assert!(
+            configure_provider("cpu", true, &["cpu", "coreml"], |_, _| {
+                panic!("CPU selection must preserve default initialization")
+            })
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn capabilities_match_compiled_target() {
+        let providers = compiled_embedding_providers();
+        assert_eq!(providers[0], "cpu");
+        assert_eq!(
+            providers.contains(&"coreml"),
+            cfg!(all(feature = "gpu-embeddings", target_vendor = "apple"))
+        );
+        assert_eq!(
+            providers.contains(&"cuda"),
+            cfg!(all(
+                feature = "gpu-embeddings",
+                any(target_os = "linux", target_os = "windows")
+            ))
+        );
     }
 }

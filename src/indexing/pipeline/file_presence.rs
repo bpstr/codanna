@@ -17,12 +17,12 @@ pub(super) struct FileInventory {
 impl FileInventory {
     pub(super) fn replace(&mut self, id: FileId, path: Option<PathBuf>) {
         if let Some(old) = self.by_id.remove(&id) {
-            if let Some(key) = stem_key(&old) {
-                if let Some(count) = self.stems.get_mut(&key) {
-                    *count -= 1;
-                    if *count == 0 {
-                        self.stems.remove(&key);
-                    }
+            if let Some(key) = stem_key(&old)
+                && let Some(count) = self.stems.get_mut(&key)
+            {
+                *count -= 1;
+                if *count == 0 {
+                    self.stems.remove(&key);
                 }
             }
             if let Some(count) = self.paths.get_mut(&old) {

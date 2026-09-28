@@ -694,10 +694,6 @@ fn is_module_prefix(prefix: &str, path: &str, separator: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(separator))
 }
 
-/// Trait for symbol cache used in pipeline resolution.
-///
-/// Implemented by `SymbolLookupCache` (DashMap-based parallel pipeline cache).
-/// Provides methods for resolving imports and symbols without hitting Tantivy.
 /// Absence is meaningful only for a complete persisted file view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilePresence {

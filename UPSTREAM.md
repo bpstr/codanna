@@ -10,7 +10,8 @@ Last reviewed: 2026-09-28
 - Verified GitHub parent and source: `bartolli/codanna`
 - Verified fork/upstream default branches: `main` / `main`
 - Coverage window: 2026-09-21 through 2026-09-28 (UTC)
-- Inspected fork main: `705f946982437941eb845d76c524129c868c151f`
+- Initial fork base: `705f946982437941eb845d76c524129c868c151f`
+- Rechecked and integrated fork main: `f8018e78db3eb7058141e435a7f0c4f11bbb182e`
 - Inspected upstream main: `58295d290f70c2ca46a5ace48fe2aab8687d7d6e`
 - Previous upstream baseline: `12e823c4d965dc8269322869df760dd12d19e415`
 - Latest inspected release: v0.16.0; the 19 later upstream commits are unreleased.
@@ -61,7 +62,11 @@ were checked: #70, #73-#83. None implements the above config-sync, retry, or
 file-presence fixes. In particular, #83 prepares isolated-project fixtures, not
 the missing import classifier; this change does not copy or edit those fixtures.
 The retrieval, representation, document support, and corpus-drift PRs remain
-independent. Their draft fixtures are not evidence that a fix has shipped or passed.
+independent. A final recheck found #70 and #73 merged on `f8018e7`; those changes
+are integrated unchanged. The remaining 10 drafts are #74-#83. The updated #80
+head `42e8ee4a973e06499dd3b86b8778272a7a31a0b0` adds segment-measurement
+fixtures and a measured receipt, not any of these fixes. Its prepared-data test
+result is scoped to that PR and is not qualification of this adaptation.
 
 ### Compatibility and validation boundaries
 
@@ -77,11 +82,14 @@ pending-work journal: a process crash or shutdown while a writer remains unavail
 can still require graph recovery/rebuild. Partial-write failures are surfaced rather
 than represented as safe retries.
 
-The new fixtures are deterministic, local, and disable semantic providers. Source
-inspection and `git diff --check` were performed during preparation. Rust test results
-must be taken from the adaptation PR's exact-head CI receipts, not inferred from this
-fixture list or upstream's green checks. Native macOS/Windows, million-symbol scaling,
-and full transport shutdown are separate qualification scopes.
+The new fixtures are deterministic, local, and disable semantic providers. On
+implementation commit `4f626009a54219f3c87589d31b318803fde02da9`,
+[run 36413674627](https://github.com/bpstr/codanna/actions/runs/36413674627)
+passed formatting, 5 focused unit regressions, 7 upstream integration regressions
+(2 scale witnesses intentionally ignored), and all 23 export-barrel regressions.
+That receipt predates integration of `f8018e7`; combined-head checks must be
+verified separately. Native macOS/Windows, million-symbol scaling, and full
+transport shutdown are separate qualification scopes, not implied by these passes.
 
 ## Upstream regression suite
 

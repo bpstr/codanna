@@ -174,10 +174,10 @@ impl WriteStage {
 
 impl Drop for WriteStage {
     fn drop(&mut self) {
-        if self.batch_started {
-            if let Err(error) = self.index.rollback_batch() {
-                tracing::error!(target: "pipeline", "Failed to discard unfinished relationship batch: {error}");
-            }
+        if self.batch_started
+            && let Err(error) = self.index.rollback_batch()
+        {
+            tracing::error!(target: "pipeline", "Failed to discard unfinished relationship batch: {error}");
         }
     }
 }

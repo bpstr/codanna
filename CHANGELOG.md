@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP `find_symbol` accepts a typed positive `symbol_id` for definition
+  disambiguation, alongside name lookup and the legacy `name=symbol_id:N` form.
+  Unknown IDs and language mismatches return no matches; conflicting targets
+  are rejected. IDs remain local to the selected workspace/index.
+
 ### Fixed
 
 - Config synchronization now diffs roots missing from metadata against existing
