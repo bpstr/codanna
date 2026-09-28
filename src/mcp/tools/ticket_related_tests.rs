@@ -25,7 +25,8 @@ fn fixture_with_public_symbol(
         ..Default::default()
     };
     settings.semantic_search.enabled = false;
-    let index = IndexFacade::new(Arc::new(settings)).unwrap();
+    let settings = Arc::new(settings);
+    let index = IndexFacade::new(settings.clone()).unwrap();
     let storage = index.document_index();
     storage.start_batch().unwrap();
     for id in 1..=count {
@@ -67,7 +68,12 @@ fn fixture_with_public_symbol(
             .unwrap();
     }
     writer.flush().unwrap();
-    (temp, index)
+    // A delayed notification from our own commit can reload this reader again
+    // after commit_batch's explicit reload. Query a fresh committed reader so
+    // budget assertions do not race that unrelated generation advance.
+    drop(writer);
+    drop(index);
+    (temp, IndexFacade::new(settings).unwrap())
 }
 
 #[test]
