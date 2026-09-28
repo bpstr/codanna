@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "finding": "F10",
+  "status": "prepared_not_run",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "exact",
+      "tool": "find_symbol",
+      "arguments": {
+        "name": "accountWeekStart"
+      },
+      "expected_count": 2
+    },
+    {
+      "id": "scoped",
+      "tool": "search_symbols",
+      "arguments": {
+        "query": "accountWeekStart",
+        "path_prefix": "account.ts"
+      },
+      "expected": [
+        "account.ts:accountWeekStart"
+      ]
+    },
+    {
+      "id": "caller",
+      "target": "account.ts:accountWeekStart",
+      "expected_unique_callers": [
+        "account.ts:displayWeek"
+      ],
+      "excluded_targets": [
+        "reference.ts:accountWeekStart"
+      ]
+    },
+    {
+      "id": "negative",
+      "query": "UniqueNonexistentRetrievalHoldoutSentinel",
+      "literal_support": false
+    }
+  ]
+}
