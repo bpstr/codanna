@@ -12,6 +12,72 @@ fn hardening_workspace_preserves_backend_invalid_parameter_errors() {
     assert_eq!(mapped.message, error.message);
 }
 
+/// No query arrives to trigger cleanup. The timer must evict an old idle slot,
+/// preserve a pinned slot and a recently used slot, then stop on cancellation.
+#[tokio::test]
+async fn workspace_idle_cleanup_runs_without_queries_and_preserves_pins() {
+    let slots: Slots = Arc::new(Mutex::new(HashMap::new()));
+    let old = Instant::now() - IDLE_TIMEOUT - Duration::from_secs(1);
+    let pinned = Arc::new(Mutex::new(Slot {
+        last_used: old,
+        ..Slot::default()
+    }));
+    {
+        let mut entries = slots.lock();
+        entries.insert(
+            "idle".into(),
+            Arc::new(Mutex::new(Slot {
+                last_used: old,
+                ..Slot::default()
+            })),
+        );
+        entries.insert("pinned".into(), pinned.clone());
+        entries.insert("recent".into(), Arc::new(Mutex::new(Slot::default())));
+    }
+    let stop = CancellationToken::new();
+    let cleanup = tokio::spawn(idle_cleanup(
+        slots.clone(),
+        stop.clone(),
+        Duration::from_millis(10),
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while slots.lock().contains_key("idle") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("idle slot must expire without a new query");
+    assert!(slots.lock().contains_key("pinned"));
+    assert!(slots.lock().contains_key("recent"));
+    drop(pinned);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while slots.lock().contains_key("pinned") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("released slot must become evictable");
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(2), cleanup)
+        .await
+        .expect("cleanup must stop promptly")
+        .unwrap();
+    assert!(slots.lock().contains_key("recent"));
+}
+
+#[tokio::test]
+async fn workspace_idle_cleanup_does_not_keep_dropped_pool_alive() {
+    let pool = WorkerPool::new(std::env::current_exe().unwrap(), Budget::new()).unwrap();
+    let slots = Arc::downgrade(&pool.slots);
+    let cleanup = pool.tasks.lock().pop().expect("pool owns idle cleanup");
+    drop(pool);
+    tokio::time::timeout(Duration::from_secs(2), cleanup)
+        .await
+        .expect("dropping the pool must stop idle cleanup")
+        .unwrap();
+    assert!(slots.upgrade().is_none());
+}
+
 #[derive(Clone)]
 struct ControlledReader {
     events: mpsc::UnboundedSender<String>,
@@ -90,7 +156,9 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
             git_ignore: None,
         },
     });
-    let (_sender, receiver) = watch::channel(Event::Ready(reader));
+    let close = reader.close.clone();
+    let (sender, receiver) = watch::channel(Event::Ready(reader));
+    drop(sender);
     pool.slots.lock().insert(
         workspace.id.as_str().into(),
         Arc::new(Mutex::new(Slot {
@@ -132,6 +200,20 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
     }
     entered.sort();
     assert_eq!(entered, ["blocked-a", "blocked-b"]);
+    {
+        let mut slots = pool.slots.lock();
+        slots.get(workspace.id.as_str()).unwrap().lock().last_used =
+            Instant::now() - IDLE_TIMEOUT - Duration::from_secs(1);
+        prune_idle(&mut slots);
+    }
+    assert!(pool.is_loaded(workspace.id.as_str()).await);
+    assert!(!close.is_cancelled(), "active queries pin their reader");
+    pool.slots
+        .lock()
+        .get(workspace.id.as_str())
+        .unwrap()
+        .lock()
+        .last_used = Instant::now();
     cancel_a.cancel();
     assert!(
         tokio::time::timeout(Duration::from_secs(2), a)
@@ -176,6 +258,20 @@ async fn hardening_workspace_pool_overlaps_queries_and_cancels_only_the_request(
         .is_ok()
     );
     assert!(pool.is_loaded(workspace.id.as_str()).await);
+    {
+        let mut slots = pool.slots.lock();
+        slots.get(workspace.id.as_str()).unwrap().lock().last_used =
+            Instant::now() - IDLE_TIMEOUT - Duration::from_secs(1);
+        prune_idle(&mut slots);
+    }
+    assert!(!pool.is_loaded(workspace.id.as_str()).await);
+    assert!(close.is_cancelled(), "eviction must signal reader shutdown");
+    let replacement = pool.slot(workspace.id.as_str()).unwrap();
+    assert!(
+        replacement.lock().event.is_none(),
+        "next use starts a new load"
+    );
+    drop(replacement);
     pool.shutdown().await;
     client.cancel().await.unwrap();
     server.cancel().await.unwrap();

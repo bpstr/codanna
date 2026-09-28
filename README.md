@@ -216,6 +216,59 @@ chunks without embeddings, active generation and backend/input identity. These
 counts describe committed evidence and do not establish freshness against current
 source files. Run-progress diagnostics currently cover CLI document indexing.
 
+### Search document candidates
+
+```bash
+codanna documents search "Account preferences" --collection docs --literal --json
+codanna mcp search_documents 'query:Account preferences' collection:docs literal:true score_floor:1 --json
+```
+
+`--literal` (MCP `literal:true`) matches a case-sensitive substring in indexed
+chunk content, including punctuation and Unicode. It does not load or call an
+embedding backend. Separate heading-context metadata does not participate, and
+phrases spanning chunk boundaries may not match. Search uses the indexed snapshot;
+changes to source files require indexing before they become searchable.
+
+`--score-floor` (MCP `score_floor`) is an inclusive, finite threshold applied
+before final result selection. Scores use cosine similarity for semantic retrieval,
+lexical rank for lexical retrieval, and a constant `1.0` for literal matches.
+Floors are not interchangeable between modes. Omit the option to preserve existing
+retrieval behavior: semantic search still applies bounded lookahead, its relative
+cosine cutoff and source balancing; lexical search uses bounded lookahead, term
+coverage and source balancing. Result limits and source balancing also apply to
+literal matches. Literal search scans the filtered indexed chunks and may be slower
+for large collections.
+
+MCP structured responses include `retrieval` metadata and `results`. CLI JSON puts
+the results in `data` and retrieval metadata in `meta.retrieval`, including empty
+searches. Metadata identifies the mode, score units, requested/effective floor and
+candidate count. All modes report `support_status: not_assessed`: a retrieved
+candidate, including a literal match, does not establish authority or substantiate
+a claim. Scores are not probabilities.
+
+### Inspect document source drift
+
+```bash
+codanna documents drift docs --json
+codanna documents drift docs --max-files 100 --max-bytes 8388608 --max-entries 10000
+codanna mcp document_drift collection:docs --json
+```
+
+Drift inspection compares committed source hashes with the configured collection's
+current files. It reports changed, missing, new, unchanged, unreadable and unsupported
+sources, along with the committed generation and effective limits. It reads existing
+metadata without indexing, repairing state, deleting generations or loading embeddings.
+An absent index or unknown collection is an error; inspection creates neither.
+
+Defaults are 100 files, 8 MiB of source content and 10,000 discovery entries. Maximums
+are 1,000 files, 64 MiB and 100,000 entries. Ignored entries consume the discovery
+budget; ignored directories are pruned. Discovery preserves collection globs and
+`.codannaignore` rules, with a separate 1 MiB ignore-policy budget and 64-level depth
+limit. Metadata files have a separate 128 MiB read limit. Limit exhaustion is reported
+as truncation or an explicit error. Candidate counts are not corpus totals when
+discovery is incomplete. Unsupported files, read failures and partial reports never
+establish freshness. Concurrent source edits or publication may require a retry.
+
 ## What It Does
 
 Your AI assistant gains structured knowledge of your code:
@@ -289,3 +342,35 @@ Attribution required. See [NOTICE](NOTICE).
 ---
 
 Built with Rust.
+
+### Local embedding acceleration on Apple Silicon
+
+Run `codanna embedding-info` to inspect providers compiled into the binary. This
+command does not read project configuration, initialize ONNX Runtime, or load a
+model. A CPU-only binary cannot enable CoreML through an environment variable.
+
+For an Apple build with CoreML support, the build command is:
+
+```bash
+cargo build --release --locked --features gpu-coreml
+```
+
+Select the provider in the environment of the CLI or MCP server process:
+
+```bash
+CODANNA_EMBED_PROVIDER=coreml CODANNA_EMBED_PROVIDER_STRICT=1 codanna --config .codanna/settings.toml config
+```
+
+The configuration command verifies selection without creating an embedding
+session. Unset `CODANNA_EMBED_PROVIDER` (or set it to `cpu`) to retain CPU behavior.
+`auto` selects the target's compiled accelerator when available. Non-strict
+selection warns and preserves the existing runtime configuration when selection
+fails. Strict selection exits with status 2 for an invalid name, unavailable
+compiled provider, initialization failure, or a runtime initialized too early;
+provider registration failures also fail subsequent session creation.
+
+Compiled support and successful selection do not establish GPU execution.
+CoreML may use CPU, GPU, or Neural Engine, and unsupported graph nodes can remain
+on CPU even with strict registration. Device placement and performance require
+separate verification. Keep `semantic_search.embedding_threads = 1` on a busy
+small-memory Mac; total RAM alone does not establish available inference headroom.

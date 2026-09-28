@@ -15,6 +15,46 @@ use crate::mcp::server::{CodeIntelligenceServer, format_relative_time, generate_
 
 #[tool_router(router = search_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
+    #[tool(
+        description = "Compare committed document source hashes with current collection files without indexing or embeddings. Reports changed, missing, new, unchanged and unreadable sources, generation identity and explicit discovery/file/byte limits. Truncation is not proof of freshness."
+    )]
+    pub async fn document_drift(
+        &self,
+        Parameters(request): Parameters<crate::mcp::DocumentDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        request
+            .validate()
+            .map_err(|error| McpError::invalid_params(error, None))?;
+        let facade = self.facade.read().await;
+        let settings = facade.settings().clone();
+        let boundary = facade
+            .network_workspace
+            .clone()
+            .or_else(|| settings.workspace_root.clone());
+        drop(facade);
+        if !settings
+            .documents
+            .collections
+            .contains_key(&request.collection)
+        {
+            return Err(McpError::invalid_params(
+                "Unknown document collection",
+                None,
+            ));
+        }
+        crate::runtime::blocking(move || {
+            let report = crate::documents::drift::inspect(&settings, &request, boundary.as_deref())
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let data = serde_json::to_value(&report)
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let mut response = CallToolResult::success(vec![ContentBlock::text(data.to_string())]);
+            response.structured_content = Some(data);
+            Ok(response)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
+    }
+
     #[tool(description = "Get information about the indexed codebase")]
     pub async fn get_index_info(
         &self,
@@ -175,6 +215,9 @@ impl CodeIntelligenceServer {
 
         match results {
             Ok(results) => {
+                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                    threshold, indexer.settings().semantic_search.threshold, results.len(),
+                );
                 if results.is_empty() {
                     let mut output =
                         format!("No semantically similar documentation found for: {query}");
@@ -186,7 +229,9 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    return Ok(response);
                 }
 
                 let mut result = format!(
@@ -236,7 +281,9 @@ impl CodeIntelligenceServer {
                     result.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+                let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+                response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search failed: {e}"
@@ -303,6 +350,9 @@ impl CodeIntelligenceServer {
 
         match search_results {
             Ok(results) => {
+                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                    threshold, indexer.settings().semantic_search.threshold, results.len(),
+                );
                 if results.is_empty() {
                     let mut output = format!("No documentation found matching query: {query}");
                     // Add guidance for no results
@@ -313,7 +363,9 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    return Ok(response);
                 }
 
                 let mut output = String::new();
@@ -794,7 +846,9 @@ impl CodeIntelligenceServer {
                 }
 
                 let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
-                response.structured_content = Some(serde_json::json!({ "impact": impact_contexts }));
+                response.structured_content = Some(serde_json::json!({
+                    "impact": impact_contexts, "retrieval": retrieval
+                }));
                 Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
@@ -919,7 +973,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Search indexed documents (markdown, text files) using natural language queries. Returns relevant chunks with context and highlighted keywords."
+        description = "Retrieve indexed document chunks using configured semantic/lexical search or a case-sensitive literal substring without embeddings. Optional finite score_floor uses native score units. Returned candidates do not certify supporting evidence or authority."
     )]
     pub async fn search_documents(
         &self,
@@ -927,29 +981,42 @@ impl CodeIntelligenceServer {
             query,
             collection,
             limit,
+            literal,
+            score_floor,
         }): Parameters<SearchDocumentsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
-        let store = match &self.document_store {
-            Some(s) => s,
-            None => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(
-                    "Document search not available. No document collections are indexed.\n\n\
-                    To enable:\n\
-                    1. Add a collection: codanna documents add-collection docs docs/\n\
-                    2. Index it: codanna documents index\n\
-                    3. Restart the MCP server",
-                )]));
-            }
+        let options = crate::documents::DocumentSearchOptions {
+            literal,
+            score_floor,
         };
-
-        let preview_config = self.facade.read().await.settings().documents.search.clone();
-        // Queries never perform auto-index mutations. A document writer owns its
-        // mmap state exclusively; fail fast rather than waiting behind a full sync.
-        let mut store = store
-            .try_read()
-            .map_err(|_| McpError::internal_error("Document index is busy; retry the query", None))?
-            .query_snapshot();
+        options
+            .validate()
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let facade = self.facade.read().await;
+        let mut settings = (**facade.settings()).clone();
+        settings.workspace_root = facade.network_workspace.clone().or(settings.workspace_root);
+        drop(facade);
+        let preview_config = settings.documents.search.clone();
+        let mut store = if let Some(store) = &self.document_store {
+            store
+                .try_read()
+                .map_err(|_| {
+                    McpError::internal_error("Document index is busy; retry the query", None)
+                })?
+                .query_snapshot()
+        } else if literal && settings.documents.enabled {
+            crate::runtime::blocking(move || {
+                crate::documents::open_literal_from_settings(&settings)
+            })
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?
+        } else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Document search not available. Run 'codanna documents index' to create the index.",
+            )]));
+        };
         crate::runtime::blocking(move || {
             let search_query = DocSearchQuery {
                 text: query.clone(),
@@ -959,12 +1026,15 @@ impl CodeIntelligenceServer {
                 preview_config: Some(preview_config),
             };
 
-            match store.search(search_query) {
+            match store.search_with_options(search_query, &options) {
                 Ok(results) => {
+                    let retrieval = store.retrieval_metadata(&options, results.len());
                     if results.is_empty() {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "No documents found for: {query}"
-                        ))]));
+                        let mut response = CallToolResult::success(vec![ContentBlock::text(format!(
+                            "No documents found for: {query}. Supporting evidence and authority have not been assessed."
+                        ))]);
+                        response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
+                        return Ok(response);
                     }
 
                     let mut output = format!(
@@ -993,7 +1063,10 @@ impl CodeIntelligenceServer {
                         output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
                     }
 
-                    Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                    output.push_str("Retrieval candidates only; supporting evidence and authority have not been assessed.\n");
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
+                    Ok(response)
                 }
                 Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Document search failed: {e}"

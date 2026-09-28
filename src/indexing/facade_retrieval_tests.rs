@@ -110,6 +110,7 @@ async fn symbol_listing_reports_total_and_empty_page_without_false_absence() {
         let response = server
             .find_symbol(Parameters(FindSymbolRequest {
                 name: "save".into(),
+                symbol_id: None,
                 lang: None,
                 limit: 100,
                 offset,
@@ -361,6 +362,7 @@ async fn reference_context_surfaces_remain_distinct_from_calls() {
     let response = server
         .find_symbol(Parameters(FindSymbolRequest {
             name: "handle".into(),
+            symbol_id: None,
             lang: None,
             limit: 100,
             offset: 0,
