@@ -112,6 +112,12 @@ pub struct EmbeddingDiagnostics {
 /// Read-only comparison against caller-supplied current collection paths.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SourceDriftReport {
+    pub collection: String,
+    pub max_files: usize,
+    pub max_bytes: usize,
+    pub max_entries: usize,
+    pub entries_visited: usize,
+    pub discovery_truncated: bool,
     pub generation: Option<String>,
     pub candidate_files: usize,
     pub truncated: bool,
@@ -1027,9 +1033,7 @@ impl DocumentStore {
         self.file_states.keys().cloned().collect()
     }
 
-    /// Compare a bounded set of source contents without ingestion or embeddings.
-    /// Current paths must be enumerated by the caller for the named collection;
-    /// this method does not recursively scan a workspace.
+    /// Compare supplied source paths without ingestion or embedding work.
     pub fn source_drift(
         &self,
         collection: &str,
@@ -1037,90 +1041,20 @@ impl DocumentStore {
         max_files: usize,
         max_bytes: usize,
     ) -> SourceDriftReport {
-        use std::io::Read;
-        let max_files = max_files.min(1000);
-        let max_bytes = max_bytes.min(64 * 1024 * 1024);
-        let paths: std::collections::BTreeSet<_> = self
-            .file_states
-            .iter()
-            .filter(|(_, state)| state.collection == collection)
-            .map(|(path, _)| path.clone())
-            .chain(
-                current_paths
-                    .iter()
-                    .map(|path| normalize_source_path(path))
-                    .filter(|path| {
-                        self.file_states
-                            .get(path)
-                            .is_none_or(|state| state.collection == collection)
-                    }),
-            )
-            .collect();
-        let mut report = SourceDriftReport {
-            generation: self.current_generation.clone(),
-            candidate_files: paths.len(),
-            truncated: paths.len() > max_files,
-            bytes_read: 0,
-            files: Vec::new(),
+        let request = super::drift::DocumentDriftRequest {
+            collection: collection.to_owned(),
+            max_files: max_files.min(1000),
+            max_bytes: max_bytes.min(64 * 1024 * 1024),
+            max_entries: 0,
         };
-        for path in paths.into_iter().take(max_files) {
-            let indexed = self
-                .file_states
-                .get(&path)
-                .filter(|state| state.collection == collection)
-                .map(|state| state.content_hash.clone());
-            let mut entry = SourceDriftEntry {
-                path: path.clone(),
-                status: "unreadable",
-                indexed_sha256: indexed,
-                current_sha256: None,
-            };
-            match std::fs::File::open(&path) {
-                Ok(file) => {
-                    let remaining = max_bytes.saturating_sub(report.bytes_read);
-                    let length = file.metadata().ok().map(|metadata| metadata.len());
-                    if length.is_none() {
-                        report.files.push(entry);
-                        continue;
-                    }
-                    if length.is_some_and(|length| length > remaining as u64) {
-                        entry.status = "byte_budget_exceeded";
-                        report.truncated = true;
-                        report.files.push(entry);
-                        continue;
-                    }
-                    let mut bytes = Vec::new();
-                    match file.take(remaining as u64).read_to_end(&mut bytes) {
-                        Ok(_) if Some(bytes.len() as u64) == length => {
-                            report.bytes_read += bytes.len();
-                            if let Ok(content) = std::str::from_utf8(&bytes) {
-                                let hash = calculate_hash(content);
-                                entry.status = match entry.indexed_sha256.as_ref() {
-                                    None => "new",
-                                    Some(old) if old == &hash => "unchanged",
-                                    Some(_) => "changed",
-                                };
-                                entry.current_sha256 = Some(hash);
-                            }
-                        }
-                        Ok(_) => {
-                            report.bytes_read += bytes.len();
-                            entry.status = "changed_during_read";
-                            report.truncated = true;
-                        }
-                        Err(_) => {
-                            report.bytes_read += bytes.len();
-                        }
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    entry.status = "missing";
-                }
-                Err(_) => {}
-            }
-            report.files.push(entry);
-        }
-        report
+        super::drift::compare_sources(
+            &self.file_states,
+            self.current_generation.as_deref(),
+            &request,
+            current_paths,
+            self.workspace_root.as_deref(),
+            self.source_exclusion.as_deref().unwrap_or(&self.base_path),
+        )
     }
 
     /// Mark indexed collections for replacement without discarding their source
@@ -2692,6 +2626,45 @@ pub struct CollectionStats {
     pub chunk_count: usize,
     /// Number of files indexed.
     pub file_count: usize,
+}
+
+/// Read only the committed provenance. Never acquire writer locks, repair mirrors,
+/// load vectors/models, or collect obsolete generations.
+pub(super) fn load_source_snapshot(
+    base: &Path,
+    boundary: Option<&Path>,
+) -> StoreResult<(Option<String>, HashMap<PathBuf, FileState>)> {
+    let check = |path: &Path| -> StoreResult<()> {
+        if let Some(root) = boundary {
+            crate::indexing::facade::IndexFacade::contained_source(root, path)
+                .map_err(|error| DocumentStoreError::Index(error.to_string()))?;
+        }
+        Ok(())
+    };
+    check(&base.join("tantivy/meta.json"))?;
+    let metadata: serde_json::Value =
+        generation::read_json(&base.join("tantivy/meta.json"), 128 * 1024 * 1024)?;
+    let payload = metadata.get("payload").and_then(serde_json::Value::as_str);
+    if let Some(name) = payload.and_then(|value| value.strip_prefix("codanna-documents-v1:")) {
+        check(&base.join("generations").join(name))?;
+    } else if payload.is_none() {
+        check(&base.join("state.json"))?;
+    }
+    let (name, state) = match generation::load(base, payload)? {
+        Some((name, generation)) => (Some(name), generation.state),
+        None => (
+            None,
+            generation::read_json::<PersistedState>(&base.join("state.json"), 128 * 1024 * 1024)?,
+        ),
+    };
+    Ok((
+        name,
+        state
+            .file_states
+            .into_iter()
+            .map(|(path, state)| (PathBuf::from(path), state))
+            .collect(),
+    ))
 }
 
 /// Persisted state for the document store.

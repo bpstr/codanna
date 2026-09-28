@@ -46,6 +46,53 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
     };
 
     match action {
+        DocumentAction::Drift {
+            collection,
+            max_files,
+            max_bytes,
+            max_entries,
+            json,
+        } => {
+            let request = crate::documents::DocumentDriftRequest {
+                collection,
+                max_files,
+                max_bytes,
+                max_entries,
+            };
+            match crate::documents::inspect_source_drift(config, &request) {
+                Ok(report) => {
+                    if json {
+                        print_json(&report);
+                    } else {
+                        println!("Collection: {}", report.collection);
+                        println!(
+                            "Generation: {}",
+                            report.generation.as_deref().unwrap_or("legacy/unknown")
+                        );
+                        println!(
+                            "Inspected {} of {} discovered/indexed candidates; {} bytes; {} entries visited; truncated: {}",
+                            report.files.len(),
+                            report.candidate_files,
+                            report.bytes_read,
+                            report.entries_visited,
+                            report.truncated
+                        );
+                        for entry in report.files {
+                            println!("{}: {}", entry.status, entry.path.display());
+                        }
+                    }
+                }
+                Err(error) => {
+                    if json {
+                        print_json(&serde_json::json!({"error":error.to_string()}));
+                    } else {
+                        eprintln!("Document drift inspection failed: {error}");
+                    }
+                    std::process::exit(2);
+                }
+            }
+        }
+
         DocumentAction::Status { json } => match crate::documents::status::read_runs(&doc_path) {
             Ok(runs) => {
                 if json {

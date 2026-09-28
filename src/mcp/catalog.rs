@@ -30,6 +30,7 @@ tools! {
     SearchSymbols => ("search_symbols",["query","limit","kind","module","lang","path_prefix"],["query"],Some("query"),Read),
     SemanticSearchDocs => ("semantic_search_docs",["query","limit","threshold","lang"],["query"],Some("query"),Read),
     SemanticSearchWithContext => ("semantic_search_with_context",["query","limit","threshold","lang"],["query"],Some("query"),Read),
+    DocumentDrift => ("document_drift",["collection","max_files","max_bytes","max_entries"],["collection"],Some("collection"),Read),
     SearchDocuments => ("search_documents",["query","collection","limit"],["query"],Some("query"),Read),
     SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations","include_related_code","profile","include_knowledge_links","knowledge_repo","coverage_limit","coverage_offset","coverage_snapshot","facet_filters"],["query"],Some("query"),Read),
     SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix"],["query"],Some("query"),Read),

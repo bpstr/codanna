@@ -15,6 +15,46 @@ use crate::mcp::server::{CodeIntelligenceServer, format_relative_time, generate_
 
 #[tool_router(router = search_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
+    #[tool(
+        description = "Compare committed document source hashes with current collection files without indexing or embeddings. Reports changed, missing, new, unchanged and unreadable sources, generation identity and explicit discovery/file/byte limits. Truncation is not proof of freshness."
+    )]
+    pub async fn document_drift(
+        &self,
+        Parameters(request): Parameters<crate::mcp::DocumentDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        request
+            .validate()
+            .map_err(|error| McpError::invalid_params(error, None))?;
+        let facade = self.facade.read().await;
+        let settings = facade.settings().clone();
+        let boundary = facade
+            .network_workspace
+            .clone()
+            .or_else(|| settings.workspace_root.clone());
+        drop(facade);
+        if !settings
+            .documents
+            .collections
+            .contains_key(&request.collection)
+        {
+            return Err(McpError::invalid_params(
+                "Unknown document collection",
+                None,
+            ));
+        }
+        crate::runtime::blocking(move || {
+            let report = crate::documents::drift::inspect(&settings, &request, boundary.as_deref())
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let data = serde_json::to_value(&report)
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            let mut response = CallToolResult::success(vec![ContentBlock::text(data.to_string())]);
+            response.structured_content = Some(data);
+            Ok(response)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
+    }
+
     #[tool(description = "Get information about the indexed codebase")]
     pub async fn get_index_info(
         &self,
