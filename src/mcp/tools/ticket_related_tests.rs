@@ -25,7 +25,18 @@ fn fixture_with_public_symbol(
         ..Default::default()
     };
     settings.semantic_search.enabled = false;
-    let index = IndexFacade::new(Arc::new(settings)).unwrap();
+    let settings = Arc::new(settings);
+    let storage =
+        crate::storage::DocumentIndex::new(settings.index_path.join("tantivy"), &settings)
+            .unwrap()
+            .with_manual_reload_for_test()
+            .unwrap();
+    let index = IndexFacade::from_components(
+        Arc::new(storage),
+        crate::indexing::Pipeline::with_settings(settings.clone()),
+        None,
+        settings,
+    );
     let storage = index.document_index();
     storage.start_batch().unwrap();
     for id in 1..=count {

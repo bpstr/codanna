@@ -544,6 +544,7 @@ pub async fn run(
                     crate::mcp::service::page_symbols(Vec::new(), request.offset, request.limit)
                 }
             };
+            let semantic_definitions = facade.semantic_definition_status(&symbols);
             if !symbols.is_empty() {
                 let mut results = Vec::new();
 
@@ -565,9 +566,9 @@ pub async fn run(
                         });
                     }
                 }
-                Some((results, page))
+                Some((results, page, semantic_definitions))
             } else {
-                Some((Vec::new(), page))
+                Some((Vec::new(), page, semantic_definitions))
             }
         } else {
             None
@@ -1400,7 +1401,7 @@ pub async fn run(
                 }
             } else if json && tool == "find_symbol" {
                 // Use pre-collected data for JSON output
-                if let Some((symbol_contexts, page)) = find_symbol_data {
+                if let Some((symbol_contexts, page, semantic_definitions)) = find_symbol_data {
                     use crate::io::envelope::{EntityType, Envelope};
                     use crate::io::guidance_engine::generate_guidance_from_config;
 
@@ -1419,6 +1420,8 @@ pub async fn run(
                             Envelope::not_found(format!("Symbol '{name}' not found"))
                                 .with_entity_type(EntityType::Symbol)
                                 .with_query(name);
+                        envelope.meta.semantic_definitions =
+                            Some(serde_json::json!(semantic_definitions));
                         envelope.meta.total = Some(page.total);
                         envelope.meta.offset = Some(page.offset);
                         envelope.meta.limit = Some(page.limit);
@@ -1446,6 +1449,8 @@ pub async fn run(
                             .with_count(count)
                             .with_query(name)
                             .with_message(format!("Found {count} symbol(s)"));
+                        envelope.meta.semantic_definitions =
+                            Some(serde_json::json!(semantic_definitions));
                         envelope.meta.total = Some(page.total);
                         envelope.meta.offset = Some(page.offset);
                         envelope.meta.limit = Some(page.limit);

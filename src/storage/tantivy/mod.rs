@@ -99,6 +99,18 @@ impl std::fmt::Debug for DocumentIndex {
 }
 
 impl DocumentIndex {
+    /// Fixed-graph fixtures must not race asynchronous reader notifications.
+    /// Writes still publish through commit_batch's explicit reload.
+    #[cfg(test)]
+    pub(crate) fn with_manual_reload_for_test(mut self) -> StorageResult<Self> {
+        self.reader = self
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()?;
+        Ok(self)
+    }
+
     /// Reader-local generation. Pair it with this index instance's identity;
     /// it changes on a successful reload, including externally committed edits.
     pub fn generation(&self) -> u64 {

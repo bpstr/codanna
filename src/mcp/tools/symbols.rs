@@ -99,7 +99,7 @@ impl CodeIntelligenceServer {
                     output.push('\n');
                 }
                 let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
-                response.structured_content = Some(serde_json::json!({ "pagination": page }));
+                response.structured_content = Some(serde_json::json!({ "pagination": page, "semantic_definitions": [] }));
                 return Ok(SymbolToolResponse { result: response, outcome });
             }
 
@@ -321,8 +321,17 @@ impl CodeIntelligenceServer {
             if let Some(next_offset) = page.next_offset {
                 result.push_str(&format!("\nMore matching symbols: repeat this query with offset:{next_offset} limit:{limit}.\n"));
             }
+            let semantic_definitions = indexer.semantic_definition_status(&symbols);
+            for status in &semantic_definitions {
+                result.push_str(&format!(
+                    "\nSemantic symbol_id:{}: eligible={}, vectors={} ({}), representation={}, generation_alignment={}, freshness={}.\n",
+                    status.symbol_id, status.eligible, status.vector_presence,
+                    status.vector_presence_basis, status.representation_status,
+                    status.generation_alignment, status.freshness,
+                ));
+            }
             let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
-            response.structured_content = Some(serde_json::json!({ "pagination": page }));
+            response.structured_content = Some(serde_json::json!({ "pagination": page, "semantic_definitions": semantic_definitions }));
             Ok(SymbolToolResponse { result: response, outcome })
         })
         .await
