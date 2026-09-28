@@ -18,9 +18,9 @@ stale; ID disambiguation does not establish source freshness.
 
 The deterministic `tests/find_symbol_id_contracts.rs` suite covers duplicate
 names, typed/legacy equivalence, ID and language exclusions, pagination, malformed
-requests and schema discoverability. Compilation and execution are deferred under
-the requester's local resource restriction. Semantic search is disabled; no model
-or provider is required.
+requests and schema discoverability. CLI fixtures cover both text and JSON
+rendering, including an explicitly empty name alongside a typed ID. Semantic
+search is disabled; no model or provider is required.
 
 ## Remaining findings
 
@@ -30,8 +30,8 @@ floor, configured floor, post-top-K filter stage and unassessed support. Omittin
 a floor preserves existing nearest-neighbor behavior; the configured value is
 not implicitly applied. Graph counts describe distinct indexed symbols, with
 call-site totals and unresolved/external-call coverage explicitly unreported.
-Impact metadata remains present alongside the new record. Compilation and
-execution remain deferred.
+Impact metadata remains present alongside the new record. A deterministic unit
+test verifies the distinction between omitted and explicit score floors.
 
 The object-method emission fix is tracked separately. Other open work needs
 independent evidence before broad changes:
@@ -48,5 +48,5 @@ independent evidence before broad changes:
 | Resolver bindings | Isolated multi-project roots and real resolver fixtures | Preserve deliberate exclusions and workspace boundaries |
 | Storage/scaling | Frozen corpus and explicit future resource budget | No compaction, storage reclamation or scaling claim from duplicate stored/live totals alone |
 
-No local rebuild, watcher-mode switch, provider testing or private source
-publication is performed by this change.
+Validation uses temporary indexes and prepared data. Existing user indexes,
+watcher modes and model configuration remain unchanged.

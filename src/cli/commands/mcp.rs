@@ -366,7 +366,7 @@ pub async fn run(
             }
         }
     }
-    let arguments = arguments;
+    let mut arguments = arguments;
 
     let ticket_context_request = if tool_kind == ToolKind::SearchTicketContext {
         let request =
@@ -399,9 +399,15 @@ pub async fn run(
         Some(
             serde_json::from_value::<crate::mcp::FindSymbolRequest>(serde_json::Value::Object(map))
                 .and_then(|request| {
-                    request
+                    let target = request
                         .target_name()
-                        .map_err(<serde_json::Error as serde::de::Error>::custom)?;
+                        .map_err(<serde_json::Error as serde::de::Error>::custom)?
+                        .into_owned();
+                    // Every rendering must use the target accepted by the
+                    // typed MCP contract, including an explicitly empty name.
+                    arguments
+                        .get_or_insert_with(Default::default)
+                        .insert("name".to_owned(), serde_json::Value::String(target));
                     Ok(request)
                 })
                 .unwrap_or_else(|error| {

@@ -254,7 +254,10 @@ fn mcp_exit_codes_match_envelope_across_tools_outcomes_and_modes() {
                 args.push("--json");
             }
             let (code, stdout, stderr) = run_cli(workspace.path(), &args);
-            assert_eq!(code, 0, "typed ID must resolve: {args:?}\n{stdout}\n{stderr}");
+            assert_eq!(
+                code, 0,
+                "typed ID must resolve: {args:?}\n{stdout}\n{stderr}"
+            );
             if json_output {
                 let result: Value = serde_json::from_str(&stdout).unwrap();
                 assert_eq!(result["data"][0]["symbol"]["id"], id);
