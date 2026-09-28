@@ -343,7 +343,7 @@ Attribution required. See [NOTICE](NOTICE).
 
 Built with Rust.
 
-### Local embedding acceleration on Apple Silicon
+## Local embedding acceleration on Apple Silicon
 
 Run `codanna embedding-info` to inspect providers compiled into the binary. This
 command does not read project configuration, initialize ONNX Runtime, or load a

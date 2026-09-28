@@ -105,6 +105,7 @@ async fn missing_zero_and_conflicting_targets_fail_before_lookup() {
         json!({}),
         json!({"name":"   "}),
         json!({"symbol_id":0}),
+        json!({"name":"symbol_id:0"}),
         json!({"name":"shared","symbol_id":2}),
         json!({"name":"symbol_id:1","symbol_id":2}),
     ] {
@@ -129,5 +130,9 @@ fn advertised_schema_accepts_id_only_definition_followups() {
     let schema = serde_json::to_value(rmcp::schemars::schema_for!(FindSymbolRequest)).unwrap();
     assert!(schema["properties"].get("symbol_id").is_some());
     let required = schema["required"].as_array();
-    assert!(required.is_none_or(|fields| !fields.iter().any(|field| field == "name")));
+    assert!(required.is_none_or(|fields| {
+        !fields
+            .iter()
+            .any(|field| field == "name" || field == "symbol_id")
+    }));
 }

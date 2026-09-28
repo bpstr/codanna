@@ -129,6 +129,17 @@ impl FindSymbolRequest {
                 None,
             ));
         }
+        if self
+            .name
+            .strip_prefix("symbol_id:")
+            .and_then(|id| id.parse::<u32>().ok())
+            == Some(0)
+        {
+            return Err(rmcp::model::ErrorData::invalid_params(
+                "symbol_id must be positive",
+                None,
+            ));
+        }
         Ok(std::borrow::Cow::Borrowed(&self.name))
     }
 }

@@ -8,6 +8,20 @@
 use crate::Symbol;
 use crate::indexing::facade::IndexFacade;
 
+/// Attach ID-keyed context only when its definition is the selected row.
+/// A collision or an index change must never substitute another definition.
+pub(crate) fn selected_symbol_context(
+    facade: &IndexFacade,
+    selected: &Symbol,
+) -> Option<crate::symbol::context::SymbolContext> {
+    facade
+        .get_symbol_context(
+            selected.id,
+            crate::symbol::context::ContextIncludes::SYMBOL_CARD,
+        )
+        .filter(|context| context.symbol == *selected)
+}
+
 /// Semantic endpoint evidence contract; configured defaults are not implicitly
 /// applied to the existing omitted-threshold nearest-neighbor route.
 pub(crate) fn semantic_retrieval_metadata(
@@ -93,7 +107,7 @@ pub enum FindSymbolTarget {
     /// Matches, possibly empty. `label` is the queried name, or the
     /// resolved symbol's own name for the `symbol_id:` form.
     Symbols { symbols: Vec<Symbol>, label: String },
-    /// `symbol_id:` prefix with a non-numeric id.
+    /// `symbol_id:` prefix without a positive numeric id.
     InvalidId(String),
 }
 
@@ -124,6 +138,9 @@ pub fn try_resolve_find_symbol_target(
         let Ok(id) = id_str.parse::<u32>() else {
             return Ok(FindSymbolTarget::InvalidId(id_str.to_string()));
         };
+        if id == 0 {
+            return Ok(FindSymbolTarget::InvalidId(id_str.to_string()));
+        }
         let symbols: Vec<Symbol> = facade
             .document_index()
             .find_symbol_by_id(crate::SymbolId(id))?
@@ -172,6 +189,68 @@ pub struct SymbolPageInfo {
     pub offset: u32,
     pub limit: u32,
     pub next_offset: Option<usize>,
+}
+
+pub enum FindSymbolPageTarget {
+    Symbols {
+        symbols: Vec<Symbol>,
+        label: String,
+        page: SymbolPageInfo,
+    },
+    InvalidId(String),
+}
+
+/// Resolve and page exact-name candidates using one storage snapshot per query.
+pub fn try_resolve_find_symbol_page(
+    facade: &IndexFacade,
+    name: &str,
+    lang: Option<&str>,
+    offset: u32,
+    limit: u32,
+) -> crate::StorageResult<FindSymbolPageTarget> {
+    if name.starts_with("symbol_id:") {
+        return Ok(match try_resolve_find_symbol_target(facade, name, lang)? {
+            FindSymbolTarget::Symbols { symbols, label } => {
+                let (symbols, page) = page_symbols(symbols, offset, limit);
+                FindSymbolPageTarget::Symbols {
+                    symbols,
+                    label,
+                    page,
+                }
+            }
+            FindSymbolTarget::InvalidId(id) => FindSymbolPageTarget::InvalidId(id),
+        });
+    }
+    let index = facade.document_index();
+    let (mut symbols, mut total) =
+        index.find_symbols_by_name_page(name, lang, offset as usize, limit as usize)?;
+    if total == 0
+        && let Some((owner, member)) = name.rsplit_once('.')
+        && !owner.is_empty()
+        && !member.is_empty()
+    {
+        (symbols, total) = index.find_symbols_by_name_filtered_page(
+            member,
+            lang,
+            offset as usize,
+            limit as usize,
+            |symbol| is_member_of(symbol, owner),
+        )?;
+    }
+    let returned = symbols.len();
+    let next = offset as usize + returned;
+    let page = SymbolPageInfo {
+        total,
+        returned,
+        offset,
+        limit,
+        next_offset: (next < total).then_some(next),
+    };
+    Ok(FindSymbolPageTarget::Symbols {
+        symbols,
+        label: name.to_owned(),
+        page,
+    })
 }
 
 pub fn page_symbols(

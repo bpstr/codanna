@@ -170,126 +170,117 @@ impl CodeIntelligenceServer {
             ))]));
         }
         crate::runtime::read(&self.facade, move |indexer| {
+            tracing::debug!(
+                target: "mcp",
+                "semantic_search_docs called - symbols: {}, semantic: {}",
+                indexer.symbol_count(),
+                indexer.has_semantic_search()
+            );
 
-        tracing::debug!(
-            target: "mcp",
-            "semantic_search_docs called - symbols: {}, semantic: {}",
-            indexer.symbol_count(),
-            indexer.has_semantic_search()
-        );
-
-        if !indexer.has_semantic_search() {
-            // Check if semantic files exist
-            let semantic_path = indexer.settings().index_path.join("semantic");
-            let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("metadata.json").exists();
-            let symbol_count = indexer.symbol_count();
-
-            // Get current working directory for debugging
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
-                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
-                    .display(),
-                symbol_count,
-                metadata_exists && vectors_exist,
-                indexer.has_semantic_search(),
-                cwd
-            ))]));
-        }
-
-        let results = match threshold {
-            Some(t) => indexer.semantic_search_docs_with_threshold_and_language(
-                &query,
-                limit as usize,
-                t,
-                lang.as_deref(),
-            ),
-            None => {
-                indexer.semantic_search_docs_with_language(&query, limit as usize, lang.as_deref())
+            if !indexer.has_semantic_search() {
+                return Ok(semantic_unavailable(&indexer));
             }
-        };
 
-        match results {
-            Ok(results) => {
-                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
-                    threshold, indexer.settings().semantic_search.threshold, results.len(),
-                );
-                if results.is_empty() {
-                    let mut output =
-                        format!("No semantically similar documentation found for: {query}");
-                    // Add guidance for no results
-                    if let Some(guidance) =
-                        generate_mcp_guidance(indexer.settings(), "semantic_search_docs", 0)
-                    {
-                        output.push_str("\n\n---\nGuidance: ");
-                        output.push_str(&guidance);
-                        output.push('\n');
-                    }
-                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
-                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
-                    return Ok(response);
-                }
+            let results = match threshold {
+                Some(t) => indexer.semantic_search_docs_with_threshold_and_language(
+                    &query,
+                    limit as usize,
+                    t,
+                    lang.as_deref(),
+                ),
+                None => indexer.semantic_search_docs_with_language(
+                    &query,
+                    limit as usize,
+                    lang.as_deref(),
+                ),
+            };
 
-                let mut result = format!(
-                    "Found {} semantically similar result(s) for '{}':\n\n",
-                    results.len(),
-                    query
-                );
-
-                for (i, (symbol, score)) in results.iter().enumerate() {
-                    result.push_str(&format!(
-                        "{}. {} ({:?}) - Similarity: {:.3}\n",
-                        i + 1,
-                        symbol.name,
-                        symbol.kind,
-                        score
-                    ));
-                    result.push_str(&format!(
-                        "   File: {}:{}\n",
-                        symbol.file_path,
-                        symbol.range.start_line + 1
-                    ));
-
-                    if let Some(ref doc) = symbol.doc_comment {
-                        // Show first 3 lines of doc
-                        let preview: Vec<&str> = doc.lines().take(3).collect();
-                        let doc_preview = if doc.lines().count() > 3 {
-                            format!("{}...", preview.join(" "))
-                        } else {
-                            preview.join(" ")
-                        };
-                        result.push_str(&format!("   Doc: {doc_preview}\n"));
+            match results {
+                Ok(results) => {
+                    let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                        threshold,
+                        indexer.settings().semantic_search.threshold,
+                        results.len(),
+                    );
+                    if results.is_empty() {
+                        let mut output =
+                            format!("No semantically similar documentation found for: {query}");
+                        // Add guidance for no results
+                        if let Some(guidance) =
+                            generate_mcp_guidance(indexer.settings(), "semantic_search_docs", 0)
+                        {
+                            output.push_str("\n\n---\nGuidance: ");
+                            output.push_str(&guidance);
+                            output.push('\n');
+                        }
+                        let mut response =
+                            CallToolResult::success(vec![ContentBlock::text(output)]);
+                        response.structured_content =
+                            Some(serde_json::json!({ "retrieval": retrieval }));
+                        return Ok(response);
                     }
 
-                    if let Some(ref sig) = symbol.signature {
-                        result.push_str(&format!("   Signature: {sig}\n"));
+                    let mut result = format!(
+                        "Found {} semantically similar result(s) for '{}':\n\n",
+                        results.len(),
+                        query
+                    );
+
+                    for (i, (symbol, score)) in results.iter().enumerate() {
+                        result.push_str(&format!(
+                            "{}. {} ({:?}) - Similarity: {:.3}\n",
+                            i + 1,
+                            symbol.name,
+                            symbol.kind,
+                            score
+                        ));
+                        result.push_str(&format!(
+                            "   File: {}:{}\n",
+                            symbol.file_path,
+                            symbol.range.start_line + 1
+                        ));
+
+                        if let Some(ref doc) = symbol.doc_comment {
+                            // Show first 3 lines of doc
+                            let preview: Vec<&str> = doc.lines().take(3).collect();
+                            let doc_preview = if doc.lines().count() > 3 {
+                                format!("{}...", preview.join(" "))
+                            } else {
+                                preview.join(" ")
+                            };
+                            result.push_str(&format!("   Doc: {doc_preview}\n"));
+                        }
+
+                        if let Some(ref sig) = symbol.signature {
+                            result.push_str(&format!("   Signature: {sig}\n"));
+                        }
+
+                        result.push('\n');
                     }
 
-                    result.push('\n');
-                }
+                    // Add system guidance
+                    if let Some(guidance) = generate_mcp_guidance(
+                        indexer.settings(),
+                        "semantic_search_docs",
+                        results.len(),
+                    ) {
+                        result.push_str("\n---\nGuidance: ");
+                        result.push_str(&guidance);
+                        result.push('\n');
+                    }
 
-                // Add system guidance
-                if let Some(guidance) =
-                    generate_mcp_guidance(indexer.settings(), "semantic_search_docs", results.len())
-                {
-                    result.push_str("\n---\nGuidance: ");
-                    result.push_str(&guidance);
-                    result.push('\n');
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+                    response.structured_content =
+                        Some(serde_json::json!({ "retrieval": retrieval }));
+                    Ok(response)
                 }
-
-                let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
-                response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
-                Ok(response)
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Semantic search failed: {e}"
+                ))])),
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search failed: {e}"
-            ))])),
-        }
-        }).await.map_err(|error| McpError::internal_error(error.to_string(), None))?
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?
     }
 
     #[tool(
@@ -319,20 +310,7 @@ impl CodeIntelligenceServer {
                 crate::parsing::paths::render_absolute_path(&indexer.settings().index_path).display(),
                 indexer.has_semantic_search()
             );
-            // Check if semantic files exist
-            let semantic_path = indexer.settings().index_path.join("semantic");
-            let metadata_exists = semantic_path.join("metadata.json").exists();
-            let vectors_exist = semantic_path.join("metadata.json").exists();
-
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
-                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
-                    .display(),
-                indexer.has_semantic_search(),
-                crate::parsing::paths::render_absolute_path(&semantic_path).display(),
-                metadata_exists,
-                vectors_exist
-            ))]));
+            return Ok(semantic_unavailable(&indexer));
         }
 
         // First, perform semantic search
@@ -1075,5 +1053,50 @@ impl CodeIntelligenceServer {
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
+    }
+}
+
+/// Keep host paths in local tracing; MCP clients receive only availability facts.
+fn semantic_unavailable(indexer: &crate::indexing::facade::IndexFacade) -> CallToolResult {
+    let semantic_path = indexer.settings().index_path.join("semantic");
+    let metadata_exists = semantic_path.join("metadata.json").is_file();
+    let vectors_exist = crate::semantic::SemanticVectorStorage::vectors_exist(&semantic_path);
+    tracing::debug!(index_path = %indexer.settings().index_path.display(), metadata_exists, vectors_exist, "semantic search unavailable");
+    CallToolResult::error(vec![ContentBlock::text(format!(
+        "Semantic search is not enabled. No code or semantic index rebuild was attempted by this query. Use search_symbols or search_context for lexical code discovery. Enabling semantic indexing is a separate explicit operation.\n\nAvailability:\n- Metadata exists: {metadata_exists}\n- Vectors exist: {vectors_exist}"
+    ))])
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_search_reports_vector_presence_without_host_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = crate::Settings {
+            index_path: temp.path().join("private-index"),
+            ..Default::default()
+        };
+        let facade =
+            crate::indexing::facade::IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        let semantic = facade.settings().index_path.join("semantic");
+        std::fs::create_dir_all(&semantic).unwrap();
+        for (metadata, vectors) in [(false, false), (true, false), (true, true)] {
+            if metadata {
+                std::fs::write(semantic.join("metadata.json"), b"{}").unwrap();
+            }
+            if vectors {
+                std::fs::write(semantic.join("segment_0.vec"), b"fixture").unwrap();
+            }
+            let response = semantic_unavailable(&facade);
+            let ContentBlock::Text(text) = &response.content[0] else {
+                panic!("expected text")
+            };
+            assert!(text.text.contains(&format!("Metadata exists: {metadata}")));
+            assert!(text.text.contains(&format!("Vectors exist: {vectors}")));
+            assert!(!text.text.contains(&temp.path().display().to_string()));
+            assert!(!text.text.contains("private-index"));
+        }
     }
 }
