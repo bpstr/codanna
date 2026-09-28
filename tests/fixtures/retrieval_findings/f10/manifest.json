@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "corpus_version": "f10-v1",
+  "index_allowlist": [
+    "account.ts",
+    "policy.md",
+    "reference.ts"
+  ],
+  "source_sha256": {
+    "account.ts": "b64c1bd33e15bba70eed1426712e9df6865300704359e8a0900fd23eb28ff96a",
+    "policy.md": "dc41011f2ee5b08a76b814a09a6227ee741c59e16ae05546503294081c18940a",
+    "reference.ts": "8bc1c43f657ed32cb2bc6f8074c5f08bc6bdff0f0ee27ab55c434e829eb87f6f"
+  },
+  "oracle_sha256": "1bbf799cdb66a4d075b7e3c313c4083b9479aa73b3722b257608d9f8c15d0812",
+  "corpus_sha256": "eb0a1591ac4716ee25c7b13f6ddca1ffa29c2505b5f9a10ecd2a0521e9259a3e"
+}
