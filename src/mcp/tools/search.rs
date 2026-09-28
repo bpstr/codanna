@@ -175,6 +175,9 @@ impl CodeIntelligenceServer {
 
         match results {
             Ok(results) => {
+                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                    threshold, indexer.settings().semantic_search.threshold, results.len(),
+                );
                 if results.is_empty() {
                     let mut output =
                         format!("No semantically similar documentation found for: {query}");
@@ -186,7 +189,9 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    return Ok(response);
                 }
 
                 let mut result = format!(
@@ -236,7 +241,9 @@ impl CodeIntelligenceServer {
                     result.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+                let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
+                response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search failed: {e}"
@@ -303,6 +310,9 @@ impl CodeIntelligenceServer {
 
         match search_results {
             Ok(results) => {
+                let retrieval = crate::mcp::service::semantic_retrieval_metadata(
+                    threshold, indexer.settings().semantic_search.threshold, results.len(),
+                );
                 if results.is_empty() {
                     let mut output = format!("No documentation found matching query: {query}");
                     // Add guidance for no results
@@ -313,7 +323,9 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
+                    let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
+                    response.structured_content = Some(serde_json::json!({ "retrieval": retrieval }));
+                    return Ok(response);
                 }
 
                 let mut output = String::new();
@@ -794,7 +806,9 @@ impl CodeIntelligenceServer {
                 }
 
                 let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
-                response.structured_content = Some(serde_json::json!({ "impact": impact_contexts }));
+                response.structured_content = Some(serde_json::json!({
+                    "impact": impact_contexts, "retrieval": retrieval
+                }));
                 Ok(response)
             }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
