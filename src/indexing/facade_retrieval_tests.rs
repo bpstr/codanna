@@ -110,6 +110,7 @@ async fn symbol_listing_reports_total_and_empty_page_without_false_absence() {
         let response = server
             .find_symbol(Parameters(FindSymbolRequest {
                 name: "save".into(),
+                symbol_id: None,
                 lang: None,
                 limit: 100,
                 offset,
@@ -143,14 +144,41 @@ fn invalid_retrieve_search_limit_remains_an_error() {
     }
 }
 
+#[test]
+fn selected_definition_never_inherits_a_colliding_ids_context() {
+    let (_temp, facade) = fixture();
+    let index = facade.document_index();
+    let first = named_symbol(1, "first", SymbolKind::Function);
+    let mut second = named_symbol(1, "second", SymbolKind::Method);
+    second.range = Range::new(20, 0, 20, 10);
+    index.start_batch().unwrap();
+    index.add_document(&first, "first.rs").unwrap();
+    index.add_document(&second, "second.rs").unwrap();
+    index.commit_batch().unwrap();
+    for name in ["first", "second"] {
+        let selected = symbols(try_resolve_find_symbol_target(&facade, name, None).unwrap());
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name.as_ref(), name);
+        assert!(crate::mcp::service::selected_symbol_context(&facade, &selected[0]).is_none());
+    }
+    let error = try_resolve_find_symbol_target(&facade, "symbol_id:1", None)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("codanna index"));
+    assert!(matches!(
+        try_resolve_find_symbol_target(&facade, "symbol_id:0", None).unwrap(),
+        FindSymbolTarget::InvalidId(_)
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let transport = tokio::spawn(async move {
-        for _ in 0..2 {
-            // Explicit backend probe and the one semantic query.
+        for _ in 0..14 {
+            // Explicit backend probe and thirteen prepared semantic queries.
             let (mut socket, _) =
                 tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
                     .await
@@ -273,6 +301,62 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
         .unwrap();
     assert_eq!(isolated["status"], "complete");
     assert_eq!(isolated["count"], 0);
+    for threshold in [None, Some(0.9), Some(1.1)] {
+        for language in [None, Some("python".to_string())] {
+            let expected_count = if language.is_some() {
+                0
+            } else {
+                match threshold {
+                    None => 2,
+                    Some(floor) if floor <= 1.0 => 1,
+                    _ => 0,
+                }
+            };
+            let docs = server
+                .semantic_search_docs(Parameters(SemanticSearchRequest {
+                    query: "helper".into(),
+                    limit: 2,
+                    threshold,
+                    lang: language.clone(),
+                }))
+                .await
+                .unwrap();
+            let context = server
+                .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+                    query: "helper".into(),
+                    limit: 2,
+                    threshold,
+                    lang: language.clone(),
+                }))
+                .await
+                .unwrap();
+            for response in [docs, context] {
+                assert_ne!(response.is_error, Some(true));
+                let retrieval = &response.structured_content.unwrap()["retrieval"];
+                assert_eq!(retrieval["mode"], "semantic_nearest_neighbors");
+                assert_eq!(
+                    retrieval["requested_score_floor"],
+                    serde_json::json!(threshold)
+                );
+                assert_eq!(
+                    retrieval["effective_score_floor"],
+                    serde_json::json!(threshold)
+                );
+                assert_eq!(retrieval["configured_floor_applied"], false);
+                assert_eq!(
+                    retrieval["floor_stage"],
+                    if threshold.is_some() {
+                        "after_top_k"
+                    } else {
+                        "not_applied"
+                    }
+                );
+                assert_eq!(retrieval["returned_symbols"], expected_count);
+                assert_eq!(retrieval["support_status"], "not_assessed");
+                assert_eq!(retrieval["scores_are_probabilities"], false);
+            }
+        }
+    }
     transport.await.unwrap();
 }
 
@@ -361,6 +445,7 @@ async fn reference_context_surfaces_remain_distinct_from_calls() {
     let response = server
         .find_symbol(Parameters(FindSymbolRequest {
             name: "handle".into(),
+            symbol_id: None,
             lang: None,
             limit: 100,
             offset: 0,

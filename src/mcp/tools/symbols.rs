@@ -13,37 +13,83 @@ use crate::mcp::service::{
     self, SymbolResolution, parse_receiver_context, qualified_call, render_ambiguity,
 };
 
+/// Target outcome carried alongside rendering for one-shot CLI exit status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SymbolToolOutcome {
+    Resolved,
+    NotFound,
+    Ambiguous,
+    Invalid,
+}
+
+impl SymbolToolOutcome {
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::Resolved => 0,
+            Self::NotFound => 1,
+            Self::Ambiguous | Self::Invalid => 2,
+        }
+    }
+}
+
+pub(crate) struct SymbolToolResponse {
+    pub result: CallToolResult,
+    pub outcome: SymbolToolOutcome,
+}
+
 #[tool_router(router = symbols_router, vis = "pub(crate)")]
 impl CodeIntelligenceServer {
-    #[tool(description = "Find a symbol by name in the indexed codebase")]
+    #[tool(
+        description = "Find indexed symbol definitions by name or positive symbol_id. IDs are workspace-local; use a returned ID to disambiguate a definition. Language and pagination filters apply to both forms. Legacy name=symbol_id:N remains supported."
+    )]
     pub async fn find_symbol(
+        &self,
+        request: Parameters<FindSymbolRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.find_symbol_with_outcome(request)
+            .await
+            .map(|response| response.result)
+    }
+
+    pub(crate) async fn find_symbol_with_outcome(
         &self,
         Parameters(FindSymbolRequest {
             name,
+            symbol_id,
             lang,
             limit,
             offset,
         }): Parameters<FindSymbolRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::symbol::context::ContextIncludes;
+    ) -> Result<SymbolToolResponse, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
+        let request = FindSymbolRequest {
+            name,
+            symbol_id,
+            lang,
+            limit,
+            offset,
+        };
+        let name = request.target_name()?.into_owned();
+        let lang = request.lang;
 
         crate::runtime::read(&self.facade, move |indexer| {
+            let mut outcome = SymbolToolOutcome::Resolved;
             // symbol_id:XXX (from semantic search results and ambiguity hints)
             // resolves by direct id lookup; policy shared with the CLI JSON path.
-            let (symbols, label) =
-                match service::try_resolve_find_symbol_target(&indexer, &name, lang.as_deref())
+            let (symbols, label, page) =
+                match service::try_resolve_find_symbol_page(&indexer, &name, lang.as_deref(), offset, limit)
                     .map_err(|error| McpError::internal_error(format!("Symbol lookup failed: {error}"), None))? {
-                    service::FindSymbolTarget::Symbols { symbols, label } => (symbols, label),
-                    service::FindSymbolTarget::InvalidId(id_str) => {
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    service::FindSymbolPageTarget::Symbols { symbols, label, page } => (symbols, label, page),
+                    service::FindSymbolPageTarget::InvalidId(id_str) => {
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse { result: CallToolResult::error(vec![ContentBlock::text(format!(
                             "Invalid symbol_id format: {id_str}"
-                        ))]));
+                        ))]), outcome });
                     }
                 };
 
-            let (symbols, page) = service::page_symbols(symbols, offset, limit);
             if page.total == 0 {
+                        outcome = SymbolToolOutcome::NotFound;
                 let mut output = format!("No symbols found with name: {name}");
                 // Add guidance for no results
                 if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "find_symbol", 0)
@@ -54,7 +100,7 @@ impl CodeIntelligenceServer {
                 }
                 let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
                 response.structured_content = Some(serde_json::json!({ "pagination": page }));
-                return Ok(response);
+                return Ok(SymbolToolResponse { result: response, outcome });
             }
 
             let mut result = format!("Found {} symbol(s) named '{label}':\n\n", page.total);
@@ -69,7 +115,7 @@ impl CodeIntelligenceServer {
 
                 // Try to get full context with all relationship types
                 if let Some(ctx) =
-                    indexer.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD)
+                    service::selected_symbol_context(&indexer, symbol)
                 {
                     // Header from the name-matched doc, not the id-keyed context:
                     // on an index with duplicate symbol_ids the context lookup
@@ -277,7 +323,7 @@ impl CodeIntelligenceServer {
             }
             let mut response = CallToolResult::success(vec![ContentBlock::text(result)]);
             response.structured_content = Some(serde_json::json!({ "pagination": page }));
-            Ok(response)
+            Ok(SymbolToolResponse { result: response, outcome })
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -288,38 +334,64 @@ impl CodeIntelligenceServer {
     )]
     pub async fn get_calls(
         &self,
+        request: Parameters<GetCallsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.get_calls_with_outcome(request)
+            .await
+            .map(|response| response.result)
+    }
+
+    pub(crate) async fn get_calls_with_outcome(
+        &self,
         Parameters(GetCallsRequest {
             function_name,
             symbol_id,
         }): Parameters<GetCallsRequest>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<SymbolToolResponse, McpError> {
         crate::runtime::read(&self.facade, move |indexer| {
+            let mut outcome = SymbolToolOutcome::Resolved;
             // Resolution policy is shared with the CLI JSON path via the
             // service layer; MCP adds an explicit graph-evidence boundary.
             let (symbol, identifier) =
                 match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
                     SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                     SymbolResolution::NotFoundById(id) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "Symbol not found: symbol_id:{id}"
-                        ))]));
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(format!(
+                                "Symbol not found: symbol_id:{id}"
+                            ))]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::NotFoundByName(name) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "Function not found: {name}"
-                        ))]));
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(format!(
+                                "Function not found: {name}"
+                            ))]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::Ambiguous { name, candidates } => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(
-                            render_ambiguity("get_calls", &name, &candidates),
-                        )]));
+                        outcome = SymbolToolOutcome::Ambiguous;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(
+                                render_ambiguity("get_calls", &name, &candidates),
+                            )]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::MissingParam => {
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                            "{}\n{}",
-                            service::missing_param_message("get_calls"),
-                            service::accepted_params_line("get_calls"),
-                        ))]));
+                        outcome = SymbolToolOutcome::Invalid;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::error(vec![ContentBlock::text(format!(
+                                "{}\n{}",
+                                service::missing_param_message("get_calls"),
+                                service::accepted_params_line("get_calls"),
+                            ))]),
+                            outcome,
+                        });
                     }
                 };
 
@@ -337,7 +409,10 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(graph_evidence_result(output, "get_calls", &symbol, 0, 1));
+                return Ok(SymbolToolResponse {
+                    result: graph_evidence_result(output, "get_calls", &symbol, 0, 1),
+                    outcome,
+                });
             }
 
             let result_count = all_called_with_metadata.len();
@@ -384,13 +459,10 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(graph_evidence_result(
-                result,
-                "get_calls",
-                &symbol,
-                result_count,
-                1,
-            ))
+            Ok(SymbolToolResponse {
+                result: graph_evidence_result(result, "get_calls", &symbol, result_count, 1),
+                outcome,
+            })
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -401,37 +473,63 @@ impl CodeIntelligenceServer {
     )]
     pub async fn find_callers(
         &self,
+        request: Parameters<FindCallersRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.find_callers_with_outcome(request)
+            .await
+            .map(|response| response.result)
+    }
+
+    pub(crate) async fn find_callers_with_outcome(
+        &self,
         Parameters(FindCallersRequest {
             function_name,
             symbol_id,
         }): Parameters<FindCallersRequest>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<SymbolToolResponse, McpError> {
         crate::runtime::read(&self.facade, move |indexer| {
+            let mut outcome = SymbolToolOutcome::Resolved;
             // Shared resolution policy; see service.rs.
             let (symbol, identifier) =
                 match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
                     SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                     SymbolResolution::NotFoundById(id) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "Symbol not found: symbol_id:{id}"
-                        ))]));
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(format!(
+                                "Symbol not found: symbol_id:{id}"
+                            ))]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::NotFoundByName(name) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                            "Function not found: {name}"
-                        ))]));
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(format!(
+                                "Function not found: {name}"
+                            ))]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::Ambiguous { name, candidates } => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(
-                            render_ambiguity("find_callers", &name, &candidates),
-                        )]));
+                        outcome = SymbolToolOutcome::Ambiguous;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::success(vec![ContentBlock::text(
+                                render_ambiguity("find_callers", &name, &candidates),
+                            )]),
+                            outcome,
+                        });
                     }
                     SymbolResolution::MissingParam => {
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                            "{}\n{}",
-                            service::missing_param_message("find_callers"),
-                            service::accepted_params_line("find_callers"),
-                        ))]));
+                        outcome = SymbolToolOutcome::Invalid;
+                        return Ok(SymbolToolResponse {
+                            result: CallToolResult::error(vec![ContentBlock::text(format!(
+                                "{}\n{}",
+                                service::missing_param_message("find_callers"),
+                                service::accepted_params_line("find_callers"),
+                            ))]),
+                            outcome,
+                        });
                     }
                 };
 
@@ -449,7 +547,10 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(graph_evidence_result(output, "find_callers", &symbol, 0, 1));
+                return Ok(SymbolToolResponse {
+                    result: graph_evidence_result(output, "find_callers", &symbol, 0, 1),
+                    outcome,
+                });
             }
 
             // Build structured text response with rich metadata
@@ -500,13 +601,10 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(graph_evidence_result(
-                result,
-                "find_callers",
-                &symbol,
-                result_count,
-                1,
-            ))
+            Ok(SymbolToolResponse {
+                result: graph_evidence_result(result, "find_callers", &symbol, result_count, 1),
+                outcome,
+            })
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?
@@ -517,41 +615,55 @@ impl CodeIntelligenceServer {
     )]
     pub async fn analyze_impact(
         &self,
+        request: Parameters<AnalyzeImpactRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.analyze_impact_with_outcome(request)
+            .await
+            .map(|response| response.result)
+    }
+
+    pub(crate) async fn analyze_impact_with_outcome(
+        &self,
         Parameters(AnalyzeImpactRequest {
             symbol_name,
             symbol_id,
             max_depth,
         }): Parameters<AnalyzeImpactRequest>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<SymbolToolResponse, McpError> {
         crate::mcp::requests::validate_impact_depth(max_depth)?;
         use crate::symbol::context::ContextIncludes;
 
         crate::runtime::read(&self.facade, move |indexer| {
+            let mut outcome = SymbolToolOutcome::Resolved;
             // Shared resolution policy; see service.rs.
             let (symbol, identifier) =
                 match service::resolve_symbol_or_id(&indexer, symbol_id, symbol_name) {
                     SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                     SymbolResolution::NotFoundById(id) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse { result: CallToolResult::success(vec![ContentBlock::text(format!(
                             "Symbol not found: symbol_id:{id}"
-                        ))]));
+                        ))]), outcome });
                     }
                     SymbolResolution::NotFoundByName(name) => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                        outcome = SymbolToolOutcome::NotFound;
+                        return Ok(SymbolToolResponse { result: CallToolResult::success(vec![ContentBlock::text(format!(
                             "Symbol not found: {name}"
-                        ))]));
+                        ))]), outcome });
                     }
                     SymbolResolution::Ambiguous { name, candidates } => {
-                        return Ok(CallToolResult::success(vec![ContentBlock::text(
+                        outcome = SymbolToolOutcome::Ambiguous;
+                        return Ok(SymbolToolResponse { result: CallToolResult::success(vec![ContentBlock::text(
                             render_ambiguity("analyze_impact", &name, &candidates),
-                        )]));
+                        )]), outcome });
                     }
                     SymbolResolution::MissingParam => {
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        outcome = SymbolToolOutcome::Invalid;
+                        return Ok(SymbolToolResponse { result: CallToolResult::error(vec![ContentBlock::text(format!(
                             "{}\n{}",
                             service::missing_param_message("analyze_impact"),
                             service::accepted_params_line("analyze_impact"),
-                        ))]));
+                        ))]), outcome });
                     }
                 };
 
@@ -570,7 +682,7 @@ impl CodeIntelligenceServer {
                     output.push_str(&guidance);
                     output.push('\n');
                 }
-                return Ok(graph_evidence_result(output, "analyze_impact", &symbol, 0, max_depth));
+                return Ok(SymbolToolResponse { result: graph_evidence_result(output, "analyze_impact", &symbol, 0, max_depth), outcome });
             }
 
             let mut result = format!("Analyzing impact of changing: {identifier}\n");
@@ -701,7 +813,7 @@ impl CodeIntelligenceServer {
                 result.push('\n');
             }
 
-            Ok(graph_evidence_result(result, "analyze_impact", &symbol, impact_count, max_depth))
+            Ok(SymbolToolResponse { result: graph_evidence_result(result, "analyze_impact", &symbol, impact_count, max_depth), outcome })
         })
         .await
         .map_err(|error| McpError::internal_error(error.to_string(), None))?

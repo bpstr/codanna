@@ -115,7 +115,11 @@ fn stored_chunks(store: &DocumentStore, path: &Path, collection: &str) -> Vec<(u
     };
     let candidates = store.get_filtered_candidates(&query).unwrap();
     let mut chunks: Vec<_> = store
-        .build_search_results(candidates.into_iter().map(|id| (id, 1.0)).collect(), &query)
+        .build_search_results(
+            candidates.into_iter().map(|id| (id, 1.0)).collect(),
+            &query,
+            false,
+        )
         .unwrap()
         .into_iter()
         .map(|hit| {
