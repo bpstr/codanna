@@ -82,6 +82,15 @@ impl SymbolSegment {
 
 pub(super) type SymbolSegments = HashMap<SymbolId, Arc<[SymbolSegment]>>;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SemanticProvenance {
+    pub source_sha256: String,
+    pub code_generation: u64,
+}
+
+pub(super) type SymbolProvenance = HashMap<SymbolId, SemanticProvenance>;
+
 /// Advanced semantic search engine for documentation analysis
 ///
 /// This implementation uses state-of-the-art embeddings to find
@@ -101,6 +110,12 @@ pub struct SimpleSemanticSearch {
 
     /// Candidate IDs grouped by language so filtered queries skip other vectors.
     language_symbols: Arc<HashMap<String, Arc<HashSet<SymbolId>>>>,
+
+    /// Source identity and committed code generation that produced each vector.
+    symbol_provenance: Arc<SymbolProvenance>,
+    /// Source hashes observed while vectors are staged, before the code commit
+    /// supplies its durable Tantivy opstamp.
+    pending_source_provenance: HashMap<SymbolId, String>,
 
     /// Content-addressed accelerator for unchanged embedding inputs.
     embedding_cache: crate::embedding_cache::EmbeddingCache,
@@ -223,6 +238,8 @@ impl SimpleSemanticSearch {
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
+            symbol_provenance: Arc::new(HashMap::new()),
+            pending_source_provenance: HashMap::new(),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(identity, dimensions),
             model: Some(Arc::new(Mutex::new(text_model))),
             input_budget: Some(input_budget),
@@ -493,6 +510,8 @@ impl SimpleSemanticSearch {
         language: Option<String>,
     ) {
         let magnitude = vector_magnitude(&embedding);
+        Arc::make_mut(&mut self.symbol_provenance).remove(&symbol_id);
+        self.pending_source_provenance.remove(&symbol_id);
         Arc::make_mut(&mut self.symbol_segments).remove(&symbol_id);
         Arc::make_mut(&mut self.embeddings).insert(symbol_id, embedding);
         Arc::make_mut(&mut self.embedding_magnitudes).insert(symbol_id, magnitude);
@@ -787,6 +806,54 @@ impl SimpleSemanticSearch {
         self.embeddings.keys().copied().collect()
     }
 
+    /// Record the indexed source identity for a vector staged in this run.
+    /// The generation is bound only after the code index commit succeeds.
+    pub(crate) fn record_source_provenance(&mut self, id: SymbolId, source_sha256: String) {
+        // Every successful replacement removes the prior provenance in
+        // `insert_embedding`. If a backend omits a requested result, an older
+        // vector may still be present; preserve its original provenance rather
+        // than assigning the new source hash to bytes that were never produced.
+        if self.embeddings.contains_key(&id) && !self.symbol_provenance.contains_key(&id) {
+            self.pending_source_provenance.insert(id, source_sha256);
+            self.mark_dirty(id);
+        }
+    }
+
+    /// Bind staged vector provenance to the durable Tantivy commit opstamp.
+    pub(crate) fn bind_code_generation(&mut self, code_generation: u64) {
+        let pending = std::mem::take(&mut self.pending_source_provenance);
+        let provenance = Arc::make_mut(&mut self.symbol_provenance);
+        for (id, source_sha256) in pending {
+            if self.embeddings.contains_key(&id) {
+                provenance.insert(
+                    id,
+                    SemanticProvenance {
+                        source_sha256,
+                        code_generation,
+                    },
+                );
+            }
+        }
+    }
+
+    pub(crate) fn symbol_provenance(&self, id: SymbolId) -> Option<&SemanticProvenance> {
+        self.symbol_provenance.get(&id)
+    }
+
+    pub(crate) fn common_code_generation(&self) -> Option<u64> {
+        if self.embeddings.is_empty() || self.symbol_provenance.len() != self.embeddings.len() {
+            return None;
+        }
+        let mut generations = self
+            .symbol_provenance
+            .values()
+            .map(|value| value.code_generation);
+        let first = generations.next()?;
+        generations
+            .all(|generation| generation == first)
+            .then_some(first)
+    }
+
     /// Clear all embeddings
     pub fn clear(&mut self) {
         for id in self.embeddings.keys().copied().collect::<Vec<_>>() {
@@ -797,6 +864,8 @@ impl SimpleSemanticSearch {
         Arc::make_mut(&mut self.embedding_magnitudes).clear();
         Arc::make_mut(&mut self.symbol_languages).clear();
         Arc::make_mut(&mut self.language_symbols).clear();
+        Arc::make_mut(&mut self.symbol_provenance).clear();
+        self.pending_source_provenance.clear();
     }
 
     /// Remove embeddings for specific symbols
@@ -810,6 +879,8 @@ impl SimpleSemanticSearch {
             }
             Arc::make_mut(&mut self.embedding_magnitudes).remove(id);
             Arc::make_mut(&mut self.symbol_segments).remove(id);
+            Arc::make_mut(&mut self.symbol_provenance).remove(id);
+            self.pending_source_provenance.remove(id);
             if let Some(language) = Arc::make_mut(&mut self.symbol_languages).remove(id) {
                 let language_symbols = Arc::make_mut(&mut self.language_symbols);
                 if let Some(ids) = language_symbols.get_mut(&language) {
@@ -893,6 +964,8 @@ impl SimpleSemanticSearch {
             embedding_magnitudes: Arc::clone(&self.embedding_magnitudes),
             symbol_languages: Arc::clone(&self.symbol_languages),
             language_symbols: Arc::clone(&self.language_symbols),
+            symbol_provenance: Arc::clone(&self.symbol_provenance),
+            pending_source_provenance: HashMap::new(),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(
                 self.metadata
                     .as_ref()
@@ -925,6 +998,7 @@ impl SimpleSemanticSearch {
             embeddings: Arc::clone(&self.embeddings),
             symbol_segments: Arc::clone(&self.symbol_segments),
             languages: Arc::clone(&self.symbol_languages),
+            provenance: Arc::clone(&self.symbol_provenance),
             metadata,
             state,
             tracker: Arc::clone(&self.persistence),
@@ -954,6 +1028,8 @@ impl SimpleSemanticSearch {
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
+            symbol_provenance: Arc::new(HashMap::new()),
+            pending_source_provenance: HashMap::new(),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(model_name, dimensions),
             model: None,
             input_budget: None,
@@ -976,6 +1052,8 @@ impl SimpleSemanticSearch {
             embedding_magnitudes: Arc::new(HashMap::new()),
             symbol_languages: Arc::new(HashMap::new()),
             language_symbols: Arc::new(HashMap::new()),
+            symbol_provenance: Arc::new(HashMap::new()),
+            pending_source_provenance: HashMap::new(),
             embedding_cache: crate::embedding_cache::EmbeddingCache::empty(model_name, dimensions),
             model: None,
             input_budget: None,
@@ -1044,6 +1122,8 @@ impl SimpleSemanticSearch {
             embedding_magnitudes: Arc::new(embedding_magnitudes),
             symbol_languages: Arc::new(snapshot.languages),
             language_symbols: Arc::new(language_symbols),
+            symbol_provenance: Arc::new(snapshot.provenance),
+            pending_source_provenance: HashMap::new(),
             embedding_cache,
             dimensions: snapshot.metadata.dimension,
             metadata: Some(snapshot.metadata),
@@ -1141,6 +1221,7 @@ pub(crate) struct SemanticSave {
     embeddings: Arc<HashMap<SymbolId, Arc<[f32]>>>,
     symbol_segments: Arc<SymbolSegments>,
     languages: Arc<HashMap<SymbolId, String>>,
+    provenance: Arc<SymbolProvenance>,
     metadata: super::SemanticMetadata,
     state: super::journal::Persistence,
     tracker: Arc<Mutex<super::journal::Persistence>>,
@@ -1182,6 +1263,7 @@ impl SemanticSave {
             &self.embeddings,
             &self.symbol_segments,
             &self.languages,
+            &self.provenance,
             self.metadata,
         )?;
         if let Err(error) = self
@@ -1275,6 +1357,32 @@ fn cosine_similarity_with_magnitudes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_provenance_changes_only_after_vector_replacement() {
+        let id = SymbolId::new(1).unwrap();
+        let mut semantic = SimpleSemanticSearch::new_empty(2, "fixture");
+        semantic.store_embeddings(vec![(id, vec![1.0, 0.0], "rust".into())]);
+        semantic.record_source_provenance(id, "a".repeat(64));
+        semantic.bind_code_generation(1);
+
+        semantic.record_source_provenance(id, "b".repeat(64));
+        semantic.bind_code_generation(2);
+        assert_eq!(semantic.symbol_provenance(id).unwrap().code_generation, 1);
+        assert_eq!(
+            semantic.symbol_provenance(id).unwrap().source_sha256,
+            "a".repeat(64)
+        );
+
+        semantic.store_embeddings(vec![(id, vec![0.0, 1.0], "rust".into())]);
+        semantic.record_source_provenance(id, "b".repeat(64));
+        semantic.bind_code_generation(2);
+        assert_eq!(semantic.symbol_provenance(id).unwrap().code_generation, 2);
+        assert_eq!(
+            semantic.symbol_provenance(id).unwrap().source_sha256,
+            "b".repeat(64)
+        );
+    }
 
     #[test]
     fn semantic_identity_survives_reopen_and_rejects_equal_dimension_changes() {

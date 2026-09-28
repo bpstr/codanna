@@ -110,7 +110,7 @@ pub struct SemanticCoverageStatus {
     pub dimension: Option<usize>,
     pub embedding_identity_sha256: Option<String>,
     pub embedding_input_policy: Option<String>,
-    pub code_generation: u64,
+    pub code_generation: Option<u64>,
     pub vector_code_generation: Option<u64>,
     pub generation_alignment: &'static str,
     pub freshness: &'static str,
@@ -591,6 +591,7 @@ impl IndexFacade {
         let mut eligible_with_vector = None;
         let mut eligible_without_vector = None;
         let mut vector_without_current_symbol = None;
+        let mut vector_code_generation = None;
 
         if let Some(semantic) = &self.semantic_search {
             match semantic.lock() {
@@ -609,6 +610,7 @@ impl IndexFacade {
                             .filter(|id| !current_ids.contains(id))
                             .count(),
                     );
+                    vector_code_generation = semantic.common_code_generation();
                 }
                 Err(_) => {
                     state = "unavailable";
@@ -639,6 +641,7 @@ impl IndexFacade {
             Some(_) => "mismatch",
             None => "unknown_legacy_or_absent",
         };
+        let code_generation = self.document_index.commit_opstamp().ok();
         SemanticCoverageStatus {
             state,
             total_symbols,
@@ -687,12 +690,22 @@ impl IndexFacade {
             dimension: metadata.as_ref().map(|metadata| metadata.dimension),
             embedding_identity_sha256,
             embedding_input_policy,
-            code_generation: self.document_index.generation(),
-            // Semantic metadata does not currently persist a corresponding code
-            // generation. Timestamp proximity is not sufficient evidence.
-            vector_code_generation: None,
-            generation_alignment: "unknown_untracked",
-            freshness: "unknown",
+            code_generation,
+            vector_code_generation,
+            generation_alignment: match (vector_code_generation, code_generation) {
+                (Some(generation), Some(code_generation)) if generation == code_generation => {
+                    "matched"
+                }
+                (Some(_), Some(_)) => "stale",
+                _ => "unknown_untracked",
+            },
+            freshness: match (vector_code_generation, code_generation) {
+                (Some(generation), Some(code_generation)) if generation == code_generation => {
+                    "generation_aligned"
+                }
+                (Some(_), Some(_)) => "stale_generation",
+                _ => "unknown",
+            },
         }
     }
 
