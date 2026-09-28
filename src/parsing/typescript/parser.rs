@@ -423,7 +423,9 @@ impl TypeScriptParser {
                 }
             }
             "method_definition"
-                if node.parent().is_some_and(|parent| parent.kind() == "object") =>
+                if node
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "object") =>
             {
                 self.register_node_recursively(node);
                 // Dynamic keys have no stable lexical identity. Do not turn

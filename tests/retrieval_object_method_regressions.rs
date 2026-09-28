@@ -75,7 +75,10 @@ fn object_methods_restore_class_scope_and_keep_named_nested_owners() {
     let mut parser = TypeScriptParser::new().unwrap();
     let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
     for name in ["build", "run", "inner", "after"] {
-        assert_eq!(symbols.iter().filter(|s| s.name.as_ref() == name).count(), 1);
+        assert_eq!(
+            symbols.iter().filter(|s| s.name.as_ref() == name).count(),
+            1
+        );
     }
     let run = symbols.iter().find(|s| s.name.as_ref() == "run").unwrap();
     assert!(matches!(
@@ -100,7 +103,10 @@ fn function_bindings_do_not_duplicate_nested_object_methods() {
     let mut parser = TypeScriptParser::new().unwrap();
     let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
     for name in ["factory", "nested"] {
-        assert_eq!(symbols.iter().filter(|s| s.name.as_ref() == name).count(), 1);
+        assert_eq!(
+            symbols.iter().filter(|s| s.name.as_ref() == name).count(),
+            1
+        );
     }
 }
 
@@ -109,10 +115,11 @@ fn computed_keys_and_function_properties_do_not_gain_guessed_endpoints() {
     let code = "const key = 'dynamic'; const object = { [key]() {}, arrow: () => {}, expression: function() {} };";
     let mut parser = TypeScriptParser::new().unwrap();
     let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
-    assert!(symbols.iter().all(|symbol| !matches!(
-        symbol.kind,
-        SymbolKind::Method | SymbolKind::Function
-    )));
+    assert!(
+        symbols
+            .iter()
+            .all(|symbol| !matches!(symbol.kind, SymbolKind::Method | SymbolKind::Function))
+    );
 }
 
 #[test]
@@ -126,8 +133,20 @@ fn accessors_keep_separate_ranges_and_signatures() {
         .collect();
     assert_eq!(accessors.len(), 2);
     assert_ne!(accessors[0].range, accessors[1].range);
-    assert!(accessors[0].signature.as_deref().unwrap().contains("get value"));
-    assert!(accessors[1].signature.as_deref().unwrap().contains("set value"));
+    assert!(
+        accessors[0]
+            .signature
+            .as_deref()
+            .unwrap()
+            .contains("get value")
+    );
+    assert!(
+        accessors[1]
+            .signature
+            .as_deref()
+            .unwrap()
+            .contains("set value")
+    );
 }
 
 fn fixture() -> (tempfile::TempDir, IndexFacade) {
