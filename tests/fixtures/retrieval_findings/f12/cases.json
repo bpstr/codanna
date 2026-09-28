@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "finding": "F12",
+  "status": "prepared_not_run",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "left-alias",
+      "expected_call": [
+        "left/src/use.ts:useLeft",
+        "left/src/owner.ts:identity"
+      ],
+      "excluded_target": "right/src/owner.ts:identity"
+    },
+    {
+      "id": "right-alias",
+      "expected_call": [
+        "right/src/use.ts:useRight",
+        "right/src/owner.ts:identity"
+      ],
+      "excluded_target": "left/src/owner.ts:identity"
+    },
+    {
+      "id": "unbound-project",
+      "expected_diagnostic": "resolver_bindings_absent",
+      "forbid": "guess_module_from_other_project"
+    }
+  ]
+}

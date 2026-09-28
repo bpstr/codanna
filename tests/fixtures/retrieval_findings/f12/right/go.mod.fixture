@@ -1,0 +1,3 @@
+module fixture/right
+
+go 1.23
