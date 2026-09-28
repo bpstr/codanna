@@ -37,6 +37,11 @@ pub struct PathAliasResolver {
 #[allow(non_snake_case)]
 #[derive(Default)]
 pub struct CompilerOptions {
+    /// Presence is retained so an explicit child [] overrides inherited values.
+    #[serde(default)]
+    pub moduleSuffixes: Option<Vec<String>>,
+    #[serde(default)]
+    pub rootDirs: Option<Vec<String>>,
     /// Base URL for module resolution
     #[serde(rename = "baseUrl")]
     pub baseUrl: Option<String>,
@@ -141,6 +146,14 @@ fn merge_tsconfig(parent: TsConfig, child: TsConfig) -> TsConfig {
         // Child extends takes precedence (but we don't chain extends)
         extends: child.extends,
         compilerOptions: CompilerOptions {
+            moduleSuffixes: child
+                .compilerOptions
+                .moduleSuffixes
+                .or(parent.compilerOptions.moduleSuffixes),
+            rootDirs: child
+                .compilerOptions
+                .rootDirs
+                .or(parent.compilerOptions.rootDirs),
             // Child baseUrl overrides parent
             baseUrl: child
                 .compilerOptions
@@ -441,6 +454,8 @@ mod tests {
         let parent = TsConfig {
             extends: Some("parent.json".to_string()),
             compilerOptions: CompilerOptions {
+                moduleSuffixes: None,
+                rootDirs: None,
                 baseUrl: Some("./parent".to_string()),
                 paths: HashMap::from([
                     ("@parent/*".to_string(), vec!["parent/*".to_string()]),
@@ -452,6 +467,8 @@ mod tests {
         let child = TsConfig {
             extends: Some("child.json".to_string()),
             compilerOptions: CompilerOptions {
+                moduleSuffixes: None,
+                rootDirs: None,
                 baseUrl: Some("./child".to_string()),
                 paths: HashMap::from([
                     ("@child/*".to_string(), vec!["child/*".to_string()]),

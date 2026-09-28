@@ -13,6 +13,7 @@ use codanna::project_resolver::persist::{ResolutionIndex, ResolutionPersistence,
 fn test_import_enhancement_with_aliases() {
     // Create resolution rules like tsconfig would provide
     let rules = ResolutionRules {
+        relative_specifiers_redirected: false,
         base_url: None,
         paths: vec![
             (
@@ -77,6 +78,7 @@ fn workspace(component_dir: &str) -> (tempfile::TempDir, TypeScriptBehavior) {
     index.set_rules(
         &config,
         ResolutionRules {
+            relative_specifiers_redirected: false,
             base_url: None,
             paths: [(
                 "@components/*".to_owned(),

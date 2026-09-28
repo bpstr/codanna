@@ -607,6 +607,8 @@ impl JavaScriptProjectEnhancer {
             let config = crate::parsing::javascript::jsconfig::JsConfig {
                 extends: None,
                 compilerOptions: crate::parsing::javascript::jsconfig::CompilerOptions {
+                    moduleSuffixes: None,
+                    rootDirs: None,
                     baseUrl: rules.base_url.clone(),
                     paths: rules.paths.clone(),
                 },

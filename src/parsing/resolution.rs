@@ -29,6 +29,8 @@ pub enum ImportOrigin {
     Internal,
     /// The import comes from an external dependency that is not indexed
     External,
+    /// A complete file inventory proves the relative target is absent.
+    Dangling,
     /// The origin could not be determined
     Unknown,
 }
@@ -178,7 +180,7 @@ pub trait ResolutionScope: Send + Sync {
     fn is_external_import(&self, name: &str) -> bool {
         if let Some(binding) = self.import_binding(name) {
             match binding.origin {
-                ImportOrigin::External => true,
+                ImportOrigin::External | ImportOrigin::Dangling => true,
                 ImportOrigin::Internal => binding.resolved_symbol.is_none(),
                 ImportOrigin::Unknown => binding.resolved_symbol.is_none(),
             }
@@ -696,7 +698,37 @@ fn is_module_prefix(prefix: &str, path: &str, separator: &str) -> bool {
 ///
 /// Implemented by `SymbolLookupCache` (DashMap-based parallel pipeline cache).
 /// Provides methods for resolving imports and symbols without hitting Tantivy.
+/// Absence is meaningful only for a complete persisted file view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilePresence {
+    Present,
+    Absent,
+    Unknown,
+}
+
+/// Relative import identity; Unknown must never be treated as proven absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelativeImportLookup {
+    Bound(SymbolId),
+    NoIndexedFile,
+    Unknown,
+}
+
+/// Read-only symbol and file-evidence cache used by the parallel pipeline.
 pub trait PipelineSymbolCache: Send + Sync {
+    /// Whether a persisted source file has this exact path.
+    fn file_presence(&self, _path: &std::path::Path) -> FilePresence {
+        FilePresence::Unknown
+    }
+    /// Whether a same-directory file shares the portion before its first dot.
+    fn sibling_stem_present(&self, _path: &std::path::Path) -> FilePresence {
+        FilePresence::Unknown
+    }
+    /// Whether the path is an ancestor of an indexed source file.
+    fn directory_present(&self, _path: &std::path::Path) -> FilePresence {
+        FilePresence::Unknown
+    }
+
     /// Multi-tier symbol resolution with proper priority order.
     ///
     /// Resolves a symbol reference using all available context to find the correct target.

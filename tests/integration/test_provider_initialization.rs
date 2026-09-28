@@ -111,6 +111,7 @@ fn test_provider_initialization_with_valid_config() {
 
     // Parse and add rules
     let rules = ResolutionRules {
+        relative_specifiers_redirected: false,
         base_url: Some("./src".to_string()),
         paths: vec![
             ("@/*".to_string(), vec!["*".to_string()]),

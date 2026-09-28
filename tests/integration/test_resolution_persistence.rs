@@ -27,6 +27,7 @@ mod tests {
         index.set_rules(
             tsconfig_path,
             ResolutionRules {
+                relative_specifiers_redirected: false,
                 base_url: Some("./".to_string()),
                 paths: HashMap::from([
                     (

@@ -451,21 +451,6 @@ impl ResolveStage {
             }
         }
 
-        // A recorded unresolved internal import is negative evidence:
-        // the source explicitly names a repository module, so falling through to
-        // global same-name candidates can fabricate a cross-repository edge.
-        if context
-            .scope
-            .import_binding(&unresolved.to_name)
-            .is_some_and(|binding| {
-                binding.resolved_symbol.is_none()
-                    && (binding.import.path.starts_with('.')
-                        || binding.origin == crate::parsing::resolution::ImportOrigin::Internal)
-            })
-        {
-            return None;
-        }
-
         // Inheritance witness for bare calls inside a class body, only
         // where the language vouches that a bare name can dispatch to an
         // instance member. Runs after the scope lookup — file-local and
@@ -482,6 +467,33 @@ impl ResolveStage {
             {
                 return Some(resolved);
             }
+        }
+
+        // Only proven file absence or an explicit missing/ambiguous export slot
+        // blocks TS/JS name fallback. Partial inventories and config redirects
+        // are Unknown, not missing files. Own definitions and inheritance won above.
+        if (!matches!(caller.language_id.as_str(), "typescript" | "javascript")
+            || unresolved
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.receiver.as_ref())
+                .is_none())
+            && context
+                .scope
+                .import_binding(&unresolved.to_name)
+                .is_some_and(|binding| {
+                    binding.resolved_symbol.is_none()
+                        && (matches!(
+                            binding.origin,
+                            crate::parsing::resolution::ImportOrigin::Internal
+                                | crate::parsing::resolution::ImportOrigin::Dangling
+                        ) || (!matches!(
+                            caller.language_id.as_str(),
+                            "typescript" | "javascript"
+                        ) && binding.import.path.starts_with('.')))
+                })
+        {
+            return None;
         }
 
         // For qualified static calls (`Type::method` / `Type.method`), the
@@ -1347,8 +1359,12 @@ impl ResolveStage {
             .import_binding(import_name)
             .is_some_and(|binding| {
                 binding.resolved_symbol.is_none()
-                    && (binding.import.path.starts_with('.')
-                        || binding.origin == crate::parsing::resolution::ImportOrigin::Internal)
+                    && (matches!(
+                        binding.origin,
+                        crate::parsing::resolution::ImportOrigin::Internal
+                            | crate::parsing::resolution::ImportOrigin::Dangling
+                    ) || (!matches!(caller.language_id.as_str(), "typescript" | "javascript")
+                        && binding.import.path.starts_with('.')))
             })
         {
             return None;

@@ -145,6 +145,7 @@ impl GoProvider {
         paths.insert(project_root.to_string_lossy().to_string(), Vec::new());
 
         Ok(ResolutionRules {
+            relative_specifiers_redirected: false,
             base_url: go_mod_info.module_name,
             paths,
         })

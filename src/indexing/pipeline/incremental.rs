@@ -38,6 +38,12 @@ pub struct PendingResolution {
     /// Explicitly bounded inventories (network preflight and --max-files)
     /// cannot reopen additional source files outside their admitted input.
     bounded_inventory: bool,
+    /// Dependency invalidation/reparse has completed; a writer retry must not repeat it.
+    prepared: bool,
+    /// Cleared from the durable obligation queue only after all publication succeeds.
+    completed_queue: std::collections::HashSet<PathBuf>,
+    /// Any failure after starting a writer requires recovery, not blind replay.
+    phase2_attempted: bool,
 }
 
 impl PendingResolution {
@@ -147,7 +153,7 @@ impl Pipeline {
             Some(&mut pending),
             false,
         )?;
-        let phase2 = self.resolve_pending(pending, index, semantic, false)?;
+        let phase2 = self.resolve_pending(&mut pending, index, semantic, false)?;
         stats.relationships_resolved =
             phase2.defines_resolved + phase2.calls_resolved + phase2.other_resolved;
         Ok(stats)
@@ -480,7 +486,7 @@ impl Pipeline {
             total_files,
             &mut pending,
         )?;
-        stats.phase2_stats = self.resolve_pending(pending, index, semantic, show_progress)?;
+        stats.phase2_stats = self.resolve_pending(&mut pending, index, semantic, show_progress)?;
         Ok(stats)
     }
 
@@ -501,6 +507,11 @@ impl Pipeline {
         total_files: usize,
         pending: &mut PendingResolution,
     ) -> PipelineResult<IncrementalStats> {
+        if pending.prepared || pending.phase2_attempted {
+            return Err(PipelineError::Index(crate::IndexError::General(
+                "Finish or discard the prepared resolution wave before adding another root".into(),
+            )));
+        }
         self.register_dependency_root(root);
         pending.embedding_pool = embedding_pool.clone();
         use crate::io::status_line::{
@@ -838,82 +849,107 @@ impl Pipeline {
     /// left by earlier bounded runs.
     pub fn resolve_pending(
         &self,
-        mut pending: PendingResolution,
+        pending: &mut PendingResolution,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         show_progress: bool,
     ) -> PipelineResult<Phase2Stats> {
-        let mut queued: std::collections::HashSet<_> =
-            index.get_pending_resolution_paths()?.into_iter().collect();
-        if !pending.ran && (pending.bounded_inventory || queued.is_empty()) {
-            return Ok(Phase2Stats::default());
+        if pending.phase2_attempted {
+            return Err(PipelineError::Index(crate::IndexError::General(
+                "Deferred resolution may have committed rows; discard this pending value and rebuild instead of replaying it".into(),
+            )));
         }
         let semantic_path = self.settings.index_path.join("semantic");
-
-        let dependency_settings = self.settings_with_dependency_roots();
-        let dependents = super::dependencies::import_dependents(
-            &index,
-            &dependency_settings,
-            &pending.changed_paths,
-            &pending.processed_paths,
-        )?;
-        let dirty_sources = super::dependencies::invalidate_importers(&index, &dependents)?;
-        queued.extend(dependents.iter().cloned());
-        pending
-            .captured_inbound
-            .retain(|edge| !dirty_sources.contains(&edge.from));
-        let mut completed_queue = std::collections::HashSet::new();
-        if pending.bounded_inventory {
-            if !dependents.is_empty() {
-                tracing::info!(target: "pipeline",
-                    "Deferred resolution for {} importer file(s) outside the bounded inventory",
-                    dependents.len());
+        if !pending.prepared {
+            pending.phase2_attempted = true;
+            let mut queued: std::collections::HashSet<_> =
+                index.get_pending_resolution_paths()?.into_iter().collect();
+            if !pending.ran && (pending.bounded_inventory || queued.is_empty()) {
+                *pending = PendingResolution::default();
+                return Ok(Phase2Stats::default());
             }
-        } else {
-            let to_reparse: std::collections::BTreeSet<_> = queued
-                .iter()
-                .filter(|&path| !pending.processed_paths.contains(path))
-                .cloned()
-                .collect();
-            for path in to_reparse {
-                let absolute_path = super::dependencies::absolute(&path, &self.settings);
-                // An authoritative walk may have removed an excluded file's
-                // registration while its pending obligation remained durable.
-                if index.get_file_info(&path.to_string_lossy())?.is_none()
-                    || !std::fs::symlink_metadata(&absolute_path)
-                        .is_ok_and(|metadata| metadata.is_file())
-                {
-                    completed_queue.insert(path);
-                    continue;
+
+            let dependency_settings = self.settings_with_dependency_roots();
+            let dependents = super::dependencies::import_dependents(
+                &index,
+                &dependency_settings,
+                &pending.changed_paths,
+                &pending.processed_paths,
+            )?;
+            let dirty_sources = super::dependencies::invalidate_importers(&index, &dependents)?;
+            queued.extend(dependents.iter().cloned());
+            pending
+                .captured_inbound
+                .retain(|edge| !dirty_sources.contains(&edge.from));
+            let mut completed_queue = std::collections::HashSet::new();
+            if pending.bounded_inventory {
+                if !dependents.is_empty() {
+                    tracing::info!(target: "pipeline",
+                        "Deferred resolution for {} importer file(s) outside the bounded inventory",
+                        dependents.len());
                 }
-                let pool = pending.embedding_pool.clone();
-                self.index_file_content(
-                    &absolute_path,
-                    Arc::clone(&index),
-                    semantic.clone(),
-                    pool,
-                    None,
-                    Some(&mut pending),
-                    true,
-                )?;
+            } else {
+                let to_reparse: std::collections::BTreeSet<_> = queued
+                    .iter()
+                    .filter(|&path| !pending.processed_paths.contains(path))
+                    .cloned()
+                    .collect();
+                for path in to_reparse {
+                    let absolute_path = super::dependencies::absolute(&path, &self.settings);
+                    // An authoritative walk may have removed an excluded file's
+                    // registration while its pending obligation remained durable.
+                    if index.get_file_info(&path.to_string_lossy())?.is_none()
+                        || !std::fs::symlink_metadata(&absolute_path)
+                            .is_ok_and(|metadata| metadata.is_file())
+                    {
+                        completed_queue.insert(path);
+                        continue;
+                    }
+                    let pool = pending.embedding_pool.clone();
+                    self.index_file_content(
+                        &absolute_path,
+                        Arc::clone(&index),
+                        semantic.clone(),
+                        pool,
+                        None,
+                        Some(pending),
+                        true,
+                    )?;
+                }
             }
-        }
 
+            completed_queue.extend(
+                pending
+                    .processed_paths
+                    .iter()
+                    .filter(|path| queued.contains(*path))
+                    .cloned(),
+            );
+            pending.completed_queue = completed_queue;
+            pending.prepared = true;
+            pending.phase2_attempted = false;
+        }
         if !pending.ran {
-            super::dependencies::clear_pending_paths(&index, &completed_queue)?;
+            super::dependencies::clear_pending_paths(&index, &pending.completed_queue)?;
+            *pending = PendingResolution::default();
             return Ok(Phase2Stats::default());
         }
 
         let symbol_cache =
             self.resolution_cache(&index, None, &[], !pending.unresolved.is_empty())?;
-        let phase2_stats = self.run_phase2_maybe_bar(
-            pending.unresolved,
-            pending.variable_bindings,
-            pending.this_barriers,
+        pending.phase2_attempted = true;
+        let phase2_result = self.run_phase2_maybe_bar(
+            pending.unresolved.clone(),
+            pending.variable_bindings.clone(),
+            pending.this_barriers.clone(),
             Arc::clone(&symbol_cache),
             Arc::clone(&index),
             show_progress,
-        )?;
+        );
+        if matches!(&phase2_result, Err(PipelineError::WriterUnavailable { .. })) {
+            pending.phase2_attempted = false;
+        }
+        let phase2_stats = phase2_result?;
 
         // Phase 2 has stored the changed files' own edges; the replacements
         // are committed and findable, so the edges captured from unchanged
@@ -932,14 +968,9 @@ impl Pipeline {
 
         // Clearing follows successful relationship and embedding commits;
         // file cleanup alone is never sufficient to discharge this work.
-        completed_queue.extend(
-            pending
-                .processed_paths
-                .into_iter()
-                .filter(|path| queued.contains(path)),
-        );
-        super::dependencies::clear_pending_paths(&index, &completed_queue)?;
+        super::dependencies::clear_pending_paths(&index, &pending.completed_queue)?;
         self.finish_resolution_cache(&index, &symbol_cache)?;
+        *pending = PendingResolution::default();
 
         Ok(phase2_stats)
     }
@@ -987,7 +1018,7 @@ impl Pipeline {
 
         if discover_result.is_empty() {
             let phase2_stats = self.resolve_pending(
-                PendingResolution {
+                &mut PendingResolution {
                     embedding_pool,
                     ..PendingResolution::default()
                 },
@@ -1131,7 +1162,7 @@ impl Pipeline {
                 .iter()
                 .map(|(_, new)| new.clone()),
         );
-        let phase2_stats = self.resolve_pending(pending, index, semantic, show_progress)?;
+        let phase2_stats = self.resolve_pending(&mut pending, index, semantic, show_progress)?;
 
         Ok(IncrementalStats {
             new_files: discover_result.new_files.len(),

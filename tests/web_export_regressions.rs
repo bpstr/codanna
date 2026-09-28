@@ -358,7 +358,7 @@ fn tsconfig_alias_missing_export_is_negative_evidence_for_resolution() {
     std::fs::write(
         rules_dir.join("typescript_resolution.json"),
         serde_json::to_vec(&serde_json::json!({
-            "version": "1.0", "hashes": hashes, "mappings": mappings, "rules": rules
+            "version": codanna::project_resolver::persist::RESOLUTION_INDEX_VERSION, "hashes": hashes, "mappings": mappings, "rules": rules
         }))
         .unwrap(),
     )

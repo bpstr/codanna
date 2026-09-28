@@ -25,6 +25,8 @@ pub struct WriteStage {
     commit_threshold: usize,
     /// Whether a batch is currently active
     batch_started: bool,
+    /// Unlike "has committed", this also rejects replay after staged-write failures.
+    ever_started: bool,
 }
 
 /// Statistics from write operations.
@@ -46,6 +48,7 @@ impl WriteStage {
             pending: Vec::new(),
             commit_threshold: 10_000, // Commit every 10K relationships
             batch_started: false,
+            ever_started: false,
         }
     }
 
@@ -56,6 +59,7 @@ impl WriteStage {
             pending: Vec::new(),
             commit_threshold: threshold,
             batch_started: false,
+            ever_started: false,
         }
     }
 
@@ -64,8 +68,14 @@ impl WriteStage {
         if !self.batch_started {
             self.index.start_batch()?;
             self.batch_started = true;
+            self.ever_started = true;
         }
         Ok(())
+    }
+
+    /// True only while no batch has ever been acquired by this stage.
+    pub(crate) fn can_retry_start(&self) -> bool {
+        !self.ever_started
     }
 
     /// Write a batch of resolved relationships.
@@ -132,8 +142,9 @@ impl WriteStage {
     fn commit_internal(&mut self) -> Result<(), crate::storage::StorageError> {
         self.index.commit_batch()?;
         self.pending.clear();
-        // Start new batch for subsequent writes
-        self.index.start_batch()?;
+        self.batch_started = false;
+        // Start new batch for subsequent writes. A failure here is not replayable.
+        self.ensure_batch_started()?;
         Ok(())
     }
 
@@ -158,6 +169,16 @@ impl WriteStage {
     /// Get count of pending (uncommitted) relationships.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+}
+
+impl Drop for WriteStage {
+    fn drop(&mut self) {
+        if self.batch_started {
+            if let Err(error) = self.index.rollback_batch() {
+                tracing::error!(target: "pipeline", "Failed to discard unfinished relationship batch: {error}");
+            }
+        }
     }
 }
 
@@ -215,6 +236,31 @@ mod tests {
         std::fs::create_dir(&meta_path).unwrap();
         assert!(stage.flush().is_err());
         assert_eq!(stage.pending_count(), 1);
+    }
+
+    #[test]
+    fn upstream_repair_only_the_first_writer_start_is_retryable() {
+        let dir = TempDir::new().unwrap();
+        let index = Arc::new(DocumentIndex::new(dir.path(), &Settings::default()).unwrap());
+        let mut stage = WriteStage::with_commit_threshold(Arc::clone(&index), 1);
+        assert!(stage.can_retry_start());
+        stage
+            .write_one(make_resolved(1, 2, RelationKind::Calls))
+            .unwrap();
+        assert!(
+            !stage.can_retry_start(),
+            "a committed batch must never be replayed"
+        );
+        poison_writer(Arc::clone(&index));
+        assert!(
+            stage
+                .write_one(make_resolved(2, 3, RelationKind::Calls))
+                .is_err()
+        );
+        assert!(
+            !stage.can_retry_start(),
+            "a later writer/store failure is not an initial acquisition failure"
+        );
     }
 
     #[test]

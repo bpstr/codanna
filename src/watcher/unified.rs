@@ -23,6 +23,9 @@ use super::path_registry::PathRegistry;
 #[path = "config_reload.rs"]
 mod config_reload;
 use config_reload::PendingConfigReload;
+#[path = "deferred_code.rs"]
+mod deferred_code;
+use deferred_code::DeferredCodeState;
 
 /// Above this size, reconcile a modification burst through the shared batch
 /// lane. This avoids one semantic-index save per path after large filesystem
@@ -190,6 +193,7 @@ pub struct UnifiedWatcher {
     document_reconciliations: RwLock<DocumentReconciliations>,
     /// Latest proposed configuration; failures retry without another file event.
     pending_config: RwLock<Option<PendingConfigReload>>,
+    deferred_code: Arc<std::sync::Mutex<DeferredCodeState>>,
     /// Chunking config for document re-indexing.
     chunking_config: ChunkingConfig,
     /// Path for semantic search persistence.
@@ -475,6 +479,19 @@ impl UnifiedWatcher {
                     }
                 }
             }
+            if cfg!(target_os = "macos")
+                && self
+                    .batch_sync_roots
+                    .iter()
+                    .any(|root| path.starts_with(root))
+                && !self
+                    .handlers
+                    .iter()
+                    .any(|handler| handler.reloads_config() && handler.matches(&path))
+                && !self.code_event_is_admitted(&path, is_directory, removed_directory)
+            {
+                continue;
+            }
             // Ignore files alter the inventory, including already-indexed
             // files and currently empty subtrees. They are policy events even
             // though source handlers deliberately reject unknown dot-files.
@@ -554,6 +571,22 @@ impl UnifiedWatcher {
                 _ => {}
             }
         }
+    }
+
+    /// A recursive backend must not route descendants of ignored code directories.
+    /// A created directory is admitted through its watched parent; a deleted or
+    /// recreated ancestor is admitted through its previously watched descendants.
+    fn code_event_is_admitted(
+        &self,
+        path: &Path,
+        is_directory: bool,
+        removed_directory: bool,
+    ) -> bool {
+        let dirs = self.registry.watch_dirs();
+        path.parent().is_some_and(|parent| dirs.contains(parent))
+            || (is_directory && dirs.contains(path))
+            || removed_directory
+            || (is_directory && dirs.iter().any(|directory| directory.starts_with(path)))
     }
 
     /// Register handler watch roots: watched directly so directory
@@ -826,6 +859,22 @@ impl UnifiedWatcher {
     /// One fixed-cadence dispatch. Explicit time keeps retry tests independent
     /// of OS notification timing and real debounce sleeps.
     async fn dispatch_ready_changes(&mut self, now: Instant) -> DocumentBatchStats {
+        let retained = match self.deferred_code.lock() {
+            Ok(state) => state.pending.is_some().then(|| state.ready(now)),
+            Err(error) => {
+                tracing::error!("[watcher] deferred state poisoned: {error}");
+                return DocumentBatchStats::default();
+            }
+        };
+        if let Some(ready) = retained {
+            if !ready {
+                return DocumentBatchStats::default();
+            }
+            if let Err(error) = self.synchronize_roots(Vec::new()).await {
+                tracing::warn!("[watcher] deferred resolution retry failed: {error}");
+                return DocumentBatchStats::default();
+            }
+        }
         if self.event_overflowed.swap(false, Ordering::AcqRel) {
             self.reconcile_event_overflow(now).await;
         }
@@ -1030,10 +1079,20 @@ impl UnifiedWatcher {
         roots: Vec<PathBuf>,
         removed: Vec<PathBuf>,
     ) -> Result<(), WatchError> {
-        if roots.is_empty() {
-            return Ok(());
-        }
+        let retained = Arc::clone(&self.deferred_code);
+        let index_path = self.index_path.clone();
+        let overflowed = Arc::clone(&self.event_overflowed);
         crate::runtime::mutate(&self.facade, move |indexer| {
+            let mut state = retained.lock().map_err(|error| WatchError::EventError {
+                details: error.to_string(),
+            })?;
+            // Flush an older wave before any new Phase 1 work can change its symbol IDs.
+            if let Err(error) = state.resolve(indexer, Instant::now()) {
+                overflowed.store(true, Ordering::Release);
+                return Err(WatchError::EventError {
+                    details: error.to_string(),
+                });
+            }
             let mut pending = crate::indexing::pipeline::PendingResolution::default();
             let mut failures = Vec::new();
             for root in roots {
@@ -1051,12 +1110,21 @@ impl UnifiedWatcher {
                     failures.push(format!("{}: {error}", root.display()));
                 }
             }
-            if let Err(error) = indexer.resolve_deferred(pending) {
+            state.pending = Some(pending);
+            if let Err(error) = state.resolve(indexer, Instant::now()) {
                 failures.push(error.to_string());
             }
             if failures.is_empty() {
-                Ok(())
+                crate::IndexPersistence::new(index_path)
+                    .save_metadata(indexer)
+                    .map_err(|error| {
+                        overflowed.store(true, Ordering::Release);
+                        WatchError::EventError {
+                            details: error.to_string(),
+                        }
+                    })
             } else {
+                overflowed.store(true, Ordering::Release);
                 Err(WatchError::EventError {
                     details: failures.join("; "),
                 })
@@ -1100,6 +1168,26 @@ impl UnifiedWatcher {
         action: WatchAction,
         handler_name: &str,
     ) -> Result<(), WatchError> {
+        if matches!(
+            &action,
+            WatchAction::ReindexCode { .. }
+                | WatchAction::RemoveCode { .. }
+                | WatchAction::ReloadConfig { .. }
+        ) && self
+            .deferred_code
+            .lock()
+            .map_err(|error| WatchError::EventError {
+                details: error.to_string(),
+            })?
+            .pending
+            .is_some()
+        {
+            self.event_overflowed.store(true, Ordering::Release);
+            return Err(WatchError::EventError {
+                details: "Code mutation deferred until the retained resolution wave completes"
+                    .into(),
+            });
+        }
         let result: Result<Option<FileChangeEvent>, WatchError> = match action {
             WatchAction::ReindexCode { path, created } => {
                 let semantic_path = self.index_path.join("semantic");
@@ -1221,8 +1309,8 @@ impl UnifiedWatcher {
                             crate::parsing::paths::render_absolute_path(path).display()
                         );
                     }
-                    self.synchronize_roots(added).await?;
                 }
+                self.synchronize_roots(added).await?;
                 if !removed.is_empty() {
                     tracing::info!(
                         "Run 'codanna clean' to remove symbols from removed directories"
@@ -1537,6 +1625,7 @@ impl UnifiedWatcherBuilder {
             document_store: self.document_store,
             document_reconciliations: RwLock::new(DocumentReconciliations::new(self.debounce_ms)),
             pending_config: RwLock::new(None),
+            deferred_code: Arc::new(std::sync::Mutex::new(DeferredCodeState::default())),
             chunking_config: self.chunking_config,
             index_path,
             workspace_root,
@@ -1608,6 +1697,21 @@ mod tests {
             .workspace_root(dir.to_path_buf())
             .build()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn upstream_repair_recursive_event_gate_preserves_admitted_and_recreated_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.registry.add_watch_dir(root.clone());
+        watcher.registry.add_watch_dir(root.join("src"));
+        assert!(watcher.code_event_is_admitted(&root.join("src/new.ts"), false, false));
+        assert!(watcher.code_event_is_admitted(&root.join("newdir"), true, false));
+        assert!(!watcher.code_event_is_admitted(&root.join("ignored/deep/file.ts"), false, false));
+        assert!(watcher.code_event_is_admitted(&root, true, false));
+        assert!(watcher.code_event_is_admitted(&root, false, true));
     }
 
     #[test]

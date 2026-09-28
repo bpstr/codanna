@@ -32,6 +32,7 @@ mod cache;
 pub mod config;
 mod dependencies;
 mod exports;
+mod file_presence;
 mod full;
 mod incremental;
 pub mod metrics;

@@ -372,7 +372,7 @@ impl CodeIntelligenceServer {
                     crate::IndexingResult::Cached(_) => {}
                 }
             }
-            indexer.resolve_deferred(pending).map_err(|_| {
+            indexer.resolve_deferred(&mut pending).map_err(|_| {
                 McpError::internal_error("Reindex relationship resolution failed", None)
             })?;
             Ok::<_, McpError>((count, indexer.symbol_count()))

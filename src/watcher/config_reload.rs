@@ -382,13 +382,11 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
         self.remove_native_watches(&obsolete);
-        if !accepted.added_code.is_empty() {
-            // Code directory catch-up keeps its established independent commit
-            // semantics. Document publication has already succeeded here.
-            if let Err(error) = self.synchronize_roots(accepted.added_code).await {
-                tracing::error!("[config] accepted code roots need catch-up: {error}");
-                self.event_overflowed.store(true, Ordering::Release);
-            }
+        // Metadata must also publish for removal-only reloads. A failed catch-up
+        // leaves the previous root metadata intact and schedules truth reconciliation.
+        if let Err(error) = self.synchronize_roots(accepted.added_code).await {
+            tracing::error!("[config] accepted code roots need catch-up: {error}");
+            self.event_overflowed.store(true, Ordering::Release);
         }
         if accepted.removed_code {
             tracing::info!("Run 'codanna clean' to remove symbols from removed directories");

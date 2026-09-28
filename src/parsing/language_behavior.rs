@@ -484,6 +484,57 @@ pub trait LanguageBehavior: Send + Sync {
         }
     }
 
+    /// Classify a relative target without confusing partial inventory with absence.
+    fn relative_import_lookup(
+        &self,
+        cache: &dyn PipelineSymbolCache,
+        local_name: &str,
+        specifier: &str,
+        importing_file: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::resolution::RelativeImportLookup {
+        use crate::parsing::resolution::{FilePresence, RelativeImportLookup};
+        if let Some(id) =
+            self.resolve_relative_import(cache, local_name, specifier, importing_file, extensions)
+        {
+            return RelativeImportLookup::Bound(id);
+        }
+        let Some(expected) =
+            crate::parsing::paths::resolve_relative_specifier(Path::new(importing_file), specifier)
+        else {
+            return RelativeImportLookup::Unknown;
+        };
+        let mut accepted = vec![expected.clone()];
+        if let Some(name) = expected.file_name().and_then(|n| n.to_str()) {
+            for extension in extensions {
+                accepted.push(expected.with_file_name(format!("{name}.{extension}")));
+                accepted.push(expected.join(format!("index.{extension}")));
+            }
+        }
+        // Preserve emitted-JS specifiers whose source is TypeScript.
+        let substitutions: &[&str] = match expected.extension().and_then(|e| e.to_str()) {
+            Some("js" | "jsx") => &["ts", "tsx", "d.ts"],
+            Some("mjs") => &["mts", "d.mts"],
+            Some("cjs") => &["cts", "d.cts"],
+            _ => &[],
+        };
+        accepted.extend(
+            substitutions
+                .iter()
+                .map(|extension| expected.with_extension(extension)),
+        );
+        if accepted
+            .iter()
+            .all(|path| cache.file_presence(path) == FilePresence::Absent)
+            && cache.sibling_stem_present(&expected) == FilePresence::Absent
+            && cache.directory_present(&expected) == FilePresence::Absent
+        {
+            RelativeImportLookup::NoIndexedFile
+        } else {
+            RelativeImportLookup::Unknown
+        }
+    }
+
     /// Build resolution context for parallel pipeline (no Tantivy access).
     ///
     /// This method is used by the parallel indexing pipeline where all symbol

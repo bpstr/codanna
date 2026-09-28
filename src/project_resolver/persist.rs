@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::{ResolutionError, ResolutionResult, Sha256Hash};
 
 /// Version of the resolution index schema
-pub const RESOLUTION_INDEX_VERSION: &str = "1.0";
+pub const RESOLUTION_INDEX_VERSION: &str = "1.1";
 
 /// Resolution index schema v1 for TypeScript
 ///
@@ -35,6 +35,9 @@ pub struct ResolutionIndex {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolutionRules {
+    /// Relative specifiers may be redirected by rootDirs/moduleSuffixes.
+    #[serde(default)]
+    pub relative_specifiers_redirected: bool,
     /// Base URL for path resolution
     pub base_url: Option<String>,
 
@@ -281,6 +284,7 @@ mod tests {
             index.set_rules(
                 config_path,
                 ResolutionRules {
+                    relative_specifiers_redirected: false,
                     base_url: config.compilerOptions.baseUrl,
                     paths: config.compilerOptions.paths,
                 },
@@ -333,6 +337,7 @@ mod tests {
         index.set_rules(
             config_path,
             ResolutionRules {
+                relative_specifiers_redirected: false,
                 base_url: config.compilerOptions.baseUrl,
                 paths: config.compilerOptions.paths,
             },

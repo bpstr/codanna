@@ -494,6 +494,7 @@ pub struct SymbolLookupCache {
     pub(super) file_exports: dashmap::DashMap<FileId, crate::parsing::FileExports>,
     pub(super) export_file_paths: dashmap::DashMap<PathBuf, FileId>,
     pub(super) export_modules: dashmap::DashMap<String, Vec<FileId>>,
+    pub(super) file_inventory: std::sync::RwLock<super::file_presence::FileInventory>,
 }
 
 impl Default for SymbolLookupCache {
@@ -513,6 +514,7 @@ impl SymbolLookupCache {
             file_exports: dashmap::DashMap::new(),
             export_file_paths: dashmap::DashMap::new(),
             export_modules: dashmap::DashMap::new(),
+            file_inventory: std::sync::RwLock::new(Default::default()),
         }
     }
 
@@ -526,6 +528,7 @@ impl SymbolLookupCache {
             file_exports: dashmap::DashMap::new(),
             export_file_paths: dashmap::DashMap::new(),
             export_modules: dashmap::DashMap::new(),
+            file_inventory: std::sync::RwLock::new(Default::default()),
         }
     }
 
@@ -601,9 +604,21 @@ impl SymbolLookupCache {
         let files: std::collections::HashSet<_> = files.iter().copied().collect();
         let mut replacements = Vec::with_capacity(files.len());
         for file in files {
-            replacements.push((file, index.find_symbols_by_file(file)?));
+            replacements.push((
+                file,
+                index.find_symbols_by_file(file)?,
+                index.get_file_path(file)?,
+            ));
         }
-        for (file, symbols) in replacements {
+        let mut inventory = self
+            .file_inventory
+            .write()
+            .map_err(|_| crate::IndexError::MutexPoisoned)?;
+        for (file, symbols, path) in replacements {
+            inventory.replace(
+                file,
+                path.map(|path| PathBuf::from(index.to_portable_file_path(&path).unwrap_or(path))),
+            );
             let old_ids = self.symbols_in_file(file);
             for id in old_ids {
                 self.remove(id);
@@ -845,6 +860,22 @@ impl SymbolLookupCache {
 }
 
 impl PipelineSymbolCache for SymbolLookupCache {
+    fn file_presence(&self, path: &std::path::Path) -> crate::parsing::resolution::FilePresence {
+        self.inventory_presence(path, super::file_presence::InventoryQuery::File)
+    }
+    fn sibling_stem_present(
+        &self,
+        path: &std::path::Path,
+    ) -> crate::parsing::resolution::FilePresence {
+        self.inventory_presence(path, super::file_presence::InventoryQuery::Sibling)
+    }
+    fn directory_present(
+        &self,
+        path: &std::path::Path,
+    ) -> crate::parsing::resolution::FilePresence {
+        self.inventory_presence(path, super::file_presence::InventoryQuery::Directory)
+    }
+
     fn resolve(
         &self,
         name: &str,
@@ -1031,6 +1062,7 @@ impl SymbolLookupCache {
             })
             .map_err(|e| PipelineError::Index(crate::IndexError::Storage(e)))?;
 
+        cache.load_file_inventory(index)?;
         Ok(cache)
     }
 
@@ -1335,6 +1367,12 @@ pub enum PipelineError {
 
     #[error("Index error: {0}")]
     Index(#[from] crate::IndexError),
+
+    /// Phase 2 never acquired a writer; the prepared pending work remains retryable.
+    #[error("Deferred resolution writer unavailable: {source}")]
+    WriterUnavailable {
+        source: crate::storage::StorageError,
+    },
 
     /// [PIPELINE API] Uses storage::StorageError with proper `#[from]` conversion.
     #[error("Storage error: {0}")]

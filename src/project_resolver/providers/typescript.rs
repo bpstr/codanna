@@ -157,6 +157,16 @@ impl ProjectResolutionProvider for TypeScriptProvider {
                     index.set_rules(
                         config_path,
                         ResolutionRules {
+                            relative_specifiers_redirected: tsconfig
+                                .compilerOptions
+                                .moduleSuffixes
+                                .as_ref()
+                                .is_some_and(|v| !v.is_empty())
+                                || tsconfig
+                                    .compilerOptions
+                                    .rootDirs
+                                    .as_ref()
+                                    .is_some_and(|v| !v.is_empty()),
                             base_url: tsconfig.compilerOptions.baseUrl,
                             paths: tsconfig.compilerOptions.paths,
                         },

@@ -274,7 +274,7 @@ async fn catch_up(
             }
             index.index_directory_deferred(&source, false, &mut pending)?;
         }
-        index.resolve_deferred(pending)?;
+        index.resolve_deferred(&mut pending)?;
         IndexPersistence::new(settings.index_path.clone()).save_facade(index)?;
         Ok::<_, IndexError>(())
     })

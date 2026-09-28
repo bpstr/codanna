@@ -195,6 +195,7 @@ impl CSharpProvider {
         paths.insert(project_root.to_string_lossy().to_string(), vec![]);
 
         Ok(ResolutionRules {
+            relative_specifiers_redirected: false,
             base_url: Some(root_namespace),
             paths,
         })

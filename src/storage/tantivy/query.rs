@@ -843,6 +843,52 @@ impl DocumentIndex {
         Ok(paths)
     }
 
+    /// Visit every persisted file record, including files without symbols.
+    /// No search result cap applies; malformed identity rows are errors.
+    pub fn for_each_file_path<E: From<StorageError>>(
+        &self,
+        mut visit: impl FnMut(FileId, PathBuf) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "file_info"),
+            IndexRecordOption::Basic,
+        );
+        let addresses = searcher
+            .search(&query, &DocSetCollector)
+            .map_err(StorageError::from)?;
+        for address in addresses {
+            let doc = searcher
+                .doc::<Document>(address)
+                .map_err(StorageError::from)?;
+            let id = doc
+                .get_first(self.schema.file_id)
+                .and_then(|value| value.as_u64())
+                .and_then(|id| u32::try_from(id).ok())
+                .and_then(FileId::new)
+                .ok_or_else(|| StorageError::InvalidFieldValue {
+                    field: "file_id".into(),
+                    reason: "not a valid file identity".into(),
+                })?;
+            let path = doc
+                .get_first(self.schema.file_path)
+                .and_then(|value| value.as_str())
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| StorageError::InvalidFieldValue {
+                    field: "file_path".into(),
+                    reason: "missing file identity".into(),
+                })?;
+            visit(
+                id,
+                PathBuf::from(
+                    self.to_portable_file_path(path)
+                        .unwrap_or_else(|| path.to_owned()),
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Get relationships from a symbol
     pub fn get_relationships_from(
         &self,
