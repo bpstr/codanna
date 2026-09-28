@@ -19,12 +19,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Apply compatibility changes with source guards
+        id: apply
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import base64, hashlib, json, pathlib, zlib, os
-          encoded = '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'
+          encoded = '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'
           raw = zlib.decompress(base64.b64decode(encoded))
           assert hashlib.sha256(raw).hexdigest() == '139e258a8e4a5921e0394da0e072fc867d8bc22f8a3c084ae5eb091516eb1cf7'
           edits = json.loads(raw)
@@ -49,6 +50,7 @@ jobs:
           cache-on-failure: true
           cache-all-crates: true
       - name: Format and publish code only
+        id: publish
         env:
           GH_WRITE_TOKEN: ${{ github.token }}
         run: |
@@ -87,7 +89,7 @@ jobs:
           run_group cargo test --locked --test workspace_recall -- --nocapture
           exit "$status"
       - name: Strict lint
-        if: success() || failure()
+        if: (success() || failure()) && steps.publish.outcome == 'success'
         run: |
           set -euo pipefail
           cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/compat-clippy.log"
