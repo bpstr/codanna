@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "finding": "F05",
-  "status": "prepared_not_run",
+  "status": "executed_local",
   "provider_requests": 0,
   "cases": [
     {
@@ -20,7 +20,8 @@
       "preserve_access": [
         "historical.md"
       ],
-      "ranking_policy": "opt_in_authority_prior"
+      "ranking_policy": "opt_in_authority_prior",
+      "authority_basis": "caller_supplied_source_paths_v1"
     }
   ]
 }

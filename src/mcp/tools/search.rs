@@ -956,7 +956,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Retrieve indexed document chunks using configured semantic/lexical search or a case-sensitive literal substring without embeddings. Optional finite score_floor uses native score units. Returned candidates do not certify supporting evidence or authority."
+        description = "Retrieve indexed document chunks using configured semantic/lexical search or a case-sensitive literal substring without embeddings. Optional finite score_floor uses native score units. authority_sources applies a caller-supplied source-path tiebreak after query-term coverage; authority is never inferred. Returned candidates do not certify supporting evidence."
     )]
     pub async fn search_documents(
         &self,
@@ -966,12 +966,14 @@ impl CodeIntelligenceServer {
             limit,
             literal,
             score_floor,
+            authority_sources,
         }): Parameters<SearchDocumentsRequest>,
     ) -> Result<CallToolResult, McpError> {
         crate::mcp::requests::validate_search_limit(limit)?;
         let options = crate::documents::DocumentSearchOptions {
             literal,
             score_floor,
+            authority_sources,
         };
         options
             .validate()
@@ -1014,7 +1016,7 @@ impl CodeIntelligenceServer {
                     let retrieval = store.retrieval_metadata(&options, results.len());
                     if results.is_empty() {
                         let mut response = CallToolResult::success(vec![ContentBlock::text(format!(
-                            "No documents found for: {query}. Supporting evidence and authority have not been assessed."
+                            "No documents found for: {query}. Supporting evidence has not been assessed; any authority prior is caller supplied and unverified."
                         ))]);
                         response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
                         return Ok(response);
@@ -1046,7 +1048,7 @@ impl CodeIntelligenceServer {
                         output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
                     }
 
-                    output.push_str("Retrieval candidates only; supporting evidence and authority have not been assessed.\n");
+                    output.push_str("Retrieval candidates only; supporting evidence has not been assessed. Any authority prior is caller supplied and unverified.\n");
                     let mut response = CallToolResult::success(vec![ContentBlock::text(output)]);
                     response.structured_content = Some(serde_json::json!({ "retrieval": retrieval, "results": results }));
                     Ok(response)
