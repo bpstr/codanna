@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "finding": "F10",
-  "status": "prepared_not_run",
+  "corpus_version": "f10-v1",
+  "status": "frozen",
   "provider_requests": 0,
   "cases": [
     {
@@ -10,7 +11,11 @@
       "arguments": {
         "name": "accountWeekStart"
       },
-      "expected_count": 2
+      "expected": [
+        "account.ts:accountWeekStart",
+        "reference.ts:accountWeekStart"
+      ],
+      "exit_code": 0
     },
     {
       "id": "scoped",
@@ -21,22 +26,69 @@
       },
       "expected": [
         "account.ts:accountWeekStart"
-      ]
+      ],
+      "exit_code": 0
     },
     {
       "id": "caller",
+      "tool": "find_callers",
+      "arguments": {},
       "target": "account.ts:accountWeekStart",
-      "expected_unique_callers": [
+      "expected": [
         "account.ts:displayWeek"
       ],
-      "excluded_targets": [
-        "reference.ts:accountWeekStart"
-      ]
+      "exit_code": 0
     },
     {
-      "id": "negative",
-      "query": "UniqueNonexistentRetrievalHoldoutSentinel",
-      "literal_support": false
+      "id": "decoy_callers",
+      "tool": "find_callers",
+      "arguments": {},
+      "target": "reference.ts:accountWeekStart",
+      "expected": [],
+      "exit_code": 0
+    },
+    {
+      "id": "callee",
+      "tool": "get_calls",
+      "arguments": {},
+      "target": "account.ts:displayWeek",
+      "expected": [
+        "account.ts:accountWeekStart"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "positive_literal",
+      "tool": "search_documents",
+      "arguments": {
+        "query": "per-account display preference",
+        "collection": "policy",
+        "literal": true
+      },
+      "expected": [
+        "policy.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "negative_literal",
+      "tool": "search_documents",
+      "arguments": {
+        "query": "UniqueNonexistentRetrievalHoldoutSentinel",
+        "collection": "policy",
+        "literal": true
+      },
+      "expected": [],
+      "exit_code": 1
+    },
+    {
+      "id": "negative_symbol",
+      "tool": "find_symbol",
+      "arguments": {
+        "name": "UniqueNonexistentRetrievalHoldoutSentinel"
+      },
+      "expected": [],
+      "exit_code": 1
     }
   ]
 }
