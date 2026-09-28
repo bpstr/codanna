@@ -573,7 +573,7 @@ pub enum DocumentAction {
 
     /// Search documents
     #[command(
-        about = "Search indexed documents using natural language",
+        about = "Search indexed documents using natural language or exact literal text",
         after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents search query:\"auth\" limit:3 --json"
     )]
     Search {

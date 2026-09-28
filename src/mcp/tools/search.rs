@@ -973,7 +973,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Search indexed documents (markdown, text files) using natural language queries. Returns relevant chunks with context and highlighted keywords."
+        description = "Retrieve indexed document chunks using configured semantic/lexical search or a case-sensitive literal substring without embeddings. Optional finite score_floor uses native score units. Returned candidates do not certify supporting evidence or authority."
     )]
     pub async fn search_documents(
         &self,
