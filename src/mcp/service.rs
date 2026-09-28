@@ -457,7 +457,7 @@ mod tests {
         );
         assert_eq!(
             missing_param_message("find_symbol"),
-            "find_symbol requires 'name' parameter"
+            "find_symbol requires either 'name' or 'symbol_id' parameter"
         );
         assert_eq!(
             accepted_params_line("get_calls"),

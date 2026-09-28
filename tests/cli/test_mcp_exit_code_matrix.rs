@@ -243,6 +243,14 @@ fn mcp_exit_codes_match_envelope_across_tools_outcomes_and_modes() {
         .as_u64()
         .expect("symbol id in envelope data");
     let id_arg = format!("symbol_id:{id}");
+    let id_json = serde_json::json!({"symbol_id": id}).to_string();
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["mcp", "find_symbol", "--args", id_json.as_str(), "--json"],
+    );
+    assert_eq!(code, 0, "ID-only JSON must resolve\n{stdout}\n{stderr}");
+    let result: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(result["data"][0]["symbol"]["id"], id);
 
     let (code, stdout, stderr) = run_cli(
         workspace.path(),

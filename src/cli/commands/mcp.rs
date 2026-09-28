@@ -280,7 +280,16 @@ pub async fn run(
     }
 
     // Convert to Option<Map> only if we have arguments
-    let arguments = arguments.filter(|map| !map.is_empty());
+    let mut arguments = arguments.filter(|map| !map.is_empty());
+    // Preserve the legacy CLI render/exit paths while accepting ID-only JSON.
+    if tool == "find_symbol"
+        && let Some(map) = arguments.as_mut()
+        && !map.contains_key("name")
+        && let Some(id) = map.get("symbol_id")
+    {
+        let id = id.as_str().map(str::to_owned).unwrap_or_else(|| id.to_string());
+        map.insert("name".into(), serde_json::Value::String(format!("symbol_id:{id}")));
+    }
 
     // Validate the tool name up front: JSON mode never reaches the dispatch
     // match below, so its unknown-tool arm cannot cover this.
@@ -373,9 +382,17 @@ pub async fn run(
     // CLI-only symbol_id alias has already supplied the name string above.
     let find_symbol_request = if tool_kind == ToolKind::FindSymbol {
         let mut map = arguments.clone().unwrap_or_default();
-        map.remove("symbol_id");
+        // CLI symbol_id:abc retains its historical not-found exit behavior.
+        // Numeric aliases are still checked for conflicting/zero targets.
+        if map.get("symbol_id").is_some_and(serde_json::Value::is_string) {
+            map.remove("symbol_id");
+        }
         Some(
             serde_json::from_value::<crate::mcp::FindSymbolRequest>(serde_json::Value::Object(map))
+                .and_then(|request| {
+                    request.target_name().map_err(<serde_json::Error as serde::de::Error>::custom)?;
+                    Ok(request)
+                })
                 .unwrap_or_else(|error| {
                     exit_invalid_args(&tool, &error.to_string(), tool_param_spec(&tool).0, json)
                 }),
@@ -1062,6 +1079,7 @@ pub async fn run(
                 server
                     .find_symbol(Parameters(FindSymbolRequest {
                         name: name.to_string(),
+                        symbol_id: None,
                         lang,
                         limit: find_symbol_request
                             .as_ref()
