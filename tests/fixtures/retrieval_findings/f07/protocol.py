@@ -1,0 +1,3 @@
+from typing import Protocol
+class RunStore(Protocol):
+    def get(self, key: str) -> object: ...
