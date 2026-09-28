@@ -12,14 +12,15 @@ Last reviewed: 2026-09-28
 - Coverage window: 2026-09-21 through 2026-09-28 (UTC)
 - Initial fork base: `705f946982437941eb845d76c524129c868c151f`
 - Rechecked and integrated fork main: `f8018e78db3eb7058141e435a7f0c4f11bbb182e`
+- Publication-time fork main comparison: `3a61d25bdf63ba9a8de0504a33b75e26da0f52f3`
 - Inspected upstream main: `58295d290f70c2ca46a5ace48fe2aab8687d7d6e`
 - Previous upstream baseline: `12e823c4d965dc8269322869df760dd12d19e415`
 - Latest inspected release: v0.16.0; the 19 later upstream commits are unreleased.
 - Regression gateway: `tests/upstream_regressions.rs`
 
 These SHAs describe the inspected base, not the future merge commit. **THIS-PR**
-means implemented on `fix/upstream-regressions-20260928`, not shipped on the
-inspected fork main. Review/CI evidence belongs to that exact PR head.
+means implemented in [fork PR #84](https://github.com/bpstr/codanna/pull/84), not
+shipped on the inspected fork main. Review/CI evidence belongs to its recorded head.
 
 ## Policy
 
@@ -56,17 +57,23 @@ minimal regression and implementation required for that issue.
 
 ### Open fork work checked before adaptation
 
-PRs #71 (Markdown headings) and #72 (TypeScript object methods) are merged on the
-inspected main and are preserved. The complete diffs of the 12 remaining open PRs
-were checked: #70, #73-#83. None implements the above config-sync, retry, or
-file-presence fixes. In particular, #83 prepares isolated-project fixtures, not
-the missing import classifier; this change does not copy or edit those fixtures.
-The retrieval, representation, document support, and corpus-drift PRs remain
-independent. A final recheck found #70 and #73 merged on `f8018e7`; those changes
-are integrated unchanged. The remaining 10 drafts are #74-#83. The updated #80
-head `42e8ee4a973e06499dd3b86b8778272a7a31a0b0` adds segment-measurement
-fixtures and a measured receipt, not any of these fixes. Its prepared-data test
-result is scoped to that PR and is not qualification of this adaptation.
+PRs #71 (Markdown headings) and #72 (TypeScript object methods) were already merged
+on the initial base. The complete diffs of the then-open PRs #70 and #73-#83 were
+checked. None implements the above config-sync, retry, or file-presence fixes.
+In particular, #83 prepares isolated-project fixtures, not the missing import
+classifier; this PR does not copy or edit those fixtures.
+
+During implementation, #70 and #73 merged on `f8018e7`; those changes are integrated
+unchanged. The updated #80 head `42e8ee4a973e06499dd3b86b8778272a7a31a0b0`
+was inspected and subsequently verified merged as `3a61d25`. The complete main
+comparison from `f8018e7` to `3a61d25` adds only its segment-measurement fixture and
+receipt; neither overlaps this adaptation. Its test results are scoped to that PR,
+not borrowed as qualification for this one.
+
+The other open work at publication is #74-#79 and #81-#83, separate from this PR.
+Retrieval, representation, document support, corpus drift, and isolated-project
+fixtures remain independent; fixture presence alone does not establish a passing
+qualification or shipped behavior.
 
 ### Compatibility and validation boundaries
 
@@ -82,14 +89,24 @@ pending-work journal: a process crash or shutdown while a writer remains unavail
 can still require graph recovery/rebuild. Partial-write failures are surfaced rather
 than represented as safe retries.
 
-The new fixtures are deterministic, local, and disable semantic providers. On
-implementation commit `4f626009a54219f3c87589d31b318803fde02da9`,
-[run 36413674627](https://github.com/bpstr/codanna/actions/runs/36413674627)
-passed formatting, 5 focused unit regressions, 7 upstream integration regressions
-(2 scale witnesses intentionally ignored), and all 23 export-barrel regressions.
-That receipt predates integration of `f8018e7`; combined-head checks must be
-verified separately. Native macOS/Windows, million-symbol scaling, and full
-transport shutdown are separate qualification scopes, not implied by these passes.
+The new fixtures are deterministic, local, and disable semantic providers. Initial
+implementation commit `4f626009a54219f3c87589d31b318803fde02da9` passed formatting
+and 35 focused tests in [run 36413674627](https://github.com/bpstr/codanna/actions/runs/36413674627).
+
+After integrating `f8018e7`, code commit `f63b6fc2e0ed7d9b7a8ea6afb063a6e1a921e098`
+passed [qualification run 36414379842](https://github.com/bpstr/codanna/actions/runs/36414379842):
+
+- Strict Clippy across all targets and all features, with warnings denied.
+- Compilation with no default features.
+- 5 focused unit regressions.
+- 7 upstream integration regressions; 2 scale witnesses intentionally ignored.
+- All 23 export-barrel regressions and 4 typed-symbol-ID contract tests.
+
+Those are 39 executed passing tests, not a claim that the full repository or native
+platform matrix passed. Subsequent edits only update agent/ledger documentation and
+remove the temporary runner; normal PR checks qualify the final head. Native
+macOS/Windows, million-symbol scaling, and full transport shutdown remain separate
+qualification scopes, not implied by Linux helper tests.
 
 ## Upstream regression suite
 
