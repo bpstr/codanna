@@ -321,7 +321,6 @@ pub async fn run(
     // checks that used to sit duplicated in the JSON collection blocks and
     // the text dispatch): unknown keys reject instead of silently dropping,
     // and missing required params error as INVALID_QUERY, exit 2.
-    let mut arguments = arguments;
     {
         let (accepted, requires_one_of) = tool_param_spec(&tool);
 
@@ -366,7 +365,6 @@ pub async fn run(
             }
         }
     }
-    let mut arguments = arguments;
 
     let ticket_context_request = if tool_kind == ToolKind::SearchTicketContext {
         let request =
