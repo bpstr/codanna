@@ -27,29 +27,31 @@ fn repeated_updates_report_physical_and_live_vectors_separately() {
         paths: vec![source.clone()],
         ..Default::default()
     };
+    let chunking = ChunkingConfig {
+        min_chunk_chars: 1,
+        overlap_chars: 0,
+        ..Default::default()
+    };
     for revision in 0..4 {
         std::fs::write(
             &source,
             format!("Document revision {revision}: account calendar preference."),
         )
         .unwrap();
-        store
-            .index_collection(
-                "fixture",
-                &collection,
-                &ChunkingConfig {
-                    min_chunk_chars: 1,
-                    ..Default::default()
-                },
-            )
+        let stats = store
+            .index_collection("fixture", &collection, &chunking)
             .unwrap();
+        assert_eq!(stats.files_processed, 1);
+        assert_eq!(stats.files_skipped, 0);
+        assert!(stats.chunks_created > 0);
         let diagnostics = store.embedding_diagnostics();
         let live = store.collection_stats("fixture").unwrap().chunk_count;
+        assert!(live > 0);
         assert_eq!(diagnostics.live_vectors, live);
         assert!(diagnostics.physical_vectors >= diagnostics.live_vectors);
         assert_eq!(diagnostics.unembedded_chunks, 0);
-        // Future execution records existing compaction behavior rather than
-        // prescribing deletion or assuming every stored vector remains live.
+        // Record existing behavior without prescribing compaction or assuming
+        // every physical vector remains live.
         println!(
             "{}",
             serde_json::json!({
@@ -57,5 +59,17 @@ fn repeated_updates_report_physical_and_live_vectors_separately() {
                 "provider_requests": 0, "qualification": "prepared_storage_only"
             })
         );
+
+        let unchanged = store
+            .index_collection("fixture", &collection, &chunking)
+            .unwrap();
+        assert_eq!(unchanged.files_processed, 0);
+        assert_eq!(unchanged.files_skipped, 1);
+        assert_eq!(unchanged.chunks_created, 0);
+        assert_eq!(unchanged.chunks_removed, 0);
+        let after = store.embedding_diagnostics();
+        assert_eq!(after.physical_vectors, diagnostics.physical_vectors);
+        assert_eq!(after.live_vectors, diagnostics.live_vectors);
+        assert_eq!(after.vector_segments, diagnostics.vector_segments);
     }
 }
