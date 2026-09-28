@@ -52,7 +52,7 @@ codanna mcp analyze_impact symbol_name:"my_function"
 codanna mcp semantic_search_with_context query:"recursively extract function calls"
 ```
 
-`codanna mcp semantic_search_with_context` is the headline command: it returns N semantic matches, and for each match the symbol identity, signature, docstring, callees, callers, and recursive impact analysis — five MCP tools fused into one query.
+`codanna mcp semantic_search_with_context` returns compact primary code matches by default. Select a symbol for focused follow-up, or request `view:detail` for bounded indexed relationships and impact. [Compact output, exact document reads and the JSON schema migration](contributing/development/compact-tool-results.md) describe the shared response budget.
 
 Exact symbol listings return up to 100 matches by default. Use `limit:1..1000` and `offset:0..` to page through common names. Language filtering and `Type.member` qualification apply before pagination, so a member stays reachable even when more than 100 other types use its name. `lang` also applies to direct `symbol_id` lookup.
 
@@ -75,42 +75,28 @@ The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can w
 
 ## What one call returns
 
-The headline command, run against codanna's own source tree. One call, and the agent has the symbol, its documentation, signature, callees with exact call sites, callers, and blast radius:
+Search responses prioritize primary matches, retain exact identifiers and source
+locations, and share a whole-result byte budget. The default `max_output_bytes` is
+8192; this counts text and structured MCP content together, not just a preview.
+Bytes are not tokenizer tokens. `output.partial` explicitly reports omitted rows.
 
-```text
-$ codanna mcp semantic_search_with_context query:"recursively extract function calls" limit:1
+```bash
+# Discovery: no automatic graph expansion for each semantic candidate
+codanna mcp semantic_search_with_context 'query:recursively extract function calls' limit:5
 
-Found 1 results for query: 'recursively extract function calls'
+# Explicit deeper evidence, still bounded
+codanna mcp semantic_search_with_context 'query:recursively extract function calls' limit:1 view:detail
 
-1. extract_calls_recursive - Method at src/parsing/cpp/parser.rs:1002-1047 [symbol_id:1477]
-   Similarity Score: 0.833
-   Documentation:
-     Recursively extract function calls with context tracking
-   Signature: fn extract_calls_recursive<'a>(
-        node: Node,
-        code: &'a str,
-        current_function: Option<&'a str>,
-        calls: &mut Vec<(&'a str, &'a str, Range)>,
-    )
-
-   extract_calls_recursive calls 3 function(s):
-     -> Method extract_calls_recursive at src/parsing/cpp/parser.rs:1002 [symbol_id:1477] (called at src/parsing/cpp/parser.rs:1045)
-     -> Method function_name_at_def at src/parsing/cpp/parser.rs:377 [symbol_id:1451] (called at src/parsing/cpp/parser.rs:1008)
-     -> Method new at src/types/mod.rs:112 [symbol_id:7388] (called at src/parsing/cpp/parser.rs:1028)
-
-   2 function(s) call extract_calls_recursive:
-     <- Method extract_calls_recursive at src/parsing/cpp/parser.rs:1045 [symbol_id:1477]
-     <- Method find_calls at src/parsing/cpp/parser.rs:885 [symbol_id:1467]
-
-   Changing extract_calls_recursive would impact 1 symbol(s) (max depth: 2):
-
-     methods (1):
-       - find_calls [symbol_id:1467]
-
-Guidance: Found one match with full context. Review the relationships to understand how this fits into the codebase.
+# Locate an exact project-document section without rereading the whole file
+codanna mcp search_documents 'query:reconnect snapshot' document:docs/realtime.md
 ```
 
-Every result carries `file:line` coordinates the agent can open directly, `symbol_id`s it can reuse to disambiguate name collisions, and a guidance hint it can chain on. Add `--json` for the structured envelope.
+Document hits include chunk IDs, source byte ranges and an index generation.
+`get_document_chunk` reads exact stored text by those returned handles without
+embeddings and pages by the lines actually emitted. Current source freshness is
+not implied. [Read the output contract](contributing/development/compact-tool-results.md) before updating
+JSON consumers: the affected tools now return canonical objects rather than the
+legacy symbol-search arrays.
 
 ## Local-first
 

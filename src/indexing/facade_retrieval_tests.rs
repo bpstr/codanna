@@ -265,6 +265,9 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
     let server = CodeIntelligenceServer::new(facade);
     let response = server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: crate::mcp::output::OutputView::Detail,
+            max_output_bytes: Default::default(),
+
             query: "helper".into(),
             limit: 2,
             threshold: Some(0.),
@@ -314,6 +317,9 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
             };
             let docs = server
                 .semantic_search_docs(Parameters(SemanticSearchRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+
                     query: "helper".into(),
                     limit: 2,
                     threshold,
@@ -323,6 +329,9 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
                 .unwrap();
             let context = server
                 .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+
                     query: "helper".into(),
                     limit: 2,
                     threshold,
@@ -713,6 +722,9 @@ async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() 
     let server = CodeIntelligenceServer::new(facade);
     let response = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".into(),
             limit: 5,
             threshold: None,

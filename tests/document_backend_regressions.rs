@@ -609,6 +609,9 @@ async fn failed_code_hot_reload_blocks_direct_and_mcp_queries_without_transport(
     let mcp = CodeIntelligenceServer::new(facade);
     let request = || {
         Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "alpha".into(),
             limit: 1,
             threshold: None,

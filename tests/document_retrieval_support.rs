@@ -66,6 +66,10 @@ async fn nearest_neighbors_can_return_candidates_without_literal_support() {
         let response = server
             .search_documents(rmcp::handler::server::wrapper::Parameters(
                 codanna::mcp::SearchDocumentsRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+                    document: None,
+
                     query: "Every violet narwhal must dance seventeen polkas".into(),
                     collection,
                     limit: 5,
@@ -322,6 +326,10 @@ async fn literal_mcp_initializes_no_embedding_backend_and_never_certifies_suppor
         let result = server
             .search_documents(rmcp::handler::server::wrapper::Parameters(
                 codanna::mcp::SearchDocumentsRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+                    document: None,
+
                     query: text.into(),
                     collection: Some("docs".into()),
                     limit: 5,

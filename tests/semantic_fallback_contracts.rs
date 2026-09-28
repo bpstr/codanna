@@ -20,6 +20,9 @@ async fn disabled_semantic_handlers_offer_lexical_search_without_rebuild() {
     let server = CodeIntelligenceServer::new(facade);
     let docs = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".into(),
             limit: 5,
             threshold: None,
@@ -29,6 +32,9 @@ async fn disabled_semantic_handlers_offer_lexical_search_without_rebuild() {
         .unwrap();
     let context = server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".into(),
             limit: 5,
             threshold: None,

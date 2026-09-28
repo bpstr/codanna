@@ -129,6 +129,9 @@ async fn semantic_mcp_query_initializes_backend_for_loaded_vectors() {
 
     let result = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".to_string(),
             limit: 1,
             threshold: None,
@@ -161,6 +164,9 @@ async fn semantic_mcp_query_initializes_backend_for_loaded_vectors() {
     let context_server = CodeIntelligenceServer::new(context_reader);
     let context_result = context_server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".to_string(),
             limit: 1,
             threshold: None,

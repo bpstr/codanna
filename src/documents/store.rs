@@ -1202,6 +1202,9 @@ impl DocumentStore {
         };
         serde_json::json!({
             "mode": mode, "corpus": "document_chunks",
+            "document_generation": self.current_generation,
+            "source_freshness": "unchecked",
+            "range_units": "source_utf8_bytes_end_exclusive",
             "score_units": match mode { "literal" => "exact_match", "lexical" => "lexical_rank", _ => "cosine_similarity" },
             "requested_score_floor": options.score_floor,
             "effective_score_floor": options.score_floor,
@@ -2857,6 +2860,31 @@ struct ClusterData {
 /// Read-only query ownership, independent of the mutable document writer.
 pub struct DocumentQuery(DocumentStore);
 impl DocumentQuery {
+    /// Retrieve immutable indexed text only. Never treat an ID from another
+    /// generation as the same source, and never construct a query embedding.
+    pub fn read_chunk(
+        &self,
+        id: ChunkId,
+        expected_generation: &str,
+    ) -> StoreResult<Option<SearchResult>> {
+        if self.0.current_generation.as_deref() != Some(expected_generation) {
+            return Err(DocumentStoreError::Index("Document generation changed or is unknown; repeat the search before reading a chunk".into()));
+        }
+        let query = SearchQuery {
+            limit: 1,
+            preview_config: Some(super::config::SearchConfig {
+                preview_mode: super::config::PreviewMode::Full,
+                preview_chars: 0,
+                highlight: false,
+            }),
+            ..Default::default()
+        };
+        Ok(self
+            .0
+            .build_search_results(vec![(id, 1.0)], &query, true)?
+            .pop())
+    }
+
     pub fn retrieval_metadata(
         &self,
         options: &DocumentSearchOptions,

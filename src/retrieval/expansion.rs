@@ -26,9 +26,9 @@ pub struct Expansion {
 pub(crate) fn row(symbol: &Symbol) -> CodeEvidence {
     CodeEvidence {
         symbol_id: symbol.id.value(),
-        name: super::bounded_text(&symbol.name, 256),
+        name: symbol.name.to_string(),
         kind: format!("{:?}", symbol.kind),
-        file_path: super::bounded_text(&symbol.file_path, 2048),
+        file_path: symbol.file_path.to_string(),
         line: symbol.range.start_line.saturating_add(1),
         signature: symbol
             .signature

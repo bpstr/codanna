@@ -93,6 +93,7 @@ impl RelatedCode {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn render(&self) -> String {
         let mut output = format!(
             "\n## Related implementations (indexed Calls, not relevance scores)\nStatus: {}\n",
