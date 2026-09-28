@@ -1,11 +1,11 @@
 //! Reduced object-method retrieval witnesses. Source is synthetic and local.
-//! No embedding backend is enabled. Known gaps are opt-in ignored tests until fixed.
+//! No embedding backend is enabled.
 
 use codanna::indexing::facade::IndexFacade;
 use codanna::parsing::LanguageParser;
 use codanna::parsing::typescript::TypeScriptParser;
 use codanna::types::SymbolCounter;
-use codanna::{FileId, Settings, Symbol, SymbolKind};
+use codanna::{FileId, IndexPersistence, ScopeContext, Settings, Symbol, SymbolKind};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -60,15 +60,74 @@ fn assert_method_endpoints(code: &str, names: &[&str]) {
 }
 
 #[test]
-#[ignore = "Known gap: object method definitions are not emitted as caller endpoints"]
 fn returned_object_methods_have_callable_symbol_endpoints() {
     assert_method_endpoints(ADAPTER, &["listColumn", "loadTasks"]);
 }
 
 #[test]
-#[ignore = "Known gap: ordinary object variable initializers are not traversed for symbols"]
 fn bound_object_methods_have_callable_symbol_endpoints() {
     assert_method_endpoints(BOUND, &["listBoundColumn"]);
+}
+
+#[test]
+fn object_methods_restore_class_scope_and_keep_named_nested_owners() {
+    let code = "class Host { build() { const nested = { run() { function inner() {} return inner(); } }; return nested; } after() {} }";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    for name in ["build", "run", "inner", "after"] {
+        assert_eq!(symbols.iter().filter(|s| s.name.as_ref() == name).count(), 1);
+    }
+    let run = symbols.iter().find(|s| s.name.as_ref() == "run").unwrap();
+    assert!(matches!(
+        &run.scope_context,
+        Some(ScopeContext::Local { parent_name: Some(parent), .. }) if parent.as_ref() == "build"
+    ));
+    let inner = symbols.iter().find(|s| s.name.as_ref() == "inner").unwrap();
+    assert!(matches!(
+        &inner.scope_context,
+        Some(ScopeContext::Local { parent_name: Some(parent), .. }) if parent.as_ref() == "run"
+    ));
+    let after = symbols.iter().find(|s| s.name.as_ref() == "after").unwrap();
+    assert!(matches!(
+        &after.scope_context,
+        Some(ScopeContext::ClassMember { class_name: Some(class) }) if class.as_ref() == "Host"
+    ));
+}
+
+#[test]
+fn function_bindings_do_not_duplicate_nested_object_methods() {
+    let code = "export const factory = () => ({ nested() { return 1; } });";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    for name in ["factory", "nested"] {
+        assert_eq!(symbols.iter().filter(|s| s.name.as_ref() == name).count(), 1);
+    }
+}
+
+#[test]
+fn computed_keys_and_function_properties_do_not_gain_guessed_endpoints() {
+    let code = "const key = 'dynamic'; const object = { [key]() {}, arrow: () => {}, expression: function() {} };";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    assert!(symbols.iter().all(|symbol| !matches!(
+        symbol.kind,
+        SymbolKind::Method | SymbolKind::Function
+    )));
+}
+
+#[test]
+fn accessors_keep_separate_ranges_and_signatures() {
+    let code = "const object = { get value() { return 1; }, set value(next: number) {} };";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    let accessors: Vec<_> = symbols
+        .iter()
+        .filter(|s| s.name.as_ref() == "value")
+        .collect();
+    assert_eq!(accessors.len(), 2);
+    assert_ne!(accessors[0].range, accessors[1].range);
+    assert!(accessors[0].signature.as_deref().unwrap().contains("get value"));
+    assert!(accessors[1].signature.as_deref().unwrap().contains("set value"));
 }
 
 fn fixture() -> (tempfile::TempDir, IndexFacade) {
@@ -127,7 +186,6 @@ fn named_control_resolves_to_the_imported_implementation() {
 }
 
 #[test]
-#[ignore = "Known gap: parser call evidence has no object-method symbol IDs to resolve from"]
 fn persisted_callers_include_object_methods_without_namesake_leakage() {
     let (_temp, index) = fixture();
     let implementation = target(&index, "page.ts", "mergePage");
@@ -158,5 +216,60 @@ fn persisted_callers_include_object_methods_without_namesake_leakage() {
                 .iter()
                 .any(|symbol| symbol.id == implementation.id)
         );
+        let edges = index.get_called_functions_with_metadata(id);
+        let metadata = edges
+            .iter()
+            .find(|(symbol, _)| symbol.id == implementation.id)
+            .and_then(|(_, metadata)| metadata.as_ref())
+            .expect("persisted call location");
+        let caller = index
+            .get_calling_functions(implementation.id)
+            .into_iter()
+            .find(|symbol| symbol.id == id)
+            .unwrap();
+        let code = if Path::new(caller.file_path.as_ref()).ends_with("adapter.ts") {
+            ADAPTER
+        } else {
+            BOUND
+        };
+        let line = code.lines().nth(metadata.line.unwrap() as usize).unwrap();
+        assert!(line[metadata.column.unwrap() as usize..].starts_with("mergePage("));
     }
+}
+
+#[test]
+fn duplicate_method_names_keep_callers_separate_across_reopen_and_edit() {
+    let (temp, mut index) = fixture();
+    let path = temp.path().join("src/duplicates.ts");
+    let code = "import { mergePage as real } from './page';\nimport { mergePage as decoy } from './reference';\nexport const first = { run() { return real([], [1]); } };\nexport const second = { run() { return decoy([], [2]); } };\n";
+    std::fs::write(&path, code).unwrap();
+    index.index_file(&path).unwrap();
+    let settings = Arc::clone(index.settings());
+    IndexPersistence::new(settings.index_path.clone())
+        .save_facade(&index)
+        .unwrap();
+    drop(index);
+    index = IndexPersistence::new(settings.index_path.clone())
+        .load_facade_lite(settings)
+        .unwrap();
+    let real = target(&index, "page.ts", "mergePage");
+    let decoy = target(&index, "reference.ts", "mergePage");
+    let callers = |index: &IndexFacade, id| {
+        index
+            .get_calling_functions(id)
+            .into_iter()
+            .filter(|symbol| Path::new(symbol.file_path.as_ref()).ends_with("duplicates.ts"))
+            .map(|symbol| symbol.range.start_line)
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(callers(&index, real.id), BTreeSet::from([2]));
+    assert_eq!(callers(&index, decoy.id), BTreeSet::from([3]));
+    std::fs::write(
+        &path,
+        code.replace("return real([], [1])", "return decoy([], [1])"),
+    )
+    .unwrap();
+    index.index_file(&path).unwrap();
+    assert!(callers(&index, real.id).is_empty());
+    assert_eq!(callers(&index, decoy.id), BTreeSet::from([2, 3]));
 }

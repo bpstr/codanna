@@ -11,12 +11,16 @@ The executable oracle is `tests/retrieval_object_method_regressions.rs`.
 | --- | --- | --- |
 | Raw calls | Three `mergePage` sites in adapter.ts, owned by listColumn, loadTasks and testHelper; source coordinates point to the call expressions | Active, not run |
 | Named control | testHelper resolves to page.ts:mergePage in both directions; reference.ts has no callers | Active, not run |
-| Returned-object symbols | One callable endpoint each for listColumn and loadTasks, covering the method body | Ignored pending parser fix, not run |
-| Bound-object symbols | One callable endpoint for listBoundColumn | Ignored pending traversal fix, not run |
-| Persisted graph | Exactly four distinct callers of page.ts:mergePage, forward/reverse agreement, no reference.ts or shadowed local target leakage | Ignored pending fixes, not run |
+| Returned-object symbols | One callable endpoint each for listColumn and loadTasks, covering the method body | Active, not run |
+| Bound-object symbols | One callable endpoint for listBoundColumn | Active, not run |
+| Persisted graph | Exactly four distinct callers of page.ts:mergePage, forward/reverse agreement, call-site metadata, no reference.ts or shadowed local target leakage | Active, not run |
+| Scope boundaries | Class ownership restored after nested object traversal; named nested functions keep their own owner | Active, not run |
+| Unsupported shapes | No guessed endpoints for computed keys or function-valued properties; getters/setters have separate ranges | Active, not run |
+| Persistence and updates | Duplicate method names resolve independently after reopening; an edited call removes its prior target edge | Active, not run |
 
-Ignored tests specify intended behavior, not an observed failure or a passing
-qualification. Remove each ignore when its fix is implemented and verified.
+All tests specify intended behavior, not an observed failure or a passing
+qualification. Compilation and execution remain deferred because local resources
+are constrained.
 Assertions remain outside the indexed corpus. Both index fixtures explicitly
 disable semantic search; parser checks instantiate only the TypeScript parser.
 No provider transport, model download, credential loading or fixture recording is
@@ -26,8 +30,6 @@ After local execution is authorized and resources are available, start with:
 
 ```sh
 cargo test --test retrieval_object_method_regressions
-# After implementing the proposed fixes, run the intended-behavior witnesses:
-cargo test --test retrieval_object_method_regressions -- --ignored
 ```
 
 ## Static diagnosis on main
@@ -49,25 +51,27 @@ up the caller by name/range. `ResolveStage::resolve_one` in
 This is a source-grounded mechanism for lost persisted callers; execution is
 still needed to check for additional resolution problems.
 
-## Proposed implementation
+## Implementation and remaining verification
 
-1. Traverse ordinary object initializers and emit callable symbols for supported
-   object method definitions. Preserve declaration ranges and lexical ownership;
-   reuse method signature extraction without assuming every object is a class.
-2. Keep anonymous callback calls attributed to their enclosing method. Retain
-   independent ownership for named nested functions. Avoid duplicate traversal
-   of class methods and already handled function bindings.
-3. Add follow-up cases for duplicate method names in separate objects, computed
-   keys, getters/setters and function-valued properties before broadening support.
-   Never resolve a missing endpoint by choosing a global namesake.
-4. Review `EMISSION_SEMANTICS_VERSION` in `src/storage/metadata.rs` and existing
-   index migration behavior when emission changes. A source fix alone does not
-   repair existing persisted graphs.
-5. Enable the ignored witnesses, verify persisted source metadata and reopen/edit
-   behavior, then run the normal repository checks when resources permit.
+1. Ordinary variable initializers now traverse for nested declarations. Object
+   methods with identifier keys reuse method signature extraction and retain
+   full declaration ranges, while receiving lexical rather than class scope.
+2. The existing call walker retains anonymous callback ownership. Method body
+   traversal emits named nested function declarations independently. Class
+   methods and recognized function bindings retain their existing traversal.
+3. Tests cover duplicate method names in separate objects, computed keys,
+   getters/setters, function-valued properties and class-scope restoration.
+   Computed keys and function-valued properties remain unsupported as object
+   callable endpoints; they are not guessed from global namesakes.
+4. `EMISSION_SEMANTICS_VERSION` in `src/storage/metadata.rs` advances to v5.
+   Existing version gates require rebuilding older indexes instead of silently
+   retaining stale caller rows. No rebuild has been performed in this session.
+5. All witnesses are active. Call-site metadata, persistence and edit scenarios
+   are prepared. Run them and the normal repository checks when resources permit.
 
-This PR prepares reproduction evidence; it changes no parser or runtime behavior
-and makes no measured performance claim.
+This PR changes TypeScript symbol emission and the index compatibility stamp.
+It makes no measured performance claim. Scope/fidelity and runtime costs remain
+unverified until the prepared tests and repository gates can run.
 
 ## Other retrieval causes to investigate separately
 

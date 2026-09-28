@@ -422,6 +422,54 @@ impl TypeScriptParser {
                     symbols.push(symbol);
                 }
             }
+            "method_definition"
+                if node.parent().is_some_and(|parent| parent.kind() == "object") =>
+            {
+                self.register_node_recursively(node);
+                // Dynamic keys have no stable lexical identity. Do not turn
+                // their source text into a globally resolvable method name.
+                let Some(name_node) = node.child_by_field_name("name") else {
+                    return;
+                };
+                if name_node.kind() != "property_identifier" {
+                    return;
+                }
+                let method_name = code[name_node.byte_range()].to_string();
+                if let Some(mut symbol) =
+                    self.process_method(node, code, file_id, counter, module_path)
+                {
+                    // An object inside a class is not a member of that class.
+                    // Its callable endpoint belongs to its lexical enclosure.
+                    symbol.scope_context = Some(crate::ScopeContext::Local {
+                        hoisted: false,
+                        parent_name: self.context.current_function().map(Into::into),
+                        parent_kind: self
+                            .context
+                            .current_function()
+                            .map(|_| SymbolKind::Function),
+                    });
+                    symbols.push(symbol);
+                }
+                if let Some(body) = node.child_by_field_name("body") {
+                    let saved_function = self.context.current_function().map(str::to_string);
+                    let saved_class = self.context.current_class().map(str::to_string);
+                    self.context.enter_scope(ScopeType::function());
+                    self.context.set_current_function(Some(method_name));
+                    self.context.set_current_class(None);
+                    self.extract_symbols_from_node(
+                        body,
+                        code,
+                        file_id,
+                        counter,
+                        symbols,
+                        module_path,
+                        depth + 1,
+                    );
+                    self.context.exit_scope();
+                    self.context.set_current_function(saved_function);
+                    self.context.set_current_class(saved_class);
+                }
+            }
             "function_expression" => {
                 // Register function_expression and all its children for audit
                 self.register_node_recursively(node);
@@ -1102,6 +1150,19 @@ impl TypeScriptParser {
                                     }
                                 }
                             }
+                        } else if let Some(value) = value_node {
+                            // Ordinary initializers may contain object methods.
+                            // Function bindings above already traverse their
+                            // bodies and must not be emitted twice.
+                            self.extract_symbols_from_node(
+                                value,
+                                code,
+                                file_id,
+                                counter,
+                                symbols,
+                                module_path,
+                                depth + 1,
+                            );
                         }
                     }
                 }
