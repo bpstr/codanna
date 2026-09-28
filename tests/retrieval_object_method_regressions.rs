@@ -6,7 +6,7 @@ use codanna::parsing::LanguageParser;
 use codanna::parsing::typescript::TypeScriptParser;
 use codanna::types::SymbolCounter;
 use codanna::{FileId, IndexPersistence, ScopeContext, Settings, Symbol, SymbolKind};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -123,6 +123,24 @@ fn computed_keys_and_function_properties_do_not_gain_guessed_endpoints() {
 }
 
 #[test]
+fn unsupported_object_method_keys_preserve_nested_named_declarations() {
+    let code = "function factory() { return { [key]() { function computedHelper() {} return computedHelper(); }, 'literal'() { function literalHelper() {} return literalHelper(); } }; }";
+    let mut parser = TypeScriptParser::new().unwrap();
+    let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
+    for name in ["computedHelper", "literalHelper"] {
+        assert_eq!(
+            symbols
+                .iter()
+                .filter(|symbol| symbol.name.as_ref() == name && symbol.kind == SymbolKind::Function)
+                .count(),
+            1,
+            "nested declaration {name} must survive an unsupported method key"
+        );
+    }
+    assert!(symbols.iter().all(|symbol| symbol.kind != SymbolKind::Method));
+}
+
+#[test]
 fn accessors_keep_separate_ranges_and_signatures() {
     let code = "const object = { get value() { return 1; }, set value(next: number) {} };";
     let mut parser = TypeScriptParser::new().unwrap();
@@ -208,7 +226,7 @@ fn named_control_resolves_to_the_imported_implementation() {
 fn persisted_callers_include_object_methods_without_namesake_leakage() {
     let (_temp, index) = fixture();
     let implementation = target(&index, "page.ts", "mergePage");
-    let expected: BTreeSet<_> = [
+    let expected: HashSet<_> = [
         ("adapter.ts", "listColumn"),
         ("adapter.ts", "loadTasks"),
         ("adapter.ts", "testHelper"),
@@ -217,7 +235,7 @@ fn persisted_callers_include_object_methods_without_namesake_leakage() {
     .into_iter()
     .map(|(path, name)| target(&index, path, name).id)
     .collect();
-    let actual: BTreeSet<_> = index
+    let actual: HashSet<_> = index
         .get_calling_functions(implementation.id)
         .into_iter()
         .map(|symbol| symbol.id)
