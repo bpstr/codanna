@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "finding": "F03",
+  "status": "executed_local",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "lazy-cached-member",
+      "expected_dependency": [
+        "view.tsx:Picker",
+        "provider.tsx:Calendar"
+      ],
+      "relation": "composition_not_immediate_call",
+      "excluded": [
+        "reference.tsx:Calendar"
+      ],
+      "observed": "Uses only; survives save and reopen"
+    },
+    {
+      "id": "lazy-uncached-member",
+      "expected_dependency": [
+        "uncached.tsx:UncachedPicker",
+        "provider.tsx:Calendar"
+      ],
+      "relation": "Uses",
+      "observed": "Uses only; survives save and reopen"
+    },
+    {
+      "id": "javascript-lazy-member",
+      "expected_dependency": [
+        "lazy-js.jsx:JavaScriptPicker",
+        "provider-js.jsx:Calendar"
+      ],
+      "relation": "Uses",
+      "observed": "Uses only; survives save and reopen"
+    },
+    {
+      "id": "external-import",
+      "excluded_dependency": [
+        "external.tsx:ExternalPicker",
+        "provider.tsx:Calendar"
+      ],
+      "observed": "no Uses or Calls"
+    },
+    {
+      "id": "rejected-forms",
+      "fixtures": [
+        "shadowed.tsx",
+        "reassigned.tsx",
+        "cache-reassigned.tsx",
+        "computed.tsx",
+        "wrapper-reassigned.tsx",
+        "wrapper-shadowed.tsx",
+        "cache-initialized.tsx",
+        "cache-shorthand.tsx",
+        "local-scope.tsx",
+        "missing.tsx",
+        "type-only.tsx",
+        "duplicate.tsx",
+        "block.tsx"
+      ],
+      "observed": "no Uses or Calls"
+    },
+    {
+      "id": "depth-exhaustion",
+      "observed": "no deferred composition fact when a validation scan exceeds the AST depth bound"
+    },
+    {
+      "id": "static-compatibility",
+      "expected": [
+        "static.tsx:StaticPicker Uses provider.tsx:Calendar",
+        "static.tsx:DirectCall Calls provider.tsx:Calendar"
+      ],
+      "observed": "unchanged"
+    }
+  ]
+}

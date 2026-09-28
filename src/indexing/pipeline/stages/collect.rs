@@ -488,6 +488,7 @@ fn create_unresolved_relationship(
         kind: raw.kind,
         metadata: raw.metadata,
         to_range: Some(raw.to_range),
+        composition_target: raw.composition_target,
     }
 }
 

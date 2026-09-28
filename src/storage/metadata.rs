@@ -15,8 +15,9 @@ use std::path::{Path, PathBuf};
 // identities, and 32-bit source columns. Existing indexes must be rebuilt
 // rather than mixing corrected rows with unchanged files from v3.
 // v5 emits TypeScript object-method endpoints and traverses ordinary variable
-// initializers. Rebuild to recover caller rows missing from older emissions.
-pub const EMISSION_SEMANTICS_VERSION: u32 = 5;
+// initializers. v6 adds source-grounded lazy component Uses edges. Rebuild to
+// recover composition rows missing from older emissions.
+pub const EMISSION_SEMANTICS_VERSION: u32 = 6;
 
 /// Short commit of the binary, `-dirty` when it was built from a modified
 /// tree. `None` when built without a work tree (release tarballs), which

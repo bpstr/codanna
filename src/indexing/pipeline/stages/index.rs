@@ -493,6 +493,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: None,
+            composition_target: None,
         });
 
         batch_tx.send(batch).unwrap();
