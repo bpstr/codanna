@@ -269,6 +269,36 @@ fn failed_second_embedding_batch_keeps_generation_and_reserves_ids_across_reopen
 
 #[test]
 fn compaction_bounds_one_hundred_updates_and_preserves_pinned_queries() {
+    const CHILD: &str = "CODANNA_TEST_ISOLATED_COMPACTION";
+    const COMPLETE: &str = "isolated compaction witness completed all 100 cycles";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        // Tantivy releases flock by closing its descriptor. Sibling tests that
+        // fork can inherit it briefly before exec, even with close-on-exec set.
+        // Create the fixture only in a dedicated test process, retaining every
+        // immediate writer-reacquisition assertion without retries or sleeps.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "documents::store::generation_tests::compaction_bounds_one_hundred_updates_and_preserves_pinned_queries",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated compaction failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(COMPLETE),
+            "the exact compaction witness did not execute: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let (source, _, mut store) = seed(&temp);
     let mut pinned = store.query_snapshot();
@@ -320,6 +350,7 @@ fn compaction_bounds_one_hundred_updates_and_preserves_pinned_queries() {
         pinned.search(query(&source)).unwrap()[0].content_preview,
         "alpha original policy"
     );
+    eprintln!("{COMPLETE}");
 }
 
 #[test]

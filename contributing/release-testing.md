@@ -176,7 +176,12 @@ release build and a retained rollback executable. Record known quality failures
 explicitly. Installing a developer candidate does not certify a stable general
 release when the original relevance targets remain red.
 
-**Full Assign reindex readiness** additionally requires all of the following:
+**Activating a rebuilt Assign index** additionally requires all of the following.
+An isolated staging rebuild may collect missing qualification evidence while the
+active index remains intact. Readiness to start that experiment does not mark any
+quality or scale gate passed, or authorize activation. Before starting, freeze its
+configuration, check available disk against a stated stage budget, bound time and
+memory, and retain a matching rollback binary/index pair.
 
 1. A disposable representative Assign subset with independently reviewed queries
    and exact implementation-owner judgments. Include undocumented code, JSX,
