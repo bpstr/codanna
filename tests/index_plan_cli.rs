@@ -135,7 +135,15 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Option<Vec<u8>>, Option<std::time::Sy
                 pending.push(entry.unwrap().path());
             }
         } else {
-            let bytes = std::fs::read(&path).unwrap();
+            let bytes = if metadata.file_type().is_symlink() {
+                std::fs::read_link(&path)
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec()
+            } else {
+                std::fs::read(&path).unwrap()
+            };
             result.insert(path, (Some(bytes), metadata.modified().ok()));
         }
     }
@@ -350,4 +358,50 @@ fn nonregular_optional_input_files_are_rejected_before_reading() {
     let output = fixture.run(&[]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("regular file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn initialized_workspace_ignores_model_cache_without_accepting_source_symlinks() {
+    let fixture = Fixture::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_codanna"))
+        .env_clear()
+        .env("HOME", fixture.root().join(".home"))
+        .current_dir(fixture.root())
+        .args(["init", "--force"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.configure(false, None, "");
+    let cache = fixture.root().join(".fastembed_cache");
+    assert!(
+        std::fs::symlink_metadata(&cache)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fixture.plan(&["."])["files_parsed"], 1);
+
+    // The ignore rule must match a real cache directory and a dangling symlink,
+    // too; directory-only gitignore patterns do not match symlinks.
+    std::fs::remove_file(&cache).unwrap();
+    std::fs::create_dir(&cache).unwrap();
+    std::fs::write(cache.join("model.rs"), SOURCE).unwrap();
+    assert_eq!(fixture.plan(&["."])["files_parsed"], 1);
+    std::fs::remove_dir_all(&cache).unwrap();
+    std::os::unix::fs::symlink(fixture.root().join("missing-models"), &cache).unwrap();
+    assert_eq!(fixture.plan(&["."])["files_parsed"], 1);
+
+    std::os::unix::fs::symlink(
+        fixture.root().join("src/lib.rs"),
+        fixture.root().join("source.rs"),
+    )
+    .unwrap();
+    let rejected = fixture.run(&["."]);
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("reindex does not follow symlinks"));
 }
