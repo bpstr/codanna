@@ -252,13 +252,11 @@ fn retrieval_body_opt_in_preserves_lexical_defaults_and_scope() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| {
-                row["contributions"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|item| item["source"] == "semantic")
-            })
+            .any(|row| row["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item == "semantic"))
     );
     assert_query_only(&endpoint);
 }
