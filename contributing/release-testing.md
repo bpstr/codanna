@@ -6,7 +6,8 @@ binary or rebuilding a large workspace such as Assign. Record each gate as
 source revision, binary hash and evidence path. A skipped test is not a pass.
 Keep the first failed run when a repair requires a second run.
 
-Latest local receipt: [September 29, 2026](release-results/2026-09-29.md).
+Latest local receipt: [September 29, 2026 RC4](release-results/2026-09-29-rc4.md).
+Previous baseline: [September 29 RC3](release-results/2026-09-29.md).
 
 This extends the [RC3 process](retrieval/rc3/README.md), its
 [measured results](retrieval/rc3/RESULTS.md), the
