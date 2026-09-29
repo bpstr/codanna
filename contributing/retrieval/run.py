@@ -172,12 +172,18 @@ def graph_check(check: dict, graph: dict, peer: dict) -> bool:
 
 
 def envelope_items(envelope: dict, returncode: int) -> list[dict]:
+    data = envelope.get('data')
+    if isinstance(data, dict) and data.get('schema_version') == 2:
+        if (envelope.get('meta', {}).get('schema_version') != '2.0.0'
+                or not isinstance(data.get('output'), dict)
+                or data['output'].get('partial') is not False):
+            raise ValueError('Incomplete compact search response; inspect output budget metadata')
+        data = data.get('results')
     if (envelope.get('status') == 'not_found' and envelope.get('code') == 'NOT_FOUND'
-            and returncode in (0, 1) and envelope.get('data') in (None, [], {'items': []})):
+            and returncode in (0, 1) and data in (None, [], {'items': []})):
         return []
     if returncode != 0 or envelope.get('status') != 'success' or envelope.get('code') != 'OK':
         raise ValueError(f'Retrieval error, not an empty result: {envelope.get("code")}')
-    data = envelope.get('data')
     if isinstance(data, dict):
         data = data.get('items')
     if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
@@ -197,10 +203,18 @@ def normalize_rows(items: list[dict], kind: str, workspace: Path) -> list[dict]:
             text = content[start:end].decode('utf-8')
             name = None
         else:
-            symbol = item['symbol']
+            symbol = item.get('symbol', item)
             path = source_path(workspace, symbol['file_path'])
-            start, end = symbol['range']['start_line'], symbol['range']['end_line']
             lines = path.read_text(encoding='utf-8').splitlines()
+            if 'symbol' in item:
+                start, end = symbol['range']['start_line'], symbol['range']['end_line']
+            else:
+                line = symbol.get('line')
+                if type(line) is not int or line < 1:
+                    raise ValueError('Invalid compact code line')
+                # Compact results address a declaration, not a complete body.
+                # Read that exact source line; previews cannot supply gold evidence.
+                start = end = line - 1
             if not 0 <= start <= end < len(lines):
                 raise ValueError('Invalid code range')
             text, name = '\n'.join(lines[start:end + 1]), symbol['name']
