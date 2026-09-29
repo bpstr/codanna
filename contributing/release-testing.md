@@ -6,7 +6,8 @@ binary or rebuilding a large workspace such as Assign. Record each gate as
 source revision, binary hash and evidence path. A skipped test is not a pass.
 Keep the first failed run when a repair requires a second run.
 
-Latest local receipt: [September 29, 2026 RC4](release-results/2026-09-29-rc4.md).
+Latest qualification: [September 29, 2026 — no-go](release-results/2026-09-29-qualification.md).
+Previous installation receipt: [September 29 RC4](release-results/2026-09-29-rc4.md).
 Previous baseline: [September 29 RC3](release-results/2026-09-29.md).
 
 This extends the [RC3 process](retrieval/rc3/README.md), its
@@ -162,6 +163,12 @@ load times must remain explicit. Measure repeated query latency separately from
 CLI startup; do not call subprocess wall time warm MCP latency. Never compare
 different file counts or graph versions as a pure throughput improvement.
 
+For subsecond commands, use pipe-driven process completion or an equivalent
+high-resolution child timer. Python's timeout-based wait with file outputs can
+add polling granularity comparable to the operation itself. Preserve any failed
+initial measurement; investigate with additional alternating trials rather than
+lowering thresholds or dropping inconvenient samples.
+
 An unexplained slowdown greater than 15% in median time or increase greater than
 20% in peak RSS/index size against the same baseline blocks performance
 acceptance pending investigation. These are regression tripwires, not proof of
@@ -225,6 +232,23 @@ full rebuild, any indexing or resolution error must abort qualification: discard
 the failed stage and restart from empty with no concurrent writer. This contains
 the rebuild risk without claiming that incremental watcher recovery is fixed.
 Activation still requires the remaining quality, scale and recovery gates.
+
+The September 29 qualification reproduced missing call edges after process
+termination and a successful incremental restart. On macOS, run the bounded,
+model-free witness against the candidate, with a fresh output path outside the
+checkout:
+
+```sh
+python3.11 contributing/retrieval/qualify-code-recovery.py \
+  --codanna /absolute/path/to/codanna \
+  --out /absolute/path/outside-checkout/code-recovery
+```
+
+It preserves the resumed index before a forced rebuild and checks exact counts
+and sampled call edges. Its nonzero result blocks promotion. This single crash
+point does not replace nonretryable failure injection or captured-incoming-edge
+coverage. Also test configuration-only path-alias changes under ordinary
+incremental indexing; success after forcing a rebuild does not pass that gate.
 
 Paid provider dogfood, if later requested, needs its own exact real-content scope,
 hard request/monetary cap and stop condition before any call. This manual grants
