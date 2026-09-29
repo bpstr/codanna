@@ -1,26 +1,17 @@
-//! Process-wide ONNX Runtime execution-provider selection for local embeddings.
+//! Process-wide execution providers and opt-in shared CPU threads for embeddings.
 //!
-//! Codanna uses fastembed in several independent code paths. Configuring ORT once
-//! before those sessions are created keeps provider selection consistent across
-//! code semantic search, document embeddings, and query-time embeddings.
-//!
-//! Runtime selection is controlled by `CODANNA_EMBED_PROVIDER`:
-//! - unset / `cpu`: keep the existing CPU-only behavior
-//! - `auto`: prefer CoreML on Apple targets or CUDA on Linux/Windows when the
-//!   GPU embedding Cargo feature was compiled in
-//! - `coreml`: request CoreML explicitly
-//! - `cuda`: request CUDA explicitly
-//!
-//! By default provider registration is allowed to fall back to CPU. Set
-//! `CODANNA_EMBED_PROVIDER_STRICT=1` to fail session creation if the requested
-//! execution provider cannot be registered. Strict selection also rejects invalid
-//! names, unavailable compiled capabilities, and an already initialized runtime.
+//! Configure this before constructing any fastembed model. With no environment
+//! overrides, initialization remains lazy and existing behavior is unchanged.
+//! `CODANNA_EMBED_CPU_THREADS` bounds the shared ORT intra-op pool, NOT the whole
+//! process: callers, tokenizers, parsers and index writers have their own threads.
 
 use fastembed::ExecutionProviderDispatch;
 use std::str::FromStr;
 
 const PROVIDER_ENV: &str = "CODANNA_EMBED_PROVIDER";
 const STRICT_ENV: &str = "CODANNA_EMBED_PROVIDER_STRICT";
+const THREADS_ENV: &str = "CODANNA_EMBED_CPU_THREADS";
+const SPIN_ENV: &str = "CODANNA_EMBED_ALLOW_SPINNING";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingExecutionProvider {
@@ -46,6 +37,48 @@ impl FromStr for EmbeddingExecutionProvider {
     }
 }
 
+/// These settings are execution-only; never include them in embedding identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CpuThreads {
+    intra: usize,
+    spinning: bool,
+}
+
+impl CpuThreads {
+    fn parse(
+        threads: Option<&str>,
+        spinning: Option<&str>,
+        logical_cpus: usize,
+    ) -> Result<Option<Self>, String> {
+        if threads.is_none() && spinning.is_none() {
+            return Ok(None);
+        }
+        let intra = match threads {
+            Some(raw) => raw
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|value| (1..=1024).contains(value))
+                .ok_or_else(|| format!("{THREADS_ENV} must be an integer between 1 and 1024"))?,
+            None => logical_cpus.saturating_sub(2).clamp(1, 4),
+        };
+        let spinning = match spinning.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            None | Some("0" | "false" | "no") => false,
+            Some("1" | "true" | "yes") => true,
+            _ => return Err(format!("{SPIN_ENV} must be 0/1, false/true, or no/yes")),
+        };
+        Ok(Some(Self { intra, spinning }))
+    }
+}
+
+fn optional_env(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} must contain UTF-8 text")),
+    }
+}
+
 fn strict_provider_registration() -> bool {
     std::env::var(STRICT_ENV)
         .ok()
@@ -67,10 +100,7 @@ fn finalize_dispatch(
 #[cfg(all(feature = "gpu-embeddings", target_vendor = "apple"))]
 fn coreml_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     use ort::execution_providers::CoreMLExecutionProvider;
-    Some(finalize_dispatch(
-        CoreMLExecutionProvider::default().build(),
-        strict,
-    ))
+    Some(finalize_dispatch(CoreMLExecutionProvider::default().build(), strict))
 }
 
 #[cfg(not(all(feature = "gpu-embeddings", target_vendor = "apple")))]
@@ -78,22 +108,13 @@ fn coreml_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
 
-#[cfg(all(
-    feature = "gpu-embeddings",
-    any(target_os = "linux", target_os = "windows")
-))]
+#[cfg(all(feature = "gpu-embeddings", any(target_os = "linux", target_os = "windows")))]
 fn cuda_dispatch(strict: bool) -> Option<ExecutionProviderDispatch> {
     use ort::execution_providers::CUDAExecutionProvider;
-    Some(finalize_dispatch(
-        CUDAExecutionProvider::default().build(),
-        strict,
-    ))
+    Some(finalize_dispatch(CUDAExecutionProvider::default().build(), strict))
 }
 
-#[cfg(not(all(
-    feature = "gpu-embeddings",
-    any(target_os = "linux", target_os = "windows")
-)))]
+#[cfg(not(all(feature = "gpu-embeddings", any(target_os = "linux", target_os = "windows"))))]
 fn cuda_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
     None
 }
@@ -101,145 +122,150 @@ fn cuda_dispatch(_strict: bool) -> Option<ExecutionProviderDispatch> {
 fn provider_dispatch(
     provider: EmbeddingExecutionProvider,
     strict: bool,
-) -> Option<(&'static str, ExecutionProviderDispatch)> {
+) -> Option<ExecutionProviderDispatch> {
     match provider {
-        EmbeddingExecutionProvider::Cpu => None,
-        EmbeddingExecutionProvider::CoreMl => {
-            coreml_dispatch(strict).map(|dispatch| ("coreml", dispatch))
-        }
-        EmbeddingExecutionProvider::Cuda => {
-            cuda_dispatch(strict).map(|dispatch| ("cuda", dispatch))
-        }
-        EmbeddingExecutionProvider::Auto => {
-            #[cfg(target_vendor = "apple")]
-            if let Some(dispatch) = coreml_dispatch(strict) {
-                return Some(("coreml", dispatch));
-            }
-
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
-            if let Some(dispatch) = cuda_dispatch(strict) {
-                return Some(("cuda", dispatch));
-            }
-
-            None
-        }
+        EmbeddingExecutionProvider::CoreMl => coreml_dispatch(strict),
+        EmbeddingExecutionProvider::Cuda => cuda_dispatch(strict),
+        // Auto is resolved against compiled capabilities before registration.
+        EmbeddingExecutionProvider::Cpu | EmbeddingExecutionProvider::Auto => None,
     }
 }
 
-#[cfg(feature = "gpu-embeddings")]
-fn commit_runtime_provider(dispatch: ExecutionProviderDispatch) -> Result<bool, String> {
-    ort::init()
-        .with_execution_providers([dispatch])
-        .commit()
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(not(feature = "gpu-embeddings"))]
-fn commit_runtime_provider(_dispatch: ExecutionProviderDispatch) -> Result<bool, String> {
-    Ok(false)
-}
-
-/// Providers compiled into this binary. This does not initialize ONNX Runtime
-/// or claim that a provider can execute a particular model on an accelerator.
+/// Compiled capabilities, not proof of accelerator registration or device use.
 pub fn compiled_embedding_providers() -> Vec<&'static str> {
     let mut providers = vec!["cpu"];
     if cfg!(all(feature = "gpu-embeddings", target_vendor = "apple")) {
         providers.push("coreml");
     }
-    if cfg!(all(
-        feature = "gpu-embeddings",
-        any(target_os = "linux", target_os = "windows")
-    )) {
+    if cfg!(all(feature = "gpu-embeddings", any(target_os = "linux", target_os = "windows"))) {
         providers.push("cuda");
     }
     providers
 }
 
-fn selection_failure(message: String, strict: bool) -> Result<String, String> {
-    if strict {
-        Err(message)
-    } else {
-        Ok(format!(
-            "{message}; leaving the existing runtime configuration unchanged"
-        ))
-    }
-}
-
-fn configure_provider(
+/// Resolve both concerns before the single environment commit. In particular,
+/// configuring CPU threads must not initialize ORT ahead of CoreML/CUDA selection.
+fn configure_runtime(
     raw: &str,
     strict: bool,
     available: &[&str],
-    commit: impl FnOnce(EmbeddingExecutionProvider, bool) -> Result<bool, String>,
-) -> Result<Option<String>, String> {
-    let provider = match EmbeddingExecutionProvider::from_str(raw) {
-        Ok(provider) => provider,
-        Err(error) => return selection_failure(error, strict).map(Some),
-    };
-    let name = match provider {
-        EmbeddingExecutionProvider::Cpu => return Ok(None),
-        EmbeddingExecutionProvider::CoreMl => "coreml",
-        EmbeddingExecutionProvider::Cuda => "cuda",
-        EmbeddingExecutionProvider::Auto => available
-            .iter()
-            .copied()
-            .find(|name| *name != "cpu")
-            .unwrap_or("cpu"),
-    };
-    if name == "cpu" || !available.contains(&name) {
-        return selection_failure(
-            format!(
-                "embedding provider '{raw}' is not compiled for this target (compiled: {}); \
-                 Apple builds require --features gpu-coreml",
-                available.join(", ")
-            ),
-            strict,
-        )
-        .map(Some);
-    }
-    let selected = EmbeddingExecutionProvider::from_str(name)?;
-    let message = match commit(selected, strict) {
-        Ok(true) => format!(
-            "local embedding provider {name} configured{}; session registration and actual device execution are not yet verified",
-            if strict {
-                " (strict registration)"
+    cpu: Option<CpuThreads>,
+    commit: impl FnOnce(Option<EmbeddingExecutionProvider>, bool, Option<CpuThreads>) -> Result<bool, String>,
+) -> Result<Vec<String>, String> {
+    let mut messages = Vec::new();
+    let requested = EmbeddingExecutionProvider::from_str(raw);
+    let selected = match requested {
+        Ok(EmbeddingExecutionProvider::Cpu) => None,
+        Ok(provider) => {
+            let name = match provider {
+                EmbeddingExecutionProvider::Auto => available.iter().copied().find(|name| *name != "cpu"),
+                EmbeddingExecutionProvider::CoreMl => Some("coreml"),
+                EmbeddingExecutionProvider::Cuda => Some("cuda"),
+                EmbeddingExecutionProvider::Cpu => None,
+            };
+            if let Some(name) = name.filter(|name| available.contains(name)) {
+                Some(EmbeddingExecutionProvider::from_str(name)?)
             } else {
-                " with CPU fallback"
+                let error = format!(
+                    "embedding provider '{raw}' is not compiled for this target (compiled: {}); Apple builds require --features gpu-coreml",
+                    available.join(", ")
+                );
+                if strict {
+                    return Err(error);
+                }
+                messages.push(error);
+                None
             }
-        ),
-        Ok(false) => selection_failure(
-            "ONNX Runtime was already initialized before embedding provider selection".into(),
-            strict,
-        )?,
-        Err(error) => selection_failure(
-            format!("failed to configure {name} embedding provider: {error}"),
-            strict,
-        )?,
+        }
+        Err(error) => {
+            if strict {
+                return Err(error);
+            }
+            messages.push(error);
+            None
+        }
     };
-    Ok(Some(message))
+    if selected.is_none() && cpu.is_none() {
+        if let Some(message) = messages.last_mut() {
+            message.push_str("; leaving the existing runtime configuration unchanged");
+        }
+        return Ok(messages);
+    }
+    match commit(selected, strict, cpu) {
+        Ok(true) => {
+            if let Some(provider) = selected {
+                messages.push(format!(
+                    "local embedding provider {provider:?} configured{}; session registration and actual device execution are not yet verified",
+                    if strict { " (strict registration)" } else { " with CPU fallback" }
+                ));
+            }
+            if let Some(cpu) = cpu {
+                messages.push(format!(
+                    "shared embedding CPU pool configured: intra_threads={}, inter_threads=1, spinning={}; this is not a whole-process CPU cap",
+                    cpu.intra, cpu.spinning
+                ));
+            }
+        }
+        outcome => {
+            let error = match outcome {
+                Ok(false) => "ONNX Runtime was already initialized before embedding runtime selection".to_string(),
+                Err(error) => format!("failed to configure embedding runtime: {error}"),
+                Ok(true) => unreachable!(),
+            };
+            // Explicit resource limits must never silently fall back to unbounded
+            // per-session pools, even when accelerator registration is optional.
+            if strict || cpu.is_some() {
+                return Err(error);
+            }
+            messages.push(format!("{error}; leaving the existing runtime configuration unchanged"));
+        }
+    }
+    Ok(messages)
 }
 
-/// Configure the process-wide ONNX Runtime environment before creating models.
+fn commit_runtime(
+    provider: Option<EmbeddingExecutionProvider>,
+    strict: bool,
+    cpu: Option<CpuThreads>,
+) -> Result<bool, String> {
+    let mut builder = ort::init();
+    if let Some(provider) = provider {
+        let dispatch = provider_dispatch(provider, strict)
+            .ok_or_else(|| "compiled provider dispatch is unavailable".to_string())?;
+        builder = builder.with_execution_providers([dispatch]);
+    }
+    if let Some(cpu) = cpu {
+        // ort rc.10 disables per-session threads during session commit whenever
+        // the environment has a global pool. This also overrides fastembed 5.6's
+        // explicit per-session with_intra_threads(available_parallelism) setting.
+        let threads = ort::environment::GlobalThreadPoolOptions::default()
+            .with_intra_threads(cpu.intra)
+            .and_then(|options| options.with_inter_threads(1))
+            .and_then(|options| options.with_spin_control(cpu.spinning))
+            .map_err(|error| error.to_string())?;
+        builder = builder.with_global_thread_pool(threads);
+    }
+    builder.commit().map_err(|error| error.to_string())
+}
+
+/// Configure providers and optional shared CPU workers before creating models.
 ///
-/// Strict selection errors are returned to the caller. Successful configuration
-/// only installs a provider preference; registration occurs during session
-/// creation and unsupported graph nodes may still execute on CPU.
-/// Library consumers must call this before constructing a fastembed model.
+/// Unset CPU controls preserve the original lazy/default threading behavior.
+/// Setting either CPU control opts in; spinning then defaults to disabled.
+/// Explicit resource-control failures are always returned, never silently ignored.
+/// Accelerators can still execute unsupported graph portions on the CPU.
 pub fn configure_embedding_runtime() -> Result<(), String> {
-    let raw = match std::env::var(PROVIDER_ENV) {
-        Ok(value) => value,
-        Err(_) => return Ok(()),
-    };
-    let message = configure_provider(
-        &raw,
+    let threads = optional_env(THREADS_ENV)?;
+    let spinning = optional_env(SPIN_ENV)?;
+    let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), num_cpus::get())?;
+    let provider = optional_env(PROVIDER_ENV)?.unwrap_or_else(|| "cpu".into());
+    for message in configure_runtime(
+        &provider,
         strict_provider_registration(),
         &compiled_embedding_providers(),
-        |provider, strict| {
-            let (_, dispatch) = provider_dispatch(provider, strict)
-                .ok_or_else(|| "compiled provider dispatch is unavailable".to_string())?;
-            commit_runtime_provider(dispatch)
-        },
-    )?;
-    if let Some(message) = message {
+        cpu,
+        commit_runtime,
+    )? {
         eprintln!("codanna: {message}");
     }
     Ok(())
@@ -249,121 +275,101 @@ pub fn configure_embedding_runtime() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn quiet() -> CpuThreads {
+        CpuThreads { intra: 2, spinning: false }
+    }
+
+    #[test]
+    fn cpu_thread_controls_are_opt_in_and_checked() {
+        assert_eq!(CpuThreads::parse(None, None, 8).unwrap(), None);
+        assert_eq!(CpuThreads::parse(Some("2"), None, 8).unwrap(), Some(quiet()));
+        assert_eq!(CpuThreads::parse(None, Some("false"), 1).unwrap().unwrap().intra, 1);
+        assert_eq!(CpuThreads::parse(None, Some("0"), 8).unwrap().unwrap().intra, 4);
+        assert!(CpuThreads::parse(Some("1"), Some("TRUE"), 8).unwrap().unwrap().spinning);
+        for bad in ["", "0", "-1", "1025", "two", "18446744073709551616"] {
+            assert!(CpuThreads::parse(Some(bad), None, 8).is_err(), "{bad}");
+        }
+        assert!(CpuThreads::parse(None, Some("sometimes"), 8).is_err());
+    }
+
     #[test]
     fn parses_execution_provider_names() {
-        assert_eq!(
-            EmbeddingExecutionProvider::from_str("cpu").unwrap(),
-            EmbeddingExecutionProvider::Cpu
-        );
-        assert_eq!(
-            EmbeddingExecutionProvider::from_str("AUTO").unwrap(),
-            EmbeddingExecutionProvider::Auto
-        );
-        assert_eq!(
-            EmbeddingExecutionProvider::from_str("core-ml").unwrap(),
-            EmbeddingExecutionProvider::CoreMl
-        );
-        assert_eq!(
-            EmbeddingExecutionProvider::from_str("cuda").unwrap(),
-            EmbeddingExecutionProvider::Cuda
-        );
+        for (raw, expected) in [("cpu", EmbeddingExecutionProvider::Cpu), ("AUTO", EmbeddingExecutionProvider::Auto), ("core-ml", EmbeddingExecutionProvider::CoreMl), ("cuda", EmbeddingExecutionProvider::Cuda)] {
+            assert_eq!(EmbeddingExecutionProvider::from_str(raw).unwrap(), expected);
+        }
+        assert!(EmbeddingExecutionProvider::from_str("metal").is_err());
     }
 
     #[test]
-    fn rejects_unknown_execution_provider() {
-        let error = EmbeddingExecutionProvider::from_str("metal").unwrap_err();
-        assert!(error.contains("expected cpu, auto, coreml, or cuda"));
-    }
-
-    #[test]
-    fn unavailable_strict_provider_fails_before_runtime_initialization() {
-        for requested in ["coreml", "cuda", "auto", "metal"] {
-            let result = configure_provider(requested, true, &["cpu"], |_, _| {
-                panic!("unavailable providers must not initialize a runtime")
-            });
-            assert!(result.is_err(), "{requested}");
+    fn cpu_without_thread_controls_does_not_initialize_runtime() {
+        for raw in ["", "cpu"] {
+            assert!(configure_runtime(raw, true, &["cpu"], None, |_, _, _| panic!("must remain lazy")).unwrap().is_empty());
         }
     }
 
     #[test]
-    fn unavailable_optional_provider_explains_fallback() {
-        let message = configure_provider("coreml", false, &["cpu"], |_, _| {
-            panic!("unavailable providers must not initialize a runtime")
-        })
-        .unwrap()
-        .unwrap();
-        assert!(message.contains("not compiled"));
-        assert!(message.contains("--features gpu-coreml"));
-        assert!(message.contains("runtime configuration unchanged"));
+    fn cpu_controls_commit_without_a_gpu_feature() {
+        let messages = configure_runtime("cpu", false, &["cpu"], Some(quiet()), |provider, _, cpu| {
+            assert_eq!(provider, None);
+            assert_eq!(cpu, Some(quiet()));
+            Ok(true)
+        }).unwrap();
+        assert!(messages.iter().any(|message| message.contains("intra_threads=2")));
+        assert!(messages.iter().any(|message| message.contains("not a whole-process CPU cap")));
     }
 
     #[test]
-    fn strict_runtime_failures_are_not_swallowed() {
-        for outcome in [Ok(false), Err("prepared initialization failure".into())] {
-            assert!(
-                configure_provider("coreml", true, &["cpu", "coreml"], |_, strict| {
-                    assert!(strict);
-                    outcome
-                })
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn optional_runtime_failures_explain_unchanged_configuration() {
-        for outcome in [Ok(false), Err("prepared initialization failure".into())] {
-            let message = configure_provider("coreml", false, &["cpu", "coreml"], |_, _| outcome)
-                .unwrap()
-                .unwrap();
-            assert!(message.contains("existing runtime configuration unchanged"));
-            assert!(!message.contains("configured with CPU fallback"));
-        }
-    }
-
-    #[test]
-    fn auto_selects_compiled_accelerator_without_claiming_device_execution() {
-        for (name, provider) in [
-            ("coreml", EmbeddingExecutionProvider::CoreMl),
-            ("cuda", EmbeddingExecutionProvider::Cuda),
-        ] {
-            let message = configure_provider("auto", true, &["cpu", name], |selected, strict| {
-                assert_eq!(selected, provider);
+    fn accelerator_and_threads_share_one_commit() {
+        for (name, expected) in [("coreml", EmbeddingExecutionProvider::CoreMl), ("cuda", EmbeddingExecutionProvider::Cuda)] {
+            let messages = configure_runtime("auto", true, &["cpu", name], Some(quiet()), |provider, strict, cpu| {
+                assert_eq!(provider, Some(expected));
                 assert!(strict);
+                assert_eq!(cpu, Some(quiet()));
                 Ok(true)
-            })
-            .unwrap()
-            .unwrap();
-            assert!(message.contains(name));
-            assert!(message.contains("not yet verified"));
+            }).unwrap();
+            assert!(messages.iter().any(|message| message.contains("not yet verified")));
         }
     }
 
     #[test]
-    fn explicit_cpu_does_not_initialize_runtime() {
-        assert!(
-            configure_provider("cpu", true, &["cpu", "coreml"], |_, _| {
-                panic!("CPU selection must preserve default initialization")
-            })
-            .unwrap()
-            .is_none()
-        );
+    fn unavailable_strict_provider_fails_before_any_initialization() {
+        for requested in ["coreml", "cuda", "auto", "metal"] {
+            assert!(configure_runtime(requested, true, &["cpu"], Some(quiet()), |_, _, _| panic!("must not initialize")).is_err());
+        }
+    }
+
+    #[test]
+    fn optional_unavailable_provider_preserves_requested_cpu_controls() {
+        let messages = configure_runtime("coreml", false, &["cpu"], Some(quiet()), |provider, _, cpu| {
+            assert_eq!(provider, None);
+            assert_eq!(cpu, Some(quiet()));
+            Ok(true)
+        }).unwrap();
+        assert!(messages.iter().any(|message| message.contains("not compiled")));
+        assert!(messages.iter().any(|message| message.contains("shared embedding CPU pool configured")));
+    }
+
+    #[test]
+    fn explicit_resource_limits_never_silently_fail() {
+        for outcome in [Ok(false), Err("fixture failure".into())] {
+            assert!(configure_runtime("cpu", false, &["cpu"], Some(quiet()), |_, _, _| outcome).is_err());
+        }
+    }
+
+    #[test]
+    fn optional_provider_failures_do_not_claim_configuration_success() {
+        for outcome in [Ok(false), Err("fixture failure".into())] {
+            let messages = configure_runtime("coreml", false, &["cpu", "coreml"], None, |_, _, _| outcome).unwrap();
+            assert!(messages.iter().any(|message| message.contains("configuration unchanged")));
+            assert!(!messages.iter().any(|message| message.contains("configured with CPU fallback")));
+        }
     }
 
     #[test]
     fn capabilities_match_compiled_target() {
         let providers = compiled_embedding_providers();
         assert_eq!(providers[0], "cpu");
-        assert_eq!(
-            providers.contains(&"coreml"),
-            cfg!(all(feature = "gpu-embeddings", target_vendor = "apple"))
-        );
-        assert_eq!(
-            providers.contains(&"cuda"),
-            cfg!(all(
-                feature = "gpu-embeddings",
-                any(target_os = "linux", target_os = "windows")
-            ))
-        );
+        assert_eq!(providers.contains(&"coreml"), cfg!(all(feature = "gpu-embeddings", target_vendor = "apple")));
+        assert_eq!(providers.contains(&"cuda"), cfg!(all(feature = "gpu-embeddings", any(target_os = "linux", target_os = "windows"))));
     }
 }
