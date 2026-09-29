@@ -82,6 +82,42 @@ class EvaluatorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.envelope_items({'status': 'success', 'code': 'OK', 'data': {'text': 'no results'}}, 0)
 
+    def compact_envelope(self, rows, partial=False):
+        return {'status': 'success', 'code': 'OK',
+                'meta': {'schema_version': '2.0.0'},
+                'data': {'schema_version': 2, 'results': rows,
+                         'output': {'partial': partial}}}
+
+    def test_compact_search_contract_and_empty_results(self):
+        row = {'symbol_id': 1, 'file_path': 'src/delivery.py',
+               'name': 'settle_once', 'line': 1}
+        envelope = self.compact_envelope([row])
+        self.assertEqual(runner.envelope_items(envelope, 0), [row])
+        empty = self.compact_envelope([])
+        empty.update(status='not_found', code='NOT_FOUND')
+        self.assertEqual(runner.envelope_items(empty, 1), [])
+
+    def test_compact_budget_omissions_are_errors_not_quality_scores(self):
+        for partial in (True, None, 'false'):
+            with self.subTest(partial=partial), self.assertRaises(ValueError):
+                runner.envelope_items(self.compact_envelope([], partial), 0)
+        for status, code in [('not_found', 'NOT_FOUND'), ('success', 'OK')]:
+            envelope = self.compact_envelope([], True)
+            envelope.update(status=status, code=code)
+            with self.assertRaises(ValueError):
+                runner.envelope_items(envelope, 1 if status == 'not_found' else 0)
+
+    def test_compact_code_uses_one_based_source_line_not_preview(self):
+        path = self.workspace / 'src/delivery.py'
+        item = {'symbol_id': 1, 'file_path': str(path), 'name': 'settle_once',
+                'line': 1, 'preview': 'fabricated full-body evidence'}
+        rows = runner.normalize_rows([item], 'semantic_code', self.workspace)
+        self.assertEqual(rows[0]['text'], path.read_text().splitlines()[0])
+        self.assertEqual(rows[0]['name'], 'settle_once')
+        for line in (0, -1, True, 100000):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                runner.normalize_rows([{**item, 'line': line}], 'semantic_code', self.workspace)
+
     def test_wrong_chunk_of_correct_document_does_not_pass(self):
         path = self.workspace / 'docs/long-runbook.md'
         item = {'source_path': str(path), 'byte_range': [0, 100]}
