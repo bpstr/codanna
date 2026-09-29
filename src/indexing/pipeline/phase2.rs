@@ -98,9 +98,13 @@ impl Pipeline {
                 let rel_count = ctx.unresolved_rels.len() as u64;
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.defines_resolved += resolve_stats.defines_resolved;
-                write_stage
-                    .write(batch)
-                    .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
+                write_stage.write(batch).map_err(|source| {
+                    if write_stage.can_retry_start() {
+                        PipelineError::WriterUnavailable { source }
+                    } else {
+                        PipelineError::Storage(source)
+                    }
+                })?;
 
                 // Update progress bar
                 if let Some(ref prog) = progress {
@@ -141,9 +145,13 @@ impl Pipeline {
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.calls_resolved += resolve_stats.calls_resolved;
                 stats.other_resolved += resolve_stats.resolved - resolve_stats.calls_resolved;
-                write_stage
-                    .write(batch)
-                    .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
+                write_stage.write(batch).map_err(|source| {
+                    if write_stage.can_retry_start() {
+                        PipelineError::WriterUnavailable { source }
+                    } else {
+                        PipelineError::Storage(source)
+                    }
+                })?;
 
                 // Update progress bar
                 if let Some(ref prog) = progress {

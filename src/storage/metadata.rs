@@ -18,8 +18,9 @@ use std::path::{Path, PathBuf};
 // initializers. v6 adds source-grounded lazy component Uses edges. v7 adds Go
 // interface DispatchCandidate edges and Python typing.cast Uses edges. v8 binds
 // TypeScript path aliases to their exact project export instead of an ambiguous
-// module string. Rebuild to recover relationship rows missing from older emissions.
-pub const EMISSION_SEMANTICS_VERSION: u32 = 8;
+// module string. v9 distinguishes proven dangling imports from incomplete or
+// config-redirected evidence. Rebuild to repair missing and false relationships.
+pub const EMISSION_SEMANTICS_VERSION: u32 = 9;
 
 /// Short commit of the binary, `-dirty` when it was built from a modified
 /// tree. `None` when built without a work tree (release tarballs), which

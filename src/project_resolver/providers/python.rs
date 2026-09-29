@@ -636,6 +636,7 @@ impl PythonProvider {
         // Python doesn't use base_url - import paths are derived from source roots
         // The actual import names are stored in paths values
         Ok(ResolutionRules {
+            relative_specifiers_redirected: false,
             base_url: None,
             paths,
         })

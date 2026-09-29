@@ -16,3 +16,6 @@ mod watcher_config_reload;
 
 #[path = "upstream/relationship_cache_scale.rs"]
 mod relationship_cache_scale;
+
+#[path = "upstream/index_state.rs"]
+mod index_state;

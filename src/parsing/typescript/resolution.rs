@@ -864,6 +864,8 @@ impl TypeScriptProjectEnhancer {
             let config = crate::parsing::typescript::tsconfig::TsConfig {
                 extends: None,
                 compilerOptions: crate::parsing::typescript::tsconfig::CompilerOptions {
+                    moduleSuffixes: None,
+                    rootDirs: None,
                     baseUrl: rules.base_url.clone(),
                     paths: rules.paths.clone(),
                 },

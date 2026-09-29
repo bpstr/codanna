@@ -126,6 +126,7 @@ impl JavaProvider {
         }
 
         Ok(ResolutionRules {
+            relative_specifiers_redirected: false,
             base_url: None,
             paths,
         })

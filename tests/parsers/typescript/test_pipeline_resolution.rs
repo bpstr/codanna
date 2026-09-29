@@ -34,7 +34,7 @@ fn resolution_rules_json(tsconfig: &Path, mapping_root: &Path) -> String {
         }),
     );
     serde_json::to_string_pretty(&serde_json::json!({
-        "version": "1.0",
+        "version": codanna::project_resolver::persist::RESOLUTION_INDEX_VERSION,
         "hashes": hashes,
         "mappings": mappings,
         "rules": rules,
@@ -153,6 +153,7 @@ fn test_behavior_pipeline_cache_local_symbols() {
 fn test_path_alias_enhancement() {
     // Build rules like tsconfig would provide
     let rules = codanna::project_resolver::persist::ResolutionRules {
+        relative_specifiers_redirected: false,
         base_url: None,
         paths: vec![
             (

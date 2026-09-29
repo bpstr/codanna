@@ -120,6 +120,13 @@ pub enum IndexError {
 }
 
 impl IndexError {
+    /// The same mutable PendingResolution can be retried without repeating Phase 1.
+    /// This is false for staged-write, commit and later publication failures.
+    pub fn is_writer_unavailable(&self) -> bool {
+        matches!(self, Self::Pipeline(inner)
+            if matches!(**inner, crate::indexing::pipeline::PipelineError::WriterUnavailable { .. }))
+    }
+
     /// Create a lock error
     pub fn lock_error() -> Self {
         Self::LockError("mutex poisoned".to_string())

@@ -400,6 +400,9 @@ impl LanguageBehavior for TypeScriptBehavior {
         let maybe_enhancer = maybe_binding
             .as_ref()
             .map(|(_, rules)| super::resolution::TypeScriptProjectEnhancer::new(rules.clone()));
+        let relative_specifiers_redirected = maybe_binding
+            .as_ref()
+            .is_some_and(|(_, rules)| rules.relative_specifiers_redirected);
 
         // Build enhanced imports with path aliases resolved
         let mut enhanced_imports = Vec::with_capacity(imports.len());
@@ -423,6 +426,32 @@ impl LanguageBehavior for TypeScriptBehavior {
             use crate::parsing::ExportResolution;
             let mut export_resolution =
                 cache.resolve_export(file_id, &import.path, target_name, extensions);
+            use crate::parsing::resolution::RelativeImportLookup;
+            let relative_lookup =
+                importing_file
+                    .as_deref()
+                    .map_or(RelativeImportLookup::Unknown, |file| {
+                        self.relative_import_lookup(
+                            cache,
+                            target_name,
+                            &import.path,
+                            file,
+                            extensions,
+                        )
+                    });
+            if matches!(export_resolution, ExportResolution::Unknown)
+                && relative_lookup == RelativeImportLookup::NoIndexedFile
+                && !relative_specifiers_redirected
+            {
+                context.register_import_binding(ImportBinding {
+                    import: import.clone(),
+                    exposed_name: local_name,
+                    origin: ImportOrigin::Dangling,
+                    resolved_symbol: None,
+                });
+                // Do not turn a missing file into a suffix-matched foreign module.
+                continue;
+            }
             let file_resolved = match export_resolution {
                 ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => Some(id),
                 ExportResolution::Unknown => importing_file.as_deref().and_then(|f| {

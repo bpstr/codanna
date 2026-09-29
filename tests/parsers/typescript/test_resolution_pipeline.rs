@@ -214,6 +214,7 @@ fn test_typescript_extends_chain() {
 fn test_resolution_without_config() {
     // Test that resolution works gracefully when no config exists
     let rules = ResolutionRules {
+        relative_specifiers_redirected: false,
         base_url: None,
         paths: std::collections::HashMap::new(),
     };

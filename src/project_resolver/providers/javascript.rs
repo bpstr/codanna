@@ -155,6 +155,16 @@ impl ProjectResolutionProvider for JavaScriptProvider {
                     index.set_rules(
                         config_path,
                         ResolutionRules {
+                            relative_specifiers_redirected: jsconfig
+                                .compilerOptions
+                                .moduleSuffixes
+                                .as_ref()
+                                .is_some_and(|v| !v.is_empty())
+                                || jsconfig
+                                    .compilerOptions
+                                    .rootDirs
+                                    .as_ref()
+                                    .is_some_and(|v| !v.is_empty()),
                             base_url: jsconfig.compilerOptions.baseUrl,
                             paths: jsconfig.compilerOptions.paths,
                         },

@@ -160,4 +160,61 @@ mod tests {
         drop(permit);
         assert_eq!(pool.available_permits(), 1);
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn upstream_repair_cancellation_after_phase1_does_not_strand_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("src");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("main.py"),
+            "def callee():\n    return 1\n\ndef caller():\n    return callee()\n",
+        )
+        .unwrap();
+        let mut settings = crate::Settings {
+            workspace_root: None,
+            index_path: dir.path().join("index"),
+            ..Default::default()
+        };
+        settings.semantic_search.enabled = false;
+        settings.add_indexed_path(root.clone()).unwrap();
+        let owner = Arc::new(RwLock::new(IndexFacade::new(Arc::new(settings)).unwrap()));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let job = tokio::spawn({
+            let owner = Arc::clone(&owner);
+            async move {
+                mutate(&owner, move |facade| {
+                    let mut pending = crate::indexing::pipeline::PendingResolution::default();
+                    facade.index_directory_deferred(&root, false, &mut pending)?;
+                    let _ = started_tx.send(());
+                    release_rx.recv().unwrap();
+                    facade.resolve_deferred(&mut pending)
+                })
+                .await
+            }
+        });
+        started_rx.await.unwrap();
+        job.abort();
+        release_tx.send(()).unwrap();
+        // The next mutation waits for the cancelled caller's worker to publish.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            mutate(&owner, |facade| {
+                let callers = facade.find_symbols_by_name("caller", None);
+                assert_eq!(callers.len(), 1);
+                let rows = facade
+                    .document_index()
+                    .get_relationships_from(callers[0].id, crate::RelationKind::Calls)
+                    .unwrap();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    facade.get_symbol(rows[0].1).unwrap().name.as_ref(),
+                    "callee"
+                );
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
 }

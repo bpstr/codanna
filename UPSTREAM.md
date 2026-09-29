@@ -5,20 +5,29 @@ The fork intentionally carries product-oriented workspace, retrieval, hardening,
 code-intelligence work beyond upstream. It is not expected to remain a small patch
 stack that can be merged wholesale.
 
-Last reviewed: 2026-09-21
+Last reviewed: 2026-09-28
 
-- Upstream repository: `bartolli/codanna`
-- Upstream default branch: `main`
-- Fork default branch: `main`
-- Reviewed upstream head: `12e823c4d965dc8269322869df760dd12d19e415` (v0.16.0)
-- Upstream regression gateway: `tests/upstream_regressions.rs`
+- Verified GitHub parent and source: `bartolli/codanna`
+- Verified fork/upstream default branches: `main` / `main`
+- Coverage window: 2026-09-21 through 2026-09-28 (UTC)
+- Initial fork base: `705f946982437941eb845d76c524129c868c151f`
+- Rechecked and integrated fork main: `f8018e78db3eb7058141e435a7f0c4f11bbb182e`
+- Publication-time fork main comparison: `3a61d25bdf63ba9a8de0504a33b75e26da0f52f3`
+- Inspected upstream main: `58295d290f70c2ca46a5ace48fe2aab8687d7d6e`
+- Previous upstream baseline: `12e823c4d965dc8269322869df760dd12d19e415`
+- Latest inspected release: v0.16.0; the 19 later upstream commits are unreleased.
+- Regression gateway: `tests/upstream_regressions.rs`
+
+These SHAs describe the inspected base, not the future merge commit. **THIS-PR**
+means implemented in [fork PR #84](https://github.com/bpstr/codanna/pull/84), not
+shipped on the inspected fork main. Review/CI evidence belongs to its recorded head.
 
 ## Policy
 
 Classify overlapping work before changing the fork:
 
 - **UPSTREAM-CANDIDATE** — generic Codanna correctness or broadly useful behavior
-  that should be extracted as a focused contribution based on upstream `main`.
+  that may be extracted only with explicit authorization, based on upstream `main`.
 - **ALREADY-COVERED** — the fork contains equivalent or stronger behavior; do not
   mechanically cherry-pick the upstream implementation.
 - **UPSTREAM-OPEN** — upstream has an issue or PR in progress; compare semantics and
@@ -33,16 +42,88 @@ minimal regression and implementation required for that issue.
 
 ## Current overlap map
 
-| Upstream | Fork status | Fork evidence | Action |
-| --- | --- | --- | --- |
-| [#127 — TypeScript named import aliases](https://github.com/bartolli/codanna/issues/127) | **UPSTREAM-CANDIDATE** | `tests/upstream/named_import_alias.rs`; alias-aware import identity in fork parsers/resolution | Keep fork behavior. Candidate for a future focused upstream contribution. |
-| [#122 / PR #124 — unresolved relative imports crossing roots](https://github.com/bartolli/codanna/issues/122) | **ALREADY-COVERED / UPSTREAM-OPEN** | `tests/upstream/unresolved_import.rs`; identity-safe resolution and incremental cleanup | Compare upstream semantics if PR #124 lands; do not blindly cherry-pick. |
-| [#123 / PR #125 — relationship cache truncation above one million symbols](https://github.com/bartolli/codanna/issues/123) | **ALREADY-COVERED / UPSTREAM-OPEN** | `tests/upstream/relationship_cache_scale.rs`; streamed full-symbol hydration | Preserve the streaming implementation and use upstream changes only as compatibility evidence. |
-| [#126 / PR #128 — macOS watcher registration scaling](https://github.com/bartolli/codanna/issues/126) | **ALREADY-COVERED / UPSTREAM-OPEN** | batched/recursive watcher registration and `tests/watcher_startup.rs` | Re-test when upstream lands; retain fork root-policy behavior. |
-| [#129 — newly indexed roots not watched after settings reload](https://github.com/bartolli/codanna/issues/129) | **UPSTREAM-CANDIDATE** | `tests/upstream/watcher_config_reload.rs`; live settings/root refresh | Keep fork fix. Candidate after smaller upstream contributions. |
-| [#130 / PR #131 — vector persistence syscall amplification](https://github.com/bartolli/codanna/issues/130) | **ALREADY-COVERED / UPSTREAM-OPEN** | buffered vector persistence and `tests/vector_storage_batch.rs` | Keep fork implementation and crash-ordering safeguards. |
-| [#133 / PR #134 — watcher bursts and stdio shutdown](https://github.com/bartolli/codanna/issues/133) | **ALREADY-COVERED / UPSTREAM-OPEN** | bounded nonblocking event queue, overflow reconciliation, owned watcher lifecycle | Preserve bounded recovery semantics; compare behavior after upstream merge. |
-| [#136 / PR #137 — unchanged watcher events rewriting semantic state](https://github.com/bartolli/codanna/issues/136) | **ALREADY-COVERED** | cached code observations skip semantic persistence and notifications; regression in `src/watcher/unified.rs` | Keep the fork fix; watch upstream status only. |
+| Upstream | Actual upstream status at review | Fork coverage and action |
+| --- | --- | --- |
+| [Named import identity](https://github.com/bartolli/codanna/commit/71b6cdb3100223108f19253fe4f6bc4fe32e5563) | On main; unreleased | **ALREADY-COVERED** by explicit imported-member identity and `tests/upstream/named_import_alias.rs`. Retain fork parser/resolver behavior. |
+| [Dangling relative import evidence](https://github.com/bartolli/codanna/commit/58295d290f70c2ca46a5ace48fe2aab8687d7d6e) | On main; unreleased; broader than proposal [PR #124](https://github.com/bartolli/codanna/pull/124) | **THIS-PR** adapts complete/partial file evidence, symbol-free files, same-directory stems, directory/index targets, and TS/JS redirection guards. Preserve explicit export slots/barrels. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/unresolved_import.rs`, `tests/web_export_regressions.rs`. |
+| [PR #125: full resolution cache](https://github.com/bartolli/codanna/pull/125) | Merged 2026-09-23; unreleased | **ALREADY-COVERED** by streamed symbol hydration. Keep `tests/upstream/relationship_cache_scale.rs`; its million-symbol witness is opt-in. |
+| [PR #128: macOS watcher scaling](https://github.com/bartolli/codanna/pull/128) | Closed unmerged 2026-09-22; rewritten on main in `58dd51f` and `77222c6` | Recursive/batched registration already covered. **THIS-PR** selectively adds code-event admission without gating document/config handlers; helper regression in `src/watcher/unified.rs`. Native FSEvents validation remains distinct from Linux helper tests. |
+| [Config sync](https://github.com/bartolli/codanna/commit/f4ac575619f3323e3c9c687f85c602ba59407b4d) / [reload-root persistence](https://github.com/bartolli/codanna/commit/2857d7fd56653734c129320e00b46452f3e02830) | On main; unreleased | **THIS-PR** diffs an unrecorded root instead of forcing duplicate indexing and persists accepted roots without rewriting vectors. Live watcher catch-up already used incremental indexing. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/watcher_config_reload.rs`. |
+| [Deferred writer failure](https://github.com/bartolli/codanna/commit/46f4bbfc16e413077cc61fe7b72e142d7fa77c0d) / [watcher propagation](https://github.com/bartolli/codanna/commit/c965e49c75cb7cedbe56fd1aecf487bc0a84d968) | On main; unreleased | **THIS-PR** retains one prepared wave and retries only before the first writer acquisition. Fork store/commit errors are not blindly replayable. Evidence: `src/watcher/deferred_code.rs`, `src/indexing/pipeline/stages/write.rs`, `tests/upstream/index_state.rs`. |
+| [Reload serialization](https://github.com/bartolli/codanna/commit/3039c966e3d2f8bca6dbfa31485abb28a7c875c4) | On main; unreleased | **ALREADY-COVERED**: `src/watcher/hot_reload.rs` loads/publishes inside `runtime::mutate`. No mechanical port. |
+| [PR #131: buffered vector writes](https://github.com/bartolli/codanna/pull/131) | Merged 2026-09-23; unreleased | **ALREADY-COVERED** with stronger crash-ordering safeguards; retain `tests/vector_storage_batch.rs`. |
+| [PR #134: bursts and stdio shutdown](https://github.com/bartolli/codanna/pull/134) | Closed unmerged 2026-09-24; only nonblocking delivery adopted upstream | Preserve fork bounded queue and filesystem-truth reconciliation, not upstream's unbounded channel. **THIS-PR** adds a Phase-1/cancel/Phase-2 worker-ownership regression in `src/runtime.rs`. The 32-path notification threshold is unchanged; native transport/burst behavior still requires its own witness. |
+| [PR #137: unchanged watcher events](https://github.com/bartolli/codanna/pull/137) | Merged 2026-09-23; unreleased | **ALREADY-COVERED**: cached code observations skip vector persistence and notifications. Keep the private publication regression in `src/watcher/unified.rs`. |
+
+### Open fork work checked before adaptation
+
+PRs #71 (Markdown headings) and #72 (TypeScript object methods) were already merged
+on the initial base. The complete diffs of the then-open PRs #70 and #73-#83 were
+checked. None implements the above config-sync, retry, or file-presence fixes.
+In particular, #83 prepares isolated-project fixtures, not the missing import
+classifier; this PR does not copy or edit those fixtures.
+
+During implementation, #70 and #73 merged on `f8018e7`; those changes are integrated
+unchanged. The updated #80 head `42e8ee4a973e06499dd3b86b8778272a7a31a0b0`
+was inspected and subsequently verified merged as `3a61d25`. The complete main
+comparison from `f8018e7` to `3a61d25` adds only its segment-measurement fixture and
+receipt; neither overlaps this adaptation. Its test results are scoped to that PR,
+not borrowed as qualification for this one.
+
+The other open work at publication is #74-#79 and #81-#83, separate from this PR.
+Retrieval, representation, document support, corpus drift, and isolated-project
+fixtures remain independent; fixture presence alone does not establish a passing
+qualification or shipped behavior.
+
+### September 29 fork integration
+
+Fork main `b60032fb` includes the previously pending PRs #74-#79 and #81-#83,
+and compact output PR #85. PR #84 is the sole remaining open fork PR at this
+integration checkpoint. Its TypeScript import-presence classification is combined
+with main's exact project/export binding; the emission stamp advances to v9.
+This is a fork lifecycle update, not a new upstream review.
+
+The first full-test and reliability runs on `0bf5e932` failed two watcher fixtures:
+the facade and watcher used different index paths, so metadata publication failed.
+Both fixtures now use their facade's explicit index path; local watcher validation
+passes 49 tests. Native macOS qualification additionally exposed two upstream
+fixtures using `/tmp` aliases instead of canonical source identities; these now
+match CLI/workspace startup. Original failed runs remain part of the evidence.
+See the [release testing manual](contributing/release-testing.md) for the retained
+nonretryable-wave recovery limitation and the separate Assign readiness gate.
+
+### Compatibility and validation boundaries
+
+After integration with fork main `b60032fb`, this adaptation advances fork emission semantics from v8 to **v9** and the
+project-resolution cache format from 1.0 to **1.1**. Existing indexes require
+`codanna index --force`; do not stamp old graphs as rebuilt without rebuilding.
+`resolve_deferred` / `resolve_pending` now take `&mut PendingResolution`: only
+`is_writer_unavailable()` permits retry, successful work is drained, and adding
+another root to a prepared wave is rejected. There is no new MCP schema or dependency.
+
+The retained watcher wave is bounded to one in-memory value. This is not a durable
+pending-work journal: a process crash or shutdown while a writer remains unavailable
+can still require graph recovery/rebuild. Partial-write failures are surfaced rather
+than represented as safe retries.
+
+The new fixtures are deterministic, local, and disable semantic providers. Initial
+implementation commit `4f626009a54219f3c87589d31b318803fde02da9` passed formatting
+and 35 focused tests in [run 36413674627](https://github.com/bpstr/codanna/actions/runs/36413674627).
+
+After integrating `f8018e7`, code commit `f63b6fc2e0ed7d9b7a8ea6afb063a6e1a921e098`
+passed [qualification run 36414379842](https://github.com/bpstr/codanna/actions/runs/36414379842):
+
+- Strict Clippy across all targets and all features, with warnings denied.
+- Compilation with no default features.
+- 5 focused unit regressions.
+- 7 upstream integration regressions; 2 scale witnesses intentionally ignored.
+- All 23 export-barrel regressions and 4 typed-symbol-ID contract tests.
+
+Those are 39 executed passing tests, not a claim that the full repository or native
+platform matrix passed. Subsequent edits only update agent/ledger documentation and
+remove the temporary runner; normal PR checks qualify the final head. Native
+macOS/Windows, million-symbol scaling, and full transport shutdown remain separate
+qualification scopes, not implied by Linux helper tests.
 
 ## Upstream regression suite
 

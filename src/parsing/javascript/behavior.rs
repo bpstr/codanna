@@ -317,9 +317,12 @@ impl LanguageBehavior for JavaScriptBehavior {
         let importing_module = importing_symbol.and_then(|sym| sym.module_path.map(String::from));
 
         // Load project rules for path alias enhancement
-        let maybe_enhancer = self
-            .load_project_rules_for_file(file_id)
-            .map(super::resolution::JavaScriptProjectEnhancer::new);
+        let project_rules = self.load_project_rules_for_file(file_id);
+
+        let relative_specifiers_redirected = project_rules
+            .as_ref()
+            .is_some_and(|rules| rules.relative_specifiers_redirected);
+        let maybe_enhancer = project_rules.map(super::resolution::JavaScriptProjectEnhancer::new);
 
         // Build enhanced imports with path aliases resolved
         let mut enhanced_imports = Vec::with_capacity(imports.len());
@@ -343,6 +346,32 @@ impl LanguageBehavior for JavaScriptBehavior {
             use crate::parsing::ExportResolution;
             let mut export_resolution =
                 cache.resolve_export(file_id, &import.path, target_name, extensions);
+            use crate::parsing::resolution::RelativeImportLookup;
+            let relative_lookup =
+                importing_file
+                    .as_deref()
+                    .map_or(RelativeImportLookup::Unknown, |file| {
+                        self.relative_import_lookup(
+                            cache,
+                            target_name,
+                            &import.path,
+                            file,
+                            extensions,
+                        )
+                    });
+            if matches!(export_resolution, ExportResolution::Unknown)
+                && relative_lookup == RelativeImportLookup::NoIndexedFile
+                && !relative_specifiers_redirected
+            {
+                context.register_import_binding(ImportBinding {
+                    import: import.clone(),
+                    exposed_name: local_name,
+                    origin: ImportOrigin::Dangling,
+                    resolved_symbol: None,
+                });
+                // Do not turn a missing file into a suffix-matched foreign module.
+                continue;
+            }
             let file_resolved = match export_resolution {
                 ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => Some(id),
                 ExportResolution::Unknown => importing_file.as_deref().and_then(|f| {

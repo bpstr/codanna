@@ -481,7 +481,7 @@ mod snapshot_tests {
         for file in sources {
             facade.index_prepared_file(file, &mut pending).unwrap();
         }
-        facade.resolve_deferred(pending).unwrap();
+        facade.resolve_deferred(&mut pending).unwrap();
         assert!(
             facade
                 .find_symbols_by_name("replaced_after_preflight", None)

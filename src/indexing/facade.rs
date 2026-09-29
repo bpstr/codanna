@@ -1908,10 +1908,12 @@ impl IndexFacade {
         })
     }
 
-    /// Resolve everything accumulated by `index_directory_deferred` calls.
+    /// Resolve accumulated work. Only `is_writer_unavailable()` permits a retry
+    /// with this same value; successful publication drains it. Other failures
+    /// may have committed relationships and must not be replayed.
     pub fn resolve_deferred(
         &mut self,
-        pending: crate::indexing::pipeline::PendingResolution,
+        pending: &mut crate::indexing::pipeline::PendingResolution,
     ) -> FacadeResult<()> {
         self.pipeline.resolve_pending(
             pending,
@@ -2062,7 +2064,7 @@ impl IndexFacade {
 
         if !dry_run {
             self.pipeline.resolve_pending(
-                pending,
+                &mut pending,
                 Arc::clone(&self.document_index),
                 self.semantic_search.clone(),
                 progress,
@@ -2097,10 +2099,10 @@ impl IndexFacade {
             }
         }
 
-        // Index new directories with progress if enabled.
-        // Use force=true since these are new directories being indexed for
-        // the first time; resolution is deferred until every new root has
-        // walked so cross-root imports bind regardless of add order.
+        // A root missing from metadata may already have files in Tantivy
+        // (for example after live reload). Diff against those file records;
+        // forcing this path would append duplicate symbols and relationships.
+        // Defer resolution until every added root has walked.
         let mut pending = crate::indexing::pipeline::PendingResolution::default();
         for path in &to_add {
             // Visual separator and directory label (stderr syncs with progress bars)
@@ -2124,7 +2126,7 @@ impl IndexFacade {
                 Arc::clone(&self.document_index),
                 self.semantic_search.clone(),
                 self.embedding_pool.get().cloned(),
-                true, // force: new directories should be fully indexed
+                false, // missing root metadata does not imply missing indexed files
                 progress,
                 file_count,
                 &mut pending,
@@ -2136,7 +2138,7 @@ impl IndexFacade {
             stats.symbols_found += result.index_stats.symbols_found;
         }
         self.pipeline.resolve_pending(
-            pending,
+            &mut pending,
             Arc::clone(&self.document_index),
             self.semantic_search.clone(),
             progress,
@@ -5247,7 +5249,7 @@ mod tests {
         facade
             .index_directory_deferred(&src, false, &mut pending)
             .unwrap();
-        facade.resolve_deferred(pending).unwrap();
+        facade.resolve_deferred(&mut pending).unwrap();
         assert_cross_root_edge(&facade, "deferred burst sync, tests root first");
     }
 

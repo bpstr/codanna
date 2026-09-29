@@ -27,13 +27,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Config synchronization now diffs roots missing from metadata against existing
+  indexed files instead of duplicating symbols and edges. Accepted watcher roots
+  persist without rewriting the semantic snapshot.
+- Deferred resolution retains one prepared watcher wave after an initial writer
+  acquisition failure, with bounded backoff. Failures after writing begins are
+  not reported as safely replayable; successful pending work is drained.
+- TypeScript/JavaScript relative imports use complete file-row evidence before
+  classifying a target as dangling. Partial inventories, symbol-free files,
+  dotted stems, directory targets, export barrels, and redirected configurations
+  no longer imply false absence. Recursive macOS code events respect admitted
+  directories while document/configuration handling stays independent.
+- These import-resolution changes require a full rebuild (`codanna index --force`):
+  current emission semantics are v9 and the resolution-rules cache is version 1.1.
+  The Rust deferred-resolution API now borrows `&mut PendingResolution`.
+
 - TypeScript object methods with identifier keys now have callable symbol
   endpoints, including methods in returned objects and variable initializers.
   Calls inside anonymous callbacks retain the enclosing method as their owner.
   Nested declarations in parameter defaults and unsupported method keys remain
   discoverable. Unrelated nested functions no longer hide imported call targets.
   Existing indexes require a full rebuild (`codanna index --force`) to recover
-  missing caller relationships; emission semantics advance to v5. Computed
+  missing caller relationships (introduced in emission semantics v5). Computed
   object keys and function-valued properties remain outside this change.
 
 ## [0.16.0] - 2026-08-29
