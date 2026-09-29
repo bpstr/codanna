@@ -16,8 +16,11 @@ use std::{
 
 fn fixture() -> (tempfile::TempDir, Arc<Settings>, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("src");
-    let tests = dir.path().join("tests");
+    // Match the canonical paths admitted by CLI/workspace startup on macOS,
+    // where /tmp is a symlink to /private/tmp.
+    let workspace = dir.path().canonicalize().unwrap();
+    let src = workspace.join("src");
+    let tests = workspace.join("tests");
     std::fs::create_dir_all(src.join("pkg")).unwrap();
     std::fs::create_dir_all(&tests).unwrap();
     std::fs::write(src.join("pkg/__init__.py"), "").unwrap();
@@ -156,7 +159,7 @@ fn upstream_repair_writer_start_failure_retains_pending_and_preserves_ids_on_ret
 #[test]
 fn upstream_repair_complete_inventory_includes_symbol_free_files_and_is_path_scoped() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("src");
+    let root = dir.path().canonicalize().unwrap().join("src");
     std::fs::create_dir_all(root.join("a/dir")).unwrap();
     std::fs::create_dir_all(root.join("b")).unwrap();
     for file in [

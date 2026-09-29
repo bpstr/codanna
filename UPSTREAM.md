@@ -86,7 +86,9 @@ This is a fork lifecycle update, not a new upstream review.
 The first full-test and reliability runs on `0bf5e932` failed two watcher fixtures:
 the facade and watcher used different index paths, so metadata publication failed.
 Both fixtures now use their facade's explicit index path; local watcher validation
-passes 49 tests. Original failing GitHub runs remain part of the evidence.
+passes 49 tests. Native macOS qualification additionally exposed two upstream
+fixtures using `/tmp` aliases instead of canonical source identities; these now
+match CLI/workspace startup. Original failed runs remain part of the evidence.
 See the [release testing manual](contributing/release-testing.md) for the retained
 nonretryable-wave recovery limitation and the separate Assign readiness gate.
 
