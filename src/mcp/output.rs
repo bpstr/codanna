@@ -70,6 +70,12 @@ pub(crate) fn display_path(path: &Path, workspace: Option<&Path>) -> String {
         .into_owned()
 }
 
+pub(crate) fn canonical_workspace(
+    workspace: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    workspace.map(|root| root.canonicalize().unwrap_or(root))
+}
+
 /// Normalize a caller's relative document selector against the selected workspace.
 pub(crate) fn document_scope(
     value: Option<&str>,

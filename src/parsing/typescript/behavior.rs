@@ -83,6 +83,7 @@ type RulesCache = Option<(Instant, crate::project_resolver::persist::ResolutionI
 pub struct TypeScriptBehavior {
     state: BehaviorState,
     resolution_dir: PathBuf,
+    workspace_root: PathBuf,
     rules_cache: Arc<Mutex<RulesCache>>,
 }
 
@@ -100,19 +101,31 @@ impl TypeScriptBehavior {
     /// Use an explicit `.codanna` directory, without modifying process CWD.
     /// Clones share this instance's cache; different workspaces never share rules.
     pub fn with_resolution_dir(resolution_dir: impl Into<PathBuf>) -> Self {
+        let resolution_dir = resolution_dir.into();
+        let workspace_root = if resolution_dir.file_name().and_then(|name| name.to_str())
+            == Some(crate::init::local_dir_name())
+        {
+            resolution_dir
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+        } else {
+            resolution_dir.clone()
+        };
         Self {
             state: BehaviorState::new(),
-            resolution_dir: resolution_dir.into(),
+            resolution_dir,
+            workspace_root,
             rules_cache: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Load only rules governing the registered file, never an arbitrary config.
-    fn load_project_rules_for_file(&self, file_id: FileId) -> Option<ResolutionRules> {
-        self.load_project_rules_for_path(&self.state.get_file_path(file_id)?)
-    }
-
-    fn load_project_rules_for_path(&self, path: &Path) -> Option<ResolutionRules> {
+    fn load_project_binding_for_path(&self, path: &Path) -> Option<(PathBuf, ResolutionRules)> {
+        let workspace_path = if path.is_relative() {
+            self.workspace_root.join(path)
+        } else {
+            path.to_path_buf()
+        };
         let mut cache = self.rules_cache.lock().ok()?;
         if cache
             .as_ref()
@@ -127,7 +140,8 @@ impl TypeScriptBehavior {
             *cache = Some((Instant::now(), index));
         }
         let (_, index) = cache.as_ref()?;
-        index.rules.get(index.get_config_for_file(path)?).cloned()
+        let config = index.get_config_for_file(&workspace_path)?.clone();
+        Some((config.clone(), index.rules.get(&config)?.clone()))
     }
 }
 
@@ -193,6 +207,9 @@ impl LanguageBehavior for TypeScriptBehavior {
     ) -> Option<String> {
         // Use tsconfig infrastructure to compute canonical module paths
         // This ensures symbols use the SAME path format as enhanced imports
+        let resolved_file = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
 
         // Load the resolution index to find which tsconfig governs this file
         let persistence = ResolutionPersistence::new(&self.resolution_dir);
@@ -203,17 +220,20 @@ impl LanguageBehavior for TypeScriptBehavior {
         // absolute (config entries outside the workspace) or
         // workspace-relative. A path stripped to workspace-relative fails
         // against absolute globs and silently nulls every module path.
-        let config_path = index.get_config_for_file(file_path)?;
+        let config_path = index.get_config_for_file(&resolved_file)?;
         tracing::debug!(
             "[typescript] module_path_from_file file_path={file_path:?} config_path={config_path:?}"
         );
 
         // Get the tsconfig's directory (the project root for this file)
-        let tsconfig_dir = project_root.join(config_path.parent()?);
+        let config_parent = config_path.parent()?;
+        let tsconfig_dir = config_parent
+            .canonicalize()
+            .unwrap_or_else(|_| project_root.join(config_parent));
         tracing::debug!("[typescript] module_path_from_file tsconfig_dir={tsconfig_dir:?}");
 
         // Compute segments relative to the tsconfig's directory
-        let mut segments = crate::parsing::paths::relative_segments(file_path, &tsconfig_dir)?;
+        let mut segments = crate::parsing::paths::relative_segments(&resolved_file, &tsconfig_dir)?;
         let last = segments.pop()?;
         let stem = strip_extension(&last, extensions);
         segments.push(stem.to_string());
@@ -368,14 +388,18 @@ impl LanguageBehavior for TypeScriptBehavior {
             .map(|sym| sym.file_path.to_string());
 
         // Load project rules for path alias enhancement
-        let maybe_enhancer = self
-            .load_project_rules_for_file(file_id)
+        let maybe_binding = self
+            .state
+            .get_file_path(file_id)
+            .and_then(|path| self.load_project_binding_for_path(&path))
             .or_else(|| {
                 importing_file
                     .as_deref()
-                    .and_then(|path| self.load_project_rules_for_path(Path::new(path)))
-            })
-            .map(super::resolution::TypeScriptProjectEnhancer::new);
+                    .and_then(|path| self.load_project_binding_for_path(Path::new(path)))
+            });
+        let maybe_enhancer = maybe_binding
+            .as_ref()
+            .map(|(_, rules)| super::resolution::TypeScriptProjectEnhancer::new(rules.clone()));
 
         // Build enhanced imports with path aliases resolved
         let mut enhanced_imports = Vec::with_capacity(imports.len());
@@ -411,12 +435,28 @@ impl LanguageBehavior for TypeScriptBehavior {
                 .and_then(|s| s.module_path.map(String::from));
 
             // Enhance import path if we have tsconfig rules
+            let mut alias_target_path = None;
+            let mut alias_workspace_path = None;
             let target_module = if let Some(module) = file_resolved_module {
                 // The resolved file's parse-derived module is the truth the
                 // string normalization approximates.
                 module
             } else if let Some(ref enhancer) = maybe_enhancer {
                 if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
+                    alias_target_path = maybe_binding.as_ref().and_then(|(config, _)| {
+                        let parent = config.parent()?;
+                        let base = parent
+                            .canonicalize()
+                            .unwrap_or_else(|_| parent.to_path_buf());
+                        Some(base.join(enhanced_path.trim_start_matches("./")))
+                    });
+                    alias_workspace_path = alias_target_path.as_deref().and_then(|path| {
+                        let root = self
+                            .workspace_root
+                            .canonicalize()
+                            .unwrap_or_else(|_| self.workspace_root.clone());
+                        path.strip_prefix(root).ok().map(PathBuf::from)
+                    });
                     // Tsconfig alias - convert enhanced path to module format
                     enhanced_path.trim_start_matches("./").replace('/', ".")
                 } else {
@@ -443,6 +483,34 @@ impl LanguageBehavior for TypeScriptBehavior {
             // order, not identity; raw ends_with also admitted mid-segment
             // captures).
             let mut resolved_symbol: Option<SymbolId> = file_resolved;
+            if resolved_symbol.is_none()
+                && matches!(export_resolution, ExportResolution::Unknown)
+                && let Some(path) = alias_target_path.as_deref()
+            {
+                export_resolution = cache.resolve_export_path(path, target_name, extensions);
+                match export_resolution {
+                    ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => {
+                        resolved_symbol = Some(id)
+                    }
+                    ExportResolution::Missing
+                    | ExportResolution::Ambiguous
+                    | ExportResolution::Unknown => {}
+                }
+            }
+            if resolved_symbol.is_none()
+                && matches!(export_resolution, ExportResolution::Unknown)
+                && let Some(path) = alias_workspace_path.as_deref()
+            {
+                export_resolution = cache.resolve_export_path(path, target_name, extensions);
+                match export_resolution {
+                    ExportResolution::Found(id) | ExportResolution::TypeOnly(id) => {
+                        resolved_symbol = Some(id)
+                    }
+                    ExportResolution::Missing
+                    | ExportResolution::Ambiguous
+                    | ExportResolution::Unknown => {}
+                }
+            }
             if matches!(export_resolution, ExportResolution::Unknown) {
                 export_resolution =
                     cache.resolve_module_export(&target_module, target_name, extensions);

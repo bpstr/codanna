@@ -189,6 +189,7 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             let options = crate::documents::DocumentSearchOptions {
                 literal,
                 score_floor,
+                authority_sources: Vec::new(),
             };
             if let Err(error) = options.validate() {
                 invalid(error.to_string());

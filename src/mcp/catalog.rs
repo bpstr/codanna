@@ -32,7 +32,7 @@ tools! {
     SemanticSearchWithContext => ("semantic_search_with_context",["query","limit","threshold","lang","view","max_output_bytes"],["query"],Some("query"),Read),
     DocumentDrift => ("document_drift",["collection","max_files","max_bytes","max_entries"],["collection"],Some("collection"),Read),
     GetDocumentChunk => ("get_document_chunk",["chunk_id","document_generation","line_offset","line_limit","max_output_bytes"],["chunk_id","document_generation"],None,Read),
-    SearchDocuments => ("search_documents",["query","collection","limit","literal","score_floor","view","max_output_bytes","document"],["query"],Some("query"),Read),
+    SearchDocuments => ("search_documents",["query","collection","limit","literal","score_floor","authority_sources","view","max_output_bytes","document"],["query"],Some("query"),Read),
     SearchTicketContext => ("search_ticket_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","include_semantic_code","include_conversations","include_related_code","profile","include_knowledge_links","knowledge_repo","coverage_limit","coverage_offset","coverage_snapshot","facet_filters","view","max_output_bytes","document"],["query"],Some("query"),Read),
     SearchContext => ("search_context",["query","code_limit","document_limit","conversation_limit","collection","code_path_prefix","view","max_output_bytes","document","include_conversations"],["query"],Some("query"),Read),
 }

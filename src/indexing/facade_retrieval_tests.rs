@@ -600,6 +600,144 @@ fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
     assert_eq!(status.vector_code_generation, None);
 }
 
+#[test]
+fn definition_semantics_tracks_source_and_vector_provenance_across_edit_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace_root = temp.path().canonicalize().unwrap();
+    let settings = Settings {
+        workspace_root: Some(workspace_root.clone()),
+        index_path: "index".into(),
+        semantic_search: crate::config::SemanticSearchConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut facade = IndexFacade::new(Arc::new(settings)).unwrap();
+    let source = workspace_root.join("fixture.go");
+    let before = include_str!("../../tests/fixtures/retrieval_findings/f04/before.go");
+    let after = include_str!("../../tests/fixtures/retrieval_findings/f04/after.go");
+    std::fs::write(&source, before).unwrap();
+    let before_hash = crate::indexing::calculate_hash(before);
+    let index = Arc::clone(facade.document_index());
+    index.start_batch().unwrap();
+    index
+        .store_file_registration(&crate::indexing::pipeline::FileRegistration {
+            path: source.clone(),
+            file_id: FileId::new(1).unwrap(),
+            content_hash: before_hash.clone(),
+            language_id: crate::parsing::LanguageId::new("go"),
+            timestamp: 1,
+            mtime: 1,
+        })
+        .unwrap();
+    let symbol = named_symbol(1, "DecodeFrame", SymbolKind::Function);
+    index
+        .index_symbol(&symbol, source.to_string_lossy().as_ref())
+        .unwrap();
+    index.commit_batch().unwrap();
+    let symbol = index.find_symbol_by_id(symbol.id).unwrap().unwrap();
+    assert_eq!(symbol.file_path.as_ref(), "fixture.go");
+
+    let semantic_path = temp.path().join("semantic");
+    let mut semantic = SimpleSemanticSearch::new_empty(2, "prepared-fixture");
+    semantic.store_embeddings(vec![(symbol.id, vec![1.0, 0.0], "go".into())]);
+    semantic.record_source_provenance(symbol.id, before_hash.clone());
+    semantic.bind_code_generation(index.commit_opstamp().unwrap());
+    semantic.save(&semantic_path).unwrap();
+    facade.semantic_search = Some(Arc::new(Mutex::new(
+        SimpleSemanticSearch::load_without_model(&semantic_path).unwrap(),
+    )));
+
+    let matching = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(
+        matching[0].indexed_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        matching[0].current_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        matching[0].vector_source_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(matching[0].reader_generation, index.generation());
+    assert_eq!(
+        matching[0].code_generation,
+        Some(index.commit_opstamp().unwrap())
+    );
+    assert_eq!(
+        matching[0].vector_code_generation,
+        Some(index.commit_opstamp().unwrap())
+    );
+    assert_eq!(matching[0].generation_alignment, "matched");
+    assert_eq!(matching[0].source_freshness, "matching_observed_hashes");
+    assert_eq!(matching[0].freshness, "verified");
+
+    std::fs::write(&source, after).unwrap();
+    let after_hash = crate::indexing::calculate_hash(after);
+    let stale = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(
+        stale[0].indexed_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        stale[0].current_content_hash.as_deref(),
+        Some(after_hash.as_str())
+    );
+    assert_eq!(stale[0].source_freshness, "stale");
+    assert_eq!(stale[0].freshness, "stale_source");
+
+    std::fs::remove_file(&source).unwrap();
+    let missing = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(missing[0].source_freshness, "missing");
+    assert!(missing[0].current_content_hash.is_none());
+    std::fs::write(&source, after).unwrap();
+
+    index.start_batch().unwrap();
+    index
+        .remove_file_documents(source.to_string_lossy().as_ref())
+        .unwrap();
+    index
+        .store_file_registration(&crate::indexing::pipeline::FileRegistration {
+            path: source.clone(),
+            file_id: FileId::new(1).unwrap(),
+            content_hash: after_hash.clone(),
+            language_id: crate::parsing::LanguageId::new("go"),
+            timestamp: 2,
+            mtime: 2,
+        })
+        .unwrap();
+    index
+        .index_symbol(&symbol, source.to_string_lossy().as_ref())
+        .unwrap();
+    index.commit_batch().unwrap();
+    let mut semantic = SimpleSemanticSearch::load_without_model(&semantic_path).unwrap();
+    semantic.store_embeddings(vec![(symbol.id, vec![0.0, 1.0], "go".into())]);
+    semantic.record_source_provenance(symbol.id, after_hash.clone());
+    semantic.bind_code_generation(index.commit_opstamp().unwrap());
+    semantic.save(&semantic_path).unwrap();
+    facade.semantic_search = Some(Arc::new(Mutex::new(
+        SimpleSemanticSearch::load_without_model(&semantic_path).unwrap(),
+    )));
+    let refreshed = facade.semantic_definition_status(&[symbol]);
+    assert_eq!(refreshed[0].source_freshness, "matching_observed_hashes");
+    assert_eq!(refreshed[0].generation_alignment, "matched");
+    assert_eq!(refreshed[0].freshness, "verified");
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(semantic_path.join("metadata.json")).unwrap())
+            .unwrap();
+    let base = manifest["journal"]["base"].as_str().unwrap();
+    std::fs::write(
+        semantic_path.join(base).join("semantic-provenance.json"),
+        b"{}",
+    )
+    .unwrap();
+    assert!(SimpleSemanticSearch::load_without_model(&semantic_path).is_err());
+}
+
 #[tokio::test]
 async fn definition_semantics_reports_membership_without_claiming_generation_alignment() {
     let (_temp, mut facade) = fixture();

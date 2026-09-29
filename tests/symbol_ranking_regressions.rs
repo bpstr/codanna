@@ -124,6 +124,47 @@ fn rank(results: &[SearchResult], expected: &str) -> Option<usize> {
 }
 
 #[test]
+fn f05_broad_symbol_query_keeps_the_multi_term_owner_in_the_top_five() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("src");
+    write_ts(
+        &root,
+        "symbols.ts",
+        include_str!("fixtures/retrieval_findings/f05/symbols.ts"),
+    );
+    for index in 0..32 {
+        write_ts(
+            &root,
+            &format!("noise/settings_{index}.ts"),
+            &format!(
+                "/** Generic settings entry {index}. */\nexport const settings{index} = {{}};\n"
+            ),
+        );
+    }
+    let mut settings = Settings {
+        workspace_root: Some(temp.path().to_path_buf()),
+        index_path: temp.path().join("index"),
+        ..Default::default()
+    };
+    settings.semantic_search.enabled = false;
+    settings.add_indexed_path(root.clone()).unwrap();
+    let mut index = IndexFacade::new(Arc::new(settings)).unwrap();
+    index.index_directory(&root, true).unwrap();
+
+    let results = index
+        .search("calendar settings", 5, None, None, Some("typescript"))
+        .unwrap();
+    assert!(
+        rank(&results, "readCalendarSettings").is_some(),
+        "F05 multi-term owner missing from top five: {:?}",
+        results
+            .iter()
+            .map(|hit| hit.name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn multi_concept_topic_owners_survive_generic_exact_name_crowding() {
     let fixture = Fixture::new();
     for (query, expected) in [

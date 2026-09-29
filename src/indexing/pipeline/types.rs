@@ -382,13 +382,14 @@ impl Default for IndexBatch {
 /// Contains symbols that have doc_comments suitable for embedding.
 #[derive(Debug)]
 pub struct EmbeddingBatch {
-    /// Embedding candidates: (symbol_id, doc_comment, language)
-    pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
+    /// Embedding candidates: (symbol_id, doc_comment, language, source SHA-256)
+    pub candidates: Vec<(SymbolId, CompactString, Box<str>, String)>,
     /// Opt-in source snapshots, partitioned against the real backend input budget.
     pub body_candidates: Vec<(
         SymbolId,
         crate::symbol_representation::SymbolSource,
         Box<str>,
+        String,
     )>,
 }
 
@@ -999,6 +1000,15 @@ impl PipelineSymbolCache for SymbolLookupCache {
         extensions: &[&str],
     ) -> crate::parsing::ExportResolution {
         SymbolLookupCache::resolve_module_export(self, module, name, extensions)
+    }
+
+    fn resolve_export_path(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        SymbolLookupCache::resolve_export_path(self, path, name, extensions)
     }
 
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {

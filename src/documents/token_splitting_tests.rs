@@ -118,7 +118,7 @@ fn stored_chunks(store: &DocumentStore, path: &Path, collection: &str) -> Vec<(u
         .build_search_results(
             candidates.into_iter().map(|id| (id, 1.0)).collect(),
             &query,
-            false,
+            &DocumentSearchOptions::default(),
         )
         .unwrap()
         .into_iter()

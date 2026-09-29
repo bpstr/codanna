@@ -56,6 +56,12 @@ impl LanguageDefinition for TypeScriptLanguage {
         Box::new(TypeScriptBehavior::new())
     }
 
+    fn create_behavior_with_settings(&self, settings: &Settings) -> Box<dyn LanguageBehavior> {
+        Box::new(TypeScriptBehavior::with_resolution_dir(
+            settings.resolution_dir(),
+        ))
+    }
+
     fn default_enabled(&self) -> bool {
         true // Enable TypeScript by default
     }

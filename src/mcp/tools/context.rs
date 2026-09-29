@@ -45,10 +45,12 @@ impl CodeIntelligenceServer {
             }
         }
         let facade = self.facade.read().await;
-        let workspace = facade
-            .network_workspace
-            .clone()
-            .or_else(|| facade.settings().workspace_root.clone());
+        let workspace = crate::mcp::output::canonical_workspace(
+            facade
+                .network_workspace
+                .clone()
+                .or_else(|| facade.settings().workspace_root.clone()),
+        );
         let mut preview_config = facade.settings().documents.search.clone();
         drop(facade);
         let document =

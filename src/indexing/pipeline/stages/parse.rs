@@ -231,7 +231,7 @@ fn parse_with_parser(
 
     // One behavior instance serves module_path computation and import
     // normalization below
-    let behavior = create_behavior(language_id);
+    let behavior = create_behavior(language_id, settings);
 
     // Compute module_path using the language behavior
     let module_path = behavior
@@ -347,11 +347,14 @@ fn attach_symbol_sources(
 }
 
 /// Create the language behavior for a registered language.
-fn create_behavior(language_id: LanguageId) -> Option<Box<dyn LanguageBehavior>> {
+fn create_behavior(
+    language_id: LanguageId,
+    settings: &Settings,
+) -> Option<Box<dyn LanguageBehavior>> {
     let registry = get_registry();
     let registry_guard = registry.lock().ok()?;
     let definition = registry_guard.get(language_id)?;
-    Some(definition.create_behavior())
+    Some(definition.create_behavior_with_settings(settings))
 }
 
 /// Compute module_path for a file using the language behavior.

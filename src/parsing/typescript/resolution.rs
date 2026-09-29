@@ -502,11 +502,11 @@ impl ResolutionScope for TypeScriptResolutionContext {
                 matches!(from_kind, Class | Interface | Trait | Struct | Enum)
                     && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
             }
-            References => {
+            References | DispatchCandidate => {
                 // Very permissive - almost anything can reference anything
                 true
             }
-            ReferencedBy => {
+            ReferencedBy | DispatchCandidateOf => {
                 // Very permissive - almost anything can reference anything
                 true
             }

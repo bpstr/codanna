@@ -663,10 +663,12 @@ pub(super) async fn search(
         return Ok(CallToolResult::error(vec![ContentBlock::text(error)]));
     }
     let facade = server.facade.read().await;
-    let workspace = facade
-        .network_workspace
-        .clone()
-        .or_else(|| facade.settings().workspace_root.clone());
+    let workspace = crate::mcp::output::canonical_workspace(
+        facade
+            .network_workspace
+            .clone()
+            .or_else(|| facade.settings().workspace_root.clone()),
+    );
     drop(facade);
     let document =
         crate::mcp::output::document_scope(request.document.as_deref(), workspace.as_deref())?;

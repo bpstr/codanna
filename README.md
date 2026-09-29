@@ -71,6 +71,22 @@ Ticket retrieval supports scoped semantic candidates, observed facets, persisten
 
 In JavaScript and TypeScript, passing a resolved function as an argument, such as `router.get('/health', handle)`, records a `References` relationship with the argument's source location. Find registrations and their dependents with `codanna mcp analyze_impact symbol_name:handle`; inspect source evidence with `codanna retrieve describe handle --json` under `relationships.referenced_by`. Describing the registering function exposes `relationships.references`. `get_calls` and `find_callers` continue to report explicit invocations, while dependency and impact queries also traverse references.
 
+Go calls through an interface-typed struct field record possible concrete methods
+under `relationships.dispatch_candidates`. These edges are derived from the call
+site, the interface method, structural `Implements` edges and each implementor's
+`Defines` edge. They are candidates rather than `Calls`, and are rebuilt when
+method signatures change. The current parser recognizes field, interface and
+method declarations available in the same source file. Python `typing.cast`
+type arguments record `Uses` edges, including imported aliases; a same-named
+function parameter suppresses the imported type edge.
+
+In workspaces with multiple `tsconfig.json` files, path aliases bind to the
+config governing the importing file and resolve through the exact exported
+source file. A symbol's context includes `resolver_binding`: `bound` names the
+source config, while `resolver_bindings_absent` means Codanna found no project
+rules for that file and did not borrow rules from another project. Go, Python,
+and TypeScript resolver caches are stored with the selected workspace.
+
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.
 
 ## What one call returns
@@ -207,6 +223,7 @@ source files. Run-progress diagnostics currently cover CLI document indexing.
 ```bash
 codanna documents search "Account preferences" --collection docs --literal --json
 codanna mcp search_documents 'query:Account preferences' collection:docs literal:true score_floor:1 --json
+codanna mcp search_documents --args '{"query":"account calendar settings","authority_sources":["/absolute/path/to/current.md"]}' --json
 ```
 
 `--literal` (MCP `literal:true`) matches a case-sensitive substring in indexed
@@ -225,12 +242,20 @@ coverage and source balancing. Result limits and source balancing also apply to
 literal matches. Literal search scans the filtered indexed chunks and may be slower
 for large collections.
 
+MCP callers may pass `authority_sources` as exact indexed source paths. Matching
+sources receive a deterministic tiebreak after lexical term coverage. The option
+is omitted by default, never infers authority from document text, and does not
+hide other matching sources. In semantic mode the explicit prior is applied
+before cosine-score ordering. The caller remains responsible for selecting and
+validating the listed sources.
+
 MCP structured responses include `retrieval` metadata and `results`. CLI JSON puts
 the results in `data` and retrieval metadata in `meta.retrieval`, including empty
 searches. Metadata identifies the mode, score units, requested/effective floor and
 candidate count. All modes report `support_status: not_assessed`: a retrieved
-candidate, including a literal match, does not establish authority or substantiate
-a claim. Scores are not probabilities.
+candidate, including one promoted by a caller-supplied authority prior, does not
+substantiate a claim. `authority_prior` reports whether that prior was applied,
+its caller-supplied basis and source count. Scores are not probabilities.
 
 ### Inspect document source drift
 

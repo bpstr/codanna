@@ -151,9 +151,13 @@ pub trait LanguageDefinition: Send + Sync {
     /// Takes borrowed Settings to access language-specific configuration
     fn create_parser(&self, settings: &Settings) -> IndexResult<Box<dyn LanguageParser>>;
 
-    /// Create a behavior instance for this language
-    /// Behaviors are lightweight and don't need configuration
+    /// Create the default behavior instance for this language.
     fn create_behavior(&self) -> Box<dyn LanguageBehavior>;
+
+    /// Create a behavior bound to the active workspace settings.
+    fn create_behavior_with_settings(&self, _settings: &Settings) -> Box<dyn LanguageBehavior> {
+        self.create_behavior()
+    }
 
     /// Default enabled state for configuration generation
     /// This is used when generating initial configuration files
@@ -349,7 +353,7 @@ impl LanguageRegistry {
                     }
                 })?;
 
-                let behavior = def.create_behavior();
+                let behavior = def.create_behavior_with_settings(settings);
 
                 Ok((parser, behavior))
             }

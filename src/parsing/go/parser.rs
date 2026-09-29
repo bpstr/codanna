@@ -14,7 +14,7 @@ use crate::parsing::{
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 use super::resolution::GoResolutionContext;
@@ -2488,6 +2488,181 @@ impl LanguageParser for GoParser {
         self.extract_method_calls_recursive(&root, code, None, &package_names, &mut method_calls);
 
         method_calls
+    }
+
+    fn find_references(&mut self, code: &str) -> Vec<crate::parsing::references::Reference> {
+        fn node_range(node: Node<'_>) -> Range {
+            Range::new(
+                node.start_position().row as u32,
+                node.start_position().column as u32,
+                node.end_position().row as u32,
+                node.end_position().column as u32,
+            )
+        }
+
+        fn named_type<'a>(mut node: Node<'_>, code: &'a str) -> Option<&'a str> {
+            loop {
+                match node.kind() {
+                    "type_identifier" | "identifier" => return Some(&code[node.byte_range()]),
+                    "pointer_type" | "generic_type" => node = node.named_child(0)?,
+                    _ => return None,
+                }
+            }
+        }
+
+        fn collect_call_markers(
+            node: Node<'_>,
+            code: &str,
+            owner: &str,
+            owner_range: Range,
+            receiver_name: &str,
+            receiver_type: &str,
+            fields: &HashMap<(String, String), String>,
+            interfaces: &HashMap<String, HashSet<String>>,
+            references: &mut Vec<crate::parsing::references::Reference>,
+        ) {
+            if node.kind() == "call_expression"
+                && let Some(outer) = node.child_by_field_name("function")
+                && outer.kind() == "selector_expression"
+                && let (Some(inner), Some(method)) = (
+                    outer.child_by_field_name("operand"),
+                    outer.child_by_field_name("field"),
+                )
+                && inner.kind() == "selector_expression"
+                && let (Some(base), Some(field)) = (
+                    inner.child_by_field_name("operand"),
+                    inner.child_by_field_name("field"),
+                )
+                && &code[base.byte_range()] == receiver_name
+            {
+                let field_name = &code[field.byte_range()];
+                let method_name = &code[method.byte_range()];
+                if let Some(interface) =
+                    fields.get(&(receiver_type.to_owned(), field_name.to_owned()))
+                    && interfaces
+                        .get(interface)
+                        .is_some_and(|methods| methods.contains(method_name))
+                {
+                    references.push(crate::parsing::references::Reference {
+                        source_name: owner.to_owned(),
+                        source_range: owner_range,
+                        target_name: format!("{interface}.{method_name}"),
+                        range: node_range(node),
+                        context: "go_interface_dispatch",
+                    });
+                }
+            }
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_call_markers(
+                    child,
+                    code,
+                    owner,
+                    owner_range,
+                    receiver_name,
+                    receiver_type,
+                    fields,
+                    interfaces,
+                    references,
+                );
+            }
+        }
+
+        let Some(tree) = self.parser.parse(code, None) else {
+            return Vec::new();
+        };
+        let root = tree.root_node();
+        let mut fields = HashMap::new();
+        let mut interfaces: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut cursor = root.walk();
+        for declaration in root.named_children(&mut cursor) {
+            if declaration.kind() != "type_declaration" {
+                continue;
+            }
+            let mut specs = declaration.walk();
+            for spec in declaration.named_children(&mut specs) {
+                if spec.kind() != "type_spec" {
+                    continue;
+                }
+                let (Some(name), Some(ty)) = (
+                    spec.child_by_field_name("name"),
+                    spec.child_by_field_name("type"),
+                ) else {
+                    continue;
+                };
+                let owner = code[name.byte_range()].to_owned();
+                if ty.kind() == "interface_type" {
+                    let methods = interfaces.entry(owner).or_default();
+                    let mut members = ty.walk();
+                    for member in ty.named_children(&mut members) {
+                        if member.kind() == "method_elem"
+                            && let Some(method) = member.child_by_field_name("name")
+                        {
+                            methods.insert(code[method.byte_range()].to_owned());
+                        }
+                    }
+                } else if ty.kind() == "struct_type"
+                    && let Some(list) = ty.named_child(0)
+                {
+                    let mut members = list.walk();
+                    for member in list.named_children(&mut members) {
+                        if member.kind() != "field_declaration" {
+                            continue;
+                        }
+                        let (Some(field), Some(field_type)) = (
+                            member.child_by_field_name("name"),
+                            member.child_by_field_name("type"),
+                        ) else {
+                            continue;
+                        };
+                        if let Some(field_type) = named_type(field_type, code) {
+                            fields.insert(
+                                (owner.clone(), code[field.byte_range()].to_owned()),
+                                field_type.to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut references = Vec::new();
+        let mut declarations = root.walk();
+        for declaration in root.named_children(&mut declarations) {
+            if declaration.kind() != "method_declaration" {
+                continue;
+            }
+            let (Some(owner), Some(receiver), Some(body)) = (
+                declaration.child_by_field_name("name"),
+                declaration.child_by_field_name("receiver"),
+                declaration.child_by_field_name("body"),
+            ) else {
+                continue;
+            };
+            let Some(parameter) = receiver.named_child(0) else {
+                continue;
+            };
+            let (Some(receiver_name), Some(receiver_type)) = (
+                parameter.child_by_field_name("name"),
+                parameter
+                    .child_by_field_name("type")
+                    .and_then(|ty| named_type(ty, code)),
+            ) else {
+                continue;
+            };
+            collect_call_markers(
+                body,
+                code,
+                &code[owner.byte_range()],
+                node_range(declaration),
+                &code[receiver_name.byte_range()],
+                receiver_type,
+                &fields,
+                &interfaces,
+                &mut references,
+            );
+        }
+        references
     }
 
     /// Go uses implicit interface implementation (duck typing).

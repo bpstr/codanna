@@ -134,18 +134,30 @@ pub struct SourceDriftEntry {
 }
 
 /// Optional retrieval controls; omitted controls preserve the configured strategy.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DocumentSearchOptions {
     /// Match a case-sensitive substring of indexed chunk content without embeddings.
     pub literal: bool,
     /// Inclusive floor in the selected strategy's native score units.
     pub score_floor: Option<f32>,
+    /// Caller-supplied source paths that receive a deterministic authority
+    /// tiebreak after query-term coverage. No authority is inferred from text.
+    pub authority_sources: Vec<PathBuf>,
 }
 impl DocumentSearchOptions {
     pub fn validate(&self) -> StoreResult<()> {
         if self.score_floor.is_some_and(|floor| !floor.is_finite()) {
             return Err(DocumentStoreError::Index(
                 "score_floor must be finite".into(),
+            ));
+        }
+        if self
+            .authority_sources
+            .iter()
+            .any(|source| source.as_os_str().is_empty())
+        {
+            return Err(DocumentStoreError::Index(
+                "authority_sources must not contain an empty path".into(),
             ));
         }
         Ok(())
@@ -1200,6 +1212,26 @@ impl DocumentStore {
         } else {
             self.retrieval_mode()
         };
+        let mut ranking_constraints = if mode == "semantic_nearest_neighbors" {
+            vec![
+                "bounded_lookahead",
+                "relative_cosine_cutoff",
+                "source_balancing",
+                "result_limit",
+            ]
+        } else if mode == "lexical" {
+            vec![
+                "bounded_lookahead",
+                "lexical_coverage",
+                "source_balancing",
+                "result_limit",
+            ]
+        } else {
+            vec!["source_balancing", "result_limit"]
+        };
+        if !options.authority_sources.is_empty() {
+            ranking_constraints.insert(1, "caller_supplied_source_authority");
+        }
         serde_json::json!({
             "mode": mode, "corpus": "document_chunks",
             "document_generation": self.current_generation,
@@ -1209,7 +1241,12 @@ impl DocumentStore {
             "requested_score_floor": options.score_floor,
             "effective_score_floor": options.score_floor,
             "score_floor_stage": if options.score_floor.is_some() { "before_result_selection" } else { "not_applied" },
-            "ranking_constraints": if mode == "semantic_nearest_neighbors" { vec!["bounded_lookahead", "relative_cosine_cutoff", "source_balancing", "result_limit"] } else if mode == "lexical" { vec!["bounded_lookahead", "lexical_coverage", "source_balancing", "result_limit"] } else { vec!["source_balancing", "result_limit"] },
+            "ranking_constraints": ranking_constraints,
+            "authority_prior": {
+                "status": if options.authority_sources.is_empty() { "not_applied" } else { "applied" },
+                "basis": if options.authority_sources.is_empty() { serde_json::Value::Null } else { serde_json::Value::String("caller_supplied_source_paths_v1".into()) },
+                "source_count": options.authority_sources.len(),
+            },
             "support_status": "not_assessed",
             "candidate_status": if returned == 0 { "none" } else { "returned" },
             "returned_chunks": returned, "scores_are_probabilities": false,
@@ -1267,7 +1304,7 @@ impl DocumentStore {
         }
 
         // Enrich with full metadata and KWIC preview
-        self.build_search_results(scored_candidates, &query, false)
+        self.build_search_results(scored_candidates, &query, options)
     }
 
     fn search_literal(
@@ -1305,7 +1342,7 @@ impl DocumentStore {
                 }
             }
         }
-        self.build_search_results(scored, query, true)
+        self.build_search_results(scored, query, options)
     }
 
     fn search_lexical(
@@ -1422,7 +1459,7 @@ impl DocumentStore {
             }
         }
         scored.retain(|(_, score)| options.accepts(*score));
-        self.build_search_results(scored, query, false)
+        self.build_search_results(scored, query, options)
     }
 
     /// Delete all chunks from a collection.
@@ -2522,7 +2559,7 @@ impl DocumentStore {
         &self,
         scored: Vec<(ChunkId, f32)>,
         query: &SearchQuery,
-        literal: bool,
+        options: &DocumentSearchOptions,
     ) -> StoreResult<Vec<SearchResult>> {
         let searcher = self.searcher();
         let mut results = Vec::new();
@@ -2556,7 +2593,7 @@ impl DocumentStore {
         // Get preview config (use defaults if not provided)
         let default_config = super::config::SearchConfig::default();
         let preview_config = query.preview_config.as_ref().unwrap_or(&default_config);
-        let mut coverage = if !literal && self.embedding_generator.is_none() {
+        let mut coverage = if !options.literal && self.embedding_generator.is_none() {
             let tokenizers = self.index.tokenizers();
             let literal = tokenizers.get("default").ok_or_else(|| {
                 DocumentStoreError::Index("Document text tokenizer is unavailable".into())
@@ -2643,10 +2680,20 @@ impl DocumentStore {
             }
         }
 
-        if coverage.is_some() {
+        if coverage.is_some() || !options.authority_sources.is_empty() {
+            let authority_sources: HashSet<_> = options
+                .authority_sources
+                .iter()
+                .map(|source| normalize_source_path(source))
+                .collect();
             results.sort_by(|a, b| {
-                relevance[&b.chunk_id]
-                    .cmp(&relevance[&a.chunk_id])
+                let a_coverage = relevance.get(&a.chunk_id).copied().unwrap_or_default();
+                let b_coverage = relevance.get(&b.chunk_id).copied().unwrap_or_default();
+                let a_authority = authority_sources.contains(&a.source_path);
+                let b_authority = authority_sources.contains(&b.source_path);
+                b_coverage
+                    .cmp(&a_coverage)
+                    .then_with(|| b_authority.cmp(&a_authority))
                     .then_with(|| b.similarity.total_cmp(&a.similarity))
                     .then_with(|| a.chunk_id.get().cmp(&b.chunk_id.get()))
             });
@@ -2654,7 +2701,7 @@ impl DocumentStore {
         Ok(super::ranking::diversify(
             results,
             query.limit,
-            literal || self.embedding_generator.is_some(),
+            options.literal || self.embedding_generator.is_some(),
         ))
     }
 
@@ -2881,7 +2928,14 @@ impl DocumentQuery {
         };
         Ok(self
             .0
-            .build_search_results(vec![(id, 1.0)], &query, true)?
+            .build_search_results(
+                vec![(id, 1.0)],
+                &query,
+                &DocumentSearchOptions {
+                    literal: true,
+                    ..DocumentSearchOptions::default()
+                },
+            )?
             .pop())
     }
 

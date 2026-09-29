@@ -93,6 +93,11 @@ impl CodeIntelligenceServer {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             };
+            let display_generation = |value: Option<u64>| {
+                value
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
             let model = semantic.model_name.as_deref().unwrap_or("unknown");
             let dimension = semantic
                 .dimension
@@ -124,7 +129,7 @@ impl CodeIntelligenceServer {
                 display(semantic.eligible_without_vector),
                 display(semantic.vector_without_current_symbol),
                 input_policy,
-                semantic.code_generation,
+                display_generation(semantic.code_generation),
                 semantic.generation_alignment,
                 semantic.freshness,
                 timestamp_info,
@@ -338,7 +343,7 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(
-        description = "Search indexed project documents: Markdown roadmaps, specifications and guides. Returns addressable chunks, source byte ranges and previews, not full files. document filters within one workspace-relative file. Use get_document_chunk with chunk_id and document_generation for exact indexed text; current source freshness is not verified."
+        description = "Search indexed project documents with semantic/lexical retrieval or a case-sensitive literal substring without embeddings. Returns compact addressable chunks, source byte ranges and previews, not full files. document filters one workspace-relative file; authority_sources applies a caller-supplied source-path tiebreak after query-term coverage and is never inferred. Use get_document_chunk with chunk_id and document_generation for exact indexed text; returned candidates do not certify supporting evidence and current source freshness is not verified."
     )]
     pub async fn search_documents(
         &self,
@@ -348,6 +353,7 @@ impl CodeIntelligenceServer {
             limit,
             literal,
             score_floor,
+            authority_sources,
             document,
             view,
             max_output_bytes,
@@ -358,13 +364,16 @@ impl CodeIntelligenceServer {
         let options = crate::documents::DocumentSearchOptions {
             literal,
             score_floor,
+            authority_sources,
         };
         options
             .validate()
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let facade = self.facade.read().await;
         let mut settings = (**facade.settings()).clone();
-        settings.workspace_root = facade.network_workspace.clone().or(settings.workspace_root);
+        settings.workspace_root = crate::mcp::output::canonical_workspace(
+            facade.network_workspace.clone().or(settings.workspace_root),
+        );
         drop(facade);
         let workspace = settings.workspace_root.clone();
         let document =
@@ -445,7 +454,9 @@ impl CodeIntelligenceServer {
         }
         let facade = self.facade.read().await;
         let mut settings = (**facade.settings()).clone();
-        settings.workspace_root = facade.network_workspace.clone().or(settings.workspace_root);
+        settings.workspace_root = crate::mcp::output::canonical_workspace(
+            facade.network_workspace.clone().or(settings.workspace_root),
+        );
         drop(facade);
         let workspace = settings.workspace_root.clone();
         let store = if let Some(store) = &self.document_store {

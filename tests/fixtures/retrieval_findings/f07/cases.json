@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "finding": "F07",
+  "status": "executed_local",
+  "provider_requests": 0,
+  "cases": [
+    {
+      "id": "interface-dispatch",
+      "expected_candidates": [
+        "Allow.Authorize",
+        "Deny.Authorize"
+      ],
+      "relationship": "DispatchCandidate",
+      "forbid": "definite_concrete_calls_without_binding"
+    },
+    {
+      "id": "protocol-cast-alias",
+      "expected_type_reference": [
+        "consumer.py:load",
+        "protocol.py:RunStore"
+      ],
+      "excluded_reference": [
+        "consumer.py:shadow",
+        "protocol.py:RunStore"
+      ],
+      "forbid": "Calls_for_cast_type_argument"
+    }
+  ]
+}

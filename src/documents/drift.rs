@@ -398,7 +398,7 @@ pub(super) fn compare_sources(
 }
 
 /// Do not follow replaced symlinks or block on FIFOs, including an open-time race.
-pub(super) fn open_regular_source(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+pub(crate) fn open_regular_source(path: &Path) -> std::io::Result<Option<std::fs::File>> {
     if !std::fs::symlink_metadata(path)?.is_file() {
         return Ok(None);
     }
