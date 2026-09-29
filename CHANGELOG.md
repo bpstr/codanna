@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc4] - 2026-09-29
+
 ### Added
 
 - Multi-project TypeScript aliases resolve through the exact `tsconfig.json`
@@ -26,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are rejected. IDs remain local to the selected workspace/index.
 
 ### Fixed
+
+- New workspace ignore files exclude `.fastembed_cache` as either a directory
+  or symlink, allowing root-level offline preflight after `codanna init`.
+  Existing workspaces should add `.fastembed_cache` without a trailing slash to
+  `.codannaignore`; source-symlink rejection remains unchanged.
 
 - Config synchronization now diffs roots missing from metadata against existing
   indexed files instead of duplicating symbols and edges. Accepted watcher roots

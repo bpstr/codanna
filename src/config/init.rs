@@ -466,6 +466,8 @@ dist/
 
 # Codanna's own directory
 .codanna/
+# Match the model cache directory or symlink (no trailing slash).
+.fastembed_cache
 
 # Dependency directories
 node_modules/

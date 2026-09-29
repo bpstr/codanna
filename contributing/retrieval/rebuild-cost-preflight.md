@@ -33,6 +33,28 @@ preflight** does not initialize an embedding backend or download models/grammars
 Keep stdout in a report outside the source roots when saving it, and inspect the
 exit status as well as JSON. The command itself creates no report file.
 
+## Model-cache symlinks and existing workspaces
+
+The planner rejects admitted symlinks instead of following them outside the
+selected source tree. `codanna init` creates a `.fastembed_cache` symlink for
+local model compatibility. Starting with 1.0.0-rc4, its generated
+`.codannaignore` excludes that cache by name:
+
+```gitignore
+# Match a cache directory or symlink; do not add a trailing slash.
+.fastembed_cache
+```
+
+Add this rule to an existing workspace's `.codannaignore` before planning the
+workspace root. Preserve the existing rules, cache and settings; do not run
+`init --force` as a migration because it overwrites configuration. A trailing
+slash matches directories, but not symlinks. Ordinary source symlinks still
+fail preflight unless explicitly excluded from the intended source inventory.
+
+After repairing the cache exclusion, inspect the report again: generic-grammar
+omissions still return exit 3 and must not be described as complete coverage.
+This configuration repair does not qualify retrieval, scale or index recovery.
+
 ## What the JSON means
 
 | Field | Interpretation |

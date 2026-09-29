@@ -187,7 +187,9 @@ release when the original relevance targets remain red.
    source-grounding checks on that subset. Re-run actual transport, restart,
    body-only freshness, watcher mutation and generation checks on the selected
    profile. An eight-file Codanna probe cannot substitute for this gate.
-3. Run the [source-only planner](retrieval/rebuild-cost-preflight.md) with the
+3. Check that `.codannaignore` excludes `.fastembed_cache` without a trailing
+   slash, including in existing workspaces. Preserve the cache and keep source
+   symlink rejection intact. Run the [source-only planner](retrieval/rebuild-cost-preflight.md) with the
    intended settings and save its JSON outside Assign. Inspect partial/blocked
    status, input rejections, estimated body segments, cache pressure and unknown
    values. A partial local-tokenizer result is not a full capacity estimate;
@@ -212,7 +214,11 @@ relationships are incomplete. The incremental overflow scan can skip those
 unchanged files after the in-memory wave is discarded. Until durable recovery
 obligations and failure-injection tests cover both outgoing and captured incoming
 edges, treat this state as requiring an explicit staged rebuild, not successful
-automatic recovery. Do not inject this failure into the active Assign index.
+automatic recovery. Do not inject this failure into the active Assign index. For an isolated staged
+full rebuild, any indexing or resolution error must abort qualification: discard
+the failed stage and restart from empty with no concurrent writer. This contains
+the rebuild risk without claiming that incremental watcher recovery is fixed.
+Activation still requires the remaining quality, scale and recovery gates.
 
 Paid provider dogfood, if later requested, needs its own exact real-content scope,
 hard request/monetary cap and stop condition before any call. This manual grants
