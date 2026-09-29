@@ -131,7 +131,7 @@ fn search_rows_carry_one_indexed_lines_and_true_kinds() {
         &["mcp", "search_symbols", "query:line_target", "--json"],
     );
     assert_eq!(code, 0);
-    let row = &json_data(&stdout)[0]["symbol"];
+    let row = &json_data(&stdout)["results"][0];
     assert_eq!(
         row["line"].as_i64(),
         Some(TARGET_DEF_LINE),
@@ -148,7 +148,7 @@ fn search_rows_carry_one_indexed_lines_and_true_kinds() {
             &["mcp", "search_symbols", &format!("query:{query}"), "--json"],
         );
         assert_eq!(code, 0, "search for {query}");
-        let row = &json_data(&stdout)[0]["symbol"];
+        let row = &json_data(&stdout)["results"][0];
         assert_eq!(
             row["kind"].as_str(),
             Some(expected_kind),

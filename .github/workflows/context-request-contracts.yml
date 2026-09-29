@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'src/mcp/requests.rs'
+      - 'src/mcp/output.rs'
+      - 'src/mcp/tools/search.rs'
+      - 'src/mcp/tools/ticket_context.rs'
+      - 'src/documents/store.rs'
+      - 'tests/compact_tool_results.rs'
       - 'src/mcp/tools/context.rs'
       - 'tests/context_limit_diagnostics.rs'
       - '.github/workflows/context-request-contracts.yml'
@@ -43,6 +48,8 @@ jobs:
             rustc --version --verbose
             sha256sum src/mcp/requests.rs src/mcp/tools/context.rs tests/context_limit_diagnostics.rs
             cargo test --locked --test context_limit_diagnostics -- --nocapture
+            cargo test --locked --lib mcp::output -- --nocapture
+            cargo test --locked --test compact_tool_results -- --nocapture
           } 2>&1 | tee "$RUNNER_TEMP/context-request-contracts.log"
       - uses: actions/upload-artifact@v4
         if: always()

@@ -147,7 +147,8 @@ async fn ticket_related_relevance_preserves_direct_results_and_measures_related_
         let name = task["name"].as_str().unwrap();
         let path = task["path"].as_str().unwrap();
         for (family, query) in task["queries"].as_array().unwrap().iter().enumerate() {
-            let value = json!({ "query":query, "code_limit":5, "document_limit":1, "conversation_limit":1 });
+            let value = json!({ "query":query, "code_limit":5, "document_limit":1,
+                "conversation_limit":1, "view":"detail", "max_output_bytes":65536 });
             let (direct, expanded, retries) = stable_pair(&server, &value).await;
             generation_retries += retries;
             assert_eq!(

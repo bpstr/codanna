@@ -55,9 +55,9 @@ impl CodeEvidence {
     pub(crate) fn from_lexical(result: &SearchResult) -> Self {
         Self {
             symbol_id: result.symbol_id.value(),
-            name: bounded_text(&result.name, 256),
+            name: result.name.clone(),
             kind: format!("{:?}", result.kind),
-            file_path: bounded_text(&result.file_path, 2048),
+            file_path: result.file_path.clone(),
             line: result.line,
             signature: result
                 .signature

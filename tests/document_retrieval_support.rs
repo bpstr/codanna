@@ -66,6 +66,10 @@ async fn nearest_neighbors_can_return_candidates_without_literal_support() {
         let response = server
             .search_documents(rmcp::handler::server::wrapper::Parameters(
                 codanna::mcp::SearchDocumentsRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+                    document: None,
+
                     query: "Every violet narwhal must dance seventeen polkas".into(),
                     collection,
                     limit: 5,
@@ -328,6 +332,10 @@ async fn literal_mcp_initializes_no_embedding_backend_and_never_certifies_suppor
         let result = server
             .search_documents(rmcp::handler::server::wrapper::Parameters(
                 codanna::mcp::SearchDocumentsRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+                    document: None,
+
                     query: text.into(),
                     collection: Some("docs".into()),
                     limit: 5,
@@ -405,6 +413,7 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
             "--json",
         ],
     ] {
+        let is_mcp = args[0] == "mcp";
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_codanna"))
             .arg("--config")
             .arg(&config)
@@ -420,10 +429,20 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
             String::from_utf8_lossy(&output.stderr)
         );
         let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(data["data"].as_array().unwrap().len(), 1);
-        assert_eq!(data["meta"]["retrieval"]["mode"], "literal");
-        assert_eq!(data["meta"]["retrieval"]["effective_score_floor"], 1.0);
-        assert_eq!(data["meta"]["retrieval"]["support_status"], "not_assessed");
+        let rows = if is_mcp {
+            &data["data"]["results"]
+        } else {
+            &data["data"]
+        };
+        let retrieval = if is_mcp {
+            &data["data"]["retrieval"]
+        } else {
+            &data["meta"]["retrieval"]
+        };
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(retrieval["mode"], "literal");
+        assert_eq!(retrieval["effective_score_floor"], 1.0);
+        assert_eq!(retrieval["support_status"], "not_assessed");
     }
 
     let authority = serde_json::json!({
@@ -452,11 +471,11 @@ fn literal_cli_and_direct_mcp_json_report_the_same_controls_without_a_model() {
     );
     let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        data["meta"]["retrieval"]["authority_prior"]["status"],
+        data["data"]["retrieval"]["authority_prior"]["status"],
         "applied"
     );
     assert_eq!(
-        data["meta"]["retrieval"]["authority_prior"]["basis"],
+        data["data"]["retrieval"]["authority_prior"]["basis"],
         "caller_supplied_source_paths_v1"
     );
 }

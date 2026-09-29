@@ -25,6 +25,7 @@ pub mod https_server;
 #[cfg(feature = "http-server")]
 pub(crate) mod network;
 pub mod notifications;
+pub mod output;
 pub mod requests;
 pub mod server;
 pub mod service;

@@ -62,7 +62,14 @@ async fn wait_for(client: &Client, query: &str, expected: &str, forbidden: &str)
                 if text.contains("unavailable") {
                     assert!(text.contains("changed"), "{text}");
                 }
-            } else if text.contains(expected) && !text.contains(forbidden) {
+            } else if (text.contains(expected)
+                || (expected == "No matching code symbols"
+                    && result
+                        .structured_content
+                        .as_ref()
+                        .is_some_and(|value| value["result"]["code"]["status"] == "empty")))
+                && !text.contains(forbidden)
+            {
                 assert_ne!(result.is_error, Some(true));
                 break text;
             }

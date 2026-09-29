@@ -63,6 +63,9 @@ async fn test_gdscript_semantic_search_and_analyze_impact() {
 
     let semantic_result = server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "apply damage".to_string(),
             limit: 1,
             threshold: None,

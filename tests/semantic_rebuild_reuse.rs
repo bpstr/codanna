@@ -491,7 +491,7 @@ fn semantic_cli_json_reports_retrieval_for_populated_and_empty_results() {
                     Some(if count == 0 { 1 } else { 0 }),
                     "{response}"
                 );
-                let retrieval = &response["meta"]["retrieval"];
+                let retrieval = &response["data"]["retrieval"];
                 let requested = floor.map(|floor| floor.parse::<f32>().unwrap());
                 assert_eq!(retrieval["requested_score_floor"], json!(requested));
                 assert_eq!(retrieval["effective_score_floor"], json!(requested));
@@ -509,7 +509,10 @@ fn semantic_cli_json_reports_retrieval_for_populated_and_empty_results() {
                 assert_eq!(retrieval["support_status"], "not_assessed");
                 assert_eq!(retrieval["scores_are_probabilities"], false);
                 if count > 0 {
-                    assert_eq!(response["data"].as_array().unwrap().len(), count as usize);
+                    assert_eq!(
+                        response["data"]["results"].as_array().unwrap().len(),
+                        count as usize
+                    );
                 }
             }
         }

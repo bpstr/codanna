@@ -255,9 +255,15 @@ fn exact_identifiers_single_terms_explicit_syntax_and_filters_keep_existing_path
 #[tokio::test]
 async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_limits() {
     let Fixture { _temp, index } = Fixture::new();
+    let expected = index
+        .search_scoped("calendar settings", 5, None, None, Some("typescript"), None)
+        .unwrap();
     let server = CodeIntelligenceServer::new(index);
     let response = server
         .search_symbols(Parameters(SearchSymbolsRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".into(),
             limit: 5,
             kind: None,
@@ -268,20 +274,35 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
         .await
         .unwrap();
     assert_ne!(response.is_error, Some(true));
-    let text = serde_json::to_value(response).unwrap()["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|block| block["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("Found 5 result(s)"));
-    assert!(text.contains("useAccountPresentation"));
-    assert!(text.contains("Score:") && text.contains("raw lexical candidate score"));
-    assert!(text.contains("Distinct query-term coverage: 2/2"));
+    let data = response.structured_content.unwrap();
+    let rows = data["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["symbol_id"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|row| row.symbol_id.value() as u64)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0]["name"], expected[0].name);
+    assert_eq!(rows[0]["term_coverage"], serde_json::json!([2, 2]));
+    assert!(
+        rows[0].get("raw_lexical_score").is_none(),
+        "raw scores are detail-only"
+    );
+    let detail = server.search_symbols(Parameters(serde_json::from_value(serde_json::json!({
+        "query":"calendar settings", "limit":5, "lang":"typescript", "view":"detail", "max_output_bytes":65536
+    })).unwrap())).await.unwrap().structured_content.unwrap();
+    assert_eq!(detail["results"][0]["symbol_id"], rows[0]["symbol_id"]);
+    assert!(detail["results"][0]["raw_lexical_score"].is_number());
 
     let explicit = server
         .search_symbols(Parameters(SearchSymbolsRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar AND settings".into(),
             limit: 5,
             kind: None,
@@ -291,12 +312,12 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
         }))
         .await
         .unwrap();
-    let text = serde_json::to_value(explicit).unwrap()["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|block| block["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!text.contains("Distinct query-term coverage:"));
+    let data = explicit.structured_content.unwrap();
+    assert!(
+        data["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("term_coverage").is_none())
+    );
 }
