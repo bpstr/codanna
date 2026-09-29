@@ -1000,10 +1000,16 @@ pub async fn run(
                     ToolKind::SearchSymbols
                         | ToolKind::SemanticSearchDocs
                         | ToolKind::SemanticSearchWithContext
+                        | ToolKind::SearchDocuments
                 ) && data["results"].as_array().is_some_and(Vec::is_empty)
                     && data["output"]["partial"] == false
                 {
-                    let mut not_found = Envelope::not_found("No matching indexed symbols");
+                    let message = if tool_kind == ToolKind::SearchDocuments {
+                        "No matching indexed documents"
+                    } else {
+                        "No matching indexed symbols"
+                    };
+                    let mut not_found = Envelope::not_found(message);
                     not_found.data = Some(data);
                     not_found
                 } else {
