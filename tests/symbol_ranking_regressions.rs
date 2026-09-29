@@ -255,6 +255,9 @@ fn exact_identifiers_single_terms_explicit_syntax_and_filters_keep_existing_path
 #[tokio::test]
 async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_limits() {
     let Fixture { _temp, index } = Fixture::new();
+    let expected = index
+        .search_scoped("calendar settings", 5, None, None, Some("typescript"), None)
+        .unwrap();
     let server = CodeIntelligenceServer::new(index);
     let response = server
         .search_symbols(Parameters(SearchSymbolsRequest {
@@ -274,7 +277,16 @@ async fn mcp_search_explains_raw_candidate_score_and_coverage_without_changing_l
     let data = response.structured_content.unwrap();
     let rows = data["results"].as_array().unwrap();
     assert_eq!(rows.len(), 5);
-    assert_eq!(rows[0]["name"], "useAccountPresentation");
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["symbol_id"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|row| row.symbol_id.value() as u64)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0]["name"], expected[0].name);
     assert_eq!(rows[0]["term_coverage"], serde_json::json!([2, 2]));
     assert!(
         rows[0].get("raw_lexical_score").is_none(),
