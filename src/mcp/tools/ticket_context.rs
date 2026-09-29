@@ -776,7 +776,7 @@ pub(super) async fn search(
                     map.retain(|key, _| {
                         matches!(
                             key.as_str(),
-                            "symbol_id" | "name" | "kind" | "file_path" | "line"
+                            "symbol_id" | "name" | "kind" | "file_path" | "line" | "facets"
                         )
                     });
                     map.insert("signature_preview".into(), serde_json::json!(signature));
