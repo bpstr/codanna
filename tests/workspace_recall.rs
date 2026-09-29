@@ -108,8 +108,12 @@ async fn hardening_workspace_recall_import_and_mcp_share_scope_without_names_or_
         .unwrap();
         let result = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
-                let request = CallToolRequestParams::new("search_context")
-                    .with_arguments(json!({"query":"recall_topic"}).as_object().unwrap().clone());
+                let request = CallToolRequestParams::new("search_context").with_arguments(
+                    json!({"query":"recall_topic","include_conversations":true})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                );
                 let result = client.call_tool(request).await.unwrap();
                 assert_ne!(result.is_error, Some(true));
                 if result

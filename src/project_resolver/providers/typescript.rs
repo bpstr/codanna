@@ -127,8 +127,7 @@ impl ProjectResolutionProvider for TypeScriptProvider {
         let config_paths = self.config_paths(settings);
 
         // Create persistence manager
-        let codanna_dir = std::path::Path::new(crate::init::local_dir_name());
-        let persistence = ResolutionPersistence::new(codanna_dir);
+        let persistence = ResolutionPersistence::new(&settings.resolution_dir());
 
         // Load or create resolution index (graceful fallback if cache doesn't exist yet)
         let mut index = persistence

@@ -314,11 +314,11 @@ pub(crate) fn default_compatible_relationship(
             matches!(from_kind, Class | Interface | Trait | Struct | Enum)
                 && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
         }
-        References => {
+        References | DispatchCandidate => {
             // Very permissive - almost anything can reference anything
             true
         }
-        ReferencedBy => {
+        ReferencedBy | DispatchCandidateOf => {
             // Reverse of References - also permissive
             true
         }
@@ -788,6 +788,15 @@ pub trait PipelineSymbolCache: Send + Sync {
     fn resolve_module_export(
         &self,
         _module: &str,
+        _name: &str,
+        _extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        crate::parsing::ExportResolution::Unknown
+    }
+
+    fn resolve_export_path(
+        &self,
+        _path: &std::path::Path,
         _name: &str,
         _extensions: &[&str],
     ) -> crate::parsing::ExportResolution {

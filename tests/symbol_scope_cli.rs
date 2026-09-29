@@ -94,10 +94,10 @@ fn mcp_and_retrieve_json_do_not_drop_the_requested_scope() {
     let output = workspace.mcp("search_symbols", &request, true);
     assert!(output.status.success(), "{}", diagnostics(&output));
     let data = envelope(&output);
-    let hits = data["data"].as_array().expect("symbol results");
+    let hits = data["data"]["results"].as_array().expect("symbol results");
     assert_eq!(hits.len(), 1, "{data}");
-    assert_eq!(hits[0]["symbol"]["name"], "activeCalendar");
-    assert_eq!(hits[0]["symbol"]["file_path"], "src/active/calendar.rs");
+    assert_eq!(hits[0]["name"], "activeCalendar");
+    assert_eq!(hits[0]["file_path"], "src/active/calendar.rs");
 
     let text = workspace.mcp("search_symbols", &request, false);
     assert!(text.status.success(), "{}", diagnostics(&text));
@@ -132,10 +132,7 @@ fn context_json_and_text_share_the_code_subtree() {
         let output = workspace.mcp("search_context", &request, as_json);
         assert!(output.status.success(), "{}", diagnostics(&output));
         let rendered = if as_json {
-            envelope(&output)["data"]["text"]
-                .as_str()
-                .expect("context text")
-                .to_owned()
+            envelope(&output)["data"]["code"].to_string()
         } else {
             String::from_utf8(output.stdout).unwrap()
         };

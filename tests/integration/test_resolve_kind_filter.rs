@@ -74,6 +74,7 @@ fn make_unresolved_kind(
         kind,
         metadata: None,
         to_range: None,
+        composition_target: None,
     }
 }
 

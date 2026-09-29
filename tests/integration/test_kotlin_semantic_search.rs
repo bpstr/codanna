@@ -164,6 +164,9 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     // Test 1: Semantic search should find Kotlin classes
     let semantic_result = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "repository for currency database operations".to_string(),
             limit: 5,
             threshold: None,
@@ -190,6 +193,9 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     // Test 2: Semantic search with context should include dependencies
     let context_result = server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "PostgreSQL client with write operations".to_string(),
             limit: 3,
             threshold: None,
@@ -331,6 +337,9 @@ class UserService(
     // Test: Semantic search for "classes that use DatabaseClient"
     let result = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "classes that inject database client dependency".to_string(),
             limit: 10,
             threshold: None,

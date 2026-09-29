@@ -144,14 +144,41 @@ fn invalid_retrieve_search_limit_remains_an_error() {
     }
 }
 
+#[test]
+fn selected_definition_never_inherits_a_colliding_ids_context() {
+    let (_temp, facade) = fixture();
+    let index = facade.document_index();
+    let first = named_symbol(1, "first", SymbolKind::Function);
+    let mut second = named_symbol(1, "second", SymbolKind::Method);
+    second.range = Range::new(20, 0, 20, 10);
+    index.start_batch().unwrap();
+    index.add_document(&first, "first.rs").unwrap();
+    index.add_document(&second, "second.rs").unwrap();
+    index.commit_batch().unwrap();
+    for name in ["first", "second"] {
+        let selected = symbols(try_resolve_find_symbol_target(&facade, name, None).unwrap());
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name.as_ref(), name);
+        assert!(crate::mcp::service::selected_symbol_context(&facade, &selected[0]).is_none());
+    }
+    let error = try_resolve_find_symbol_target(&facade, "symbol_id:1", None)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("codanna index"));
+    assert!(matches!(
+        try_resolve_find_symbol_target(&facade, "symbol_id:0", None).unwrap(),
+        FindSymbolTarget::InvalidId(_)
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let transport = tokio::spawn(async move {
-        for _ in 0..2 {
-            // Explicit backend probe and the one semantic query.
+        for _ in 0..14 {
+            // Explicit backend probe and thirteen prepared semantic queries.
             let (mut socket, _) =
                 tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
                     .await
@@ -238,6 +265,9 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
     let server = CodeIntelligenceServer::new(facade);
     let response = server
         .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+            view: crate::mcp::output::OutputView::Detail,
+            max_output_bytes: Default::default(),
+
             query: "helper".into(),
             limit: 2,
             threshold: Some(0.),
@@ -274,6 +304,68 @@ async fn semantic_context_preserves_results_when_one_impact_exceeds_budget() {
         .unwrap();
     assert_eq!(isolated["status"], "complete");
     assert_eq!(isolated["count"], 0);
+    for threshold in [None, Some(0.9), Some(1.1)] {
+        for language in [None, Some("python".to_string())] {
+            let expected_count = if language.is_some() {
+                0
+            } else {
+                match threshold {
+                    None => 2,
+                    Some(floor) if floor <= 1.0 => 1,
+                    _ => 0,
+                }
+            };
+            let docs = server
+                .semantic_search_docs(Parameters(SemanticSearchRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+
+                    query: "helper".into(),
+                    limit: 2,
+                    threshold,
+                    lang: language.clone(),
+                }))
+                .await
+                .unwrap();
+            let context = server
+                .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+                    view: Default::default(),
+                    max_output_bytes: Default::default(),
+
+                    query: "helper".into(),
+                    limit: 2,
+                    threshold,
+                    lang: language.clone(),
+                }))
+                .await
+                .unwrap();
+            for response in [docs, context] {
+                assert_ne!(response.is_error, Some(true));
+                let retrieval = &response.structured_content.unwrap()["retrieval"];
+                assert_eq!(retrieval["mode"], "semantic_nearest_neighbors");
+                assert_eq!(
+                    retrieval["requested_score_floor"],
+                    serde_json::json!(threshold)
+                );
+                assert_eq!(
+                    retrieval["effective_score_floor"],
+                    serde_json::json!(threshold)
+                );
+                assert_eq!(retrieval["configured_floor_applied"], false);
+                assert_eq!(
+                    retrieval["floor_stage"],
+                    if threshold.is_some() {
+                        "after_top_k"
+                    } else {
+                        "not_applied"
+                    }
+                );
+                assert_eq!(retrieval["returned_symbols"], expected_count);
+                assert_eq!(retrieval["support_status"], "not_assessed");
+                assert_eq!(retrieval["scores_are_probabilities"], false);
+            }
+        }
+    }
     transport.await.unwrap();
 }
 
@@ -508,12 +600,269 @@ fn semantic_coverage_disabled_is_not_reported_as_zero_vectors() {
     assert_eq!(status.vector_code_generation, None);
 }
 
+#[test]
+fn definition_semantics_tracks_source_and_vector_provenance_across_edit_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace_root = temp.path().canonicalize().unwrap();
+    let settings = Settings {
+        workspace_root: Some(workspace_root.clone()),
+        index_path: "index".into(),
+        semantic_search: crate::config::SemanticSearchConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut facade = IndexFacade::new(Arc::new(settings)).unwrap();
+    let source = workspace_root.join("fixture.go");
+    let before = include_str!("../../tests/fixtures/retrieval_findings/f04/before.go");
+    let after = include_str!("../../tests/fixtures/retrieval_findings/f04/after.go");
+    std::fs::write(&source, before).unwrap();
+    let before_hash = crate::indexing::calculate_hash(before);
+    let index = Arc::clone(facade.document_index());
+    index.start_batch().unwrap();
+    index
+        .store_file_registration(&crate::indexing::pipeline::FileRegistration {
+            path: source.clone(),
+            file_id: FileId::new(1).unwrap(),
+            content_hash: before_hash.clone(),
+            language_id: crate::parsing::LanguageId::new("go"),
+            timestamp: 1,
+            mtime: 1,
+        })
+        .unwrap();
+    let symbol = named_symbol(1, "DecodeFrame", SymbolKind::Function);
+    index
+        .index_symbol(&symbol, source.to_string_lossy().as_ref())
+        .unwrap();
+    index.commit_batch().unwrap();
+    let symbol = index.find_symbol_by_id(symbol.id).unwrap().unwrap();
+    assert_eq!(symbol.file_path.as_ref(), "fixture.go");
+
+    let semantic_path = temp.path().join("semantic");
+    let mut semantic = SimpleSemanticSearch::new_empty(2, "prepared-fixture");
+    semantic.store_embeddings(vec![(symbol.id, vec![1.0, 0.0], "go".into())]);
+    semantic.record_source_provenance(symbol.id, before_hash.clone());
+    semantic.bind_code_generation(index.commit_opstamp().unwrap());
+    semantic.save(&semantic_path).unwrap();
+    facade.semantic_search = Some(Arc::new(Mutex::new(
+        SimpleSemanticSearch::load_without_model(&semantic_path).unwrap(),
+    )));
+
+    let matching = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(
+        matching[0].indexed_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        matching[0].current_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        matching[0].vector_source_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(matching[0].reader_generation, index.generation());
+    assert_eq!(
+        matching[0].code_generation,
+        Some(index.commit_opstamp().unwrap())
+    );
+    assert_eq!(
+        matching[0].vector_code_generation,
+        Some(index.commit_opstamp().unwrap())
+    );
+    assert_eq!(matching[0].generation_alignment, "matched");
+    assert_eq!(matching[0].source_freshness, "matching_observed_hashes");
+    assert_eq!(matching[0].freshness, "verified");
+
+    std::fs::write(&source, after).unwrap();
+    let after_hash = crate::indexing::calculate_hash(after);
+    let stale = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(
+        stale[0].indexed_content_hash.as_deref(),
+        Some(before_hash.as_str())
+    );
+    assert_eq!(
+        stale[0].current_content_hash.as_deref(),
+        Some(after_hash.as_str())
+    );
+    assert_eq!(stale[0].source_freshness, "stale");
+    assert_eq!(stale[0].freshness, "stale_source");
+
+    std::fs::remove_file(&source).unwrap();
+    let missing = facade.semantic_definition_status(std::slice::from_ref(&symbol));
+    assert_eq!(missing[0].source_freshness, "missing");
+    assert!(missing[0].current_content_hash.is_none());
+    std::fs::write(&source, after).unwrap();
+
+    index.start_batch().unwrap();
+    index
+        .remove_file_documents(source.to_string_lossy().as_ref())
+        .unwrap();
+    index
+        .store_file_registration(&crate::indexing::pipeline::FileRegistration {
+            path: source.clone(),
+            file_id: FileId::new(1).unwrap(),
+            content_hash: after_hash.clone(),
+            language_id: crate::parsing::LanguageId::new("go"),
+            timestamp: 2,
+            mtime: 2,
+        })
+        .unwrap();
+    index
+        .index_symbol(&symbol, source.to_string_lossy().as_ref())
+        .unwrap();
+    index.commit_batch().unwrap();
+    let mut semantic = SimpleSemanticSearch::load_without_model(&semantic_path).unwrap();
+    semantic.store_embeddings(vec![(symbol.id, vec![0.0, 1.0], "go".into())]);
+    semantic.record_source_provenance(symbol.id, after_hash.clone());
+    semantic.bind_code_generation(index.commit_opstamp().unwrap());
+    semantic.save(&semantic_path).unwrap();
+    facade.semantic_search = Some(Arc::new(Mutex::new(
+        SimpleSemanticSearch::load_without_model(&semantic_path).unwrap(),
+    )));
+    let refreshed = facade.semantic_definition_status(&[symbol]);
+    assert_eq!(refreshed[0].source_freshness, "matching_observed_hashes");
+    assert_eq!(refreshed[0].generation_alignment, "matched");
+    assert_eq!(refreshed[0].freshness, "verified");
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(semantic_path.join("metadata.json")).unwrap())
+            .unwrap();
+    let base = manifest["journal"]["base"].as_str().unwrap();
+    std::fs::write(
+        semantic_path.join(base).join("semantic-provenance.json"),
+        b"{}",
+    )
+    .unwrap();
+    assert!(SimpleSemanticSearch::load_without_model(&semantic_path).is_err());
+}
+
+#[tokio::test]
+async fn definition_semantics_reports_membership_without_claiming_generation_alignment() {
+    let (_temp, mut facade) = fixture();
+    let index = facade.document_index();
+    index.start_batch().unwrap();
+    for (id, documented) in [(1, true), (2, true), (3, false)] {
+        let mut symbol = named_symbol(id, "shared", SymbolKind::Function);
+        if documented {
+            symbol.doc_comment = Some("Prepared documentation".into());
+        }
+        index
+            .index_symbol(&symbol, &format!("definition{id}.rs"))
+            .unwrap();
+    }
+    index.commit_batch().unwrap();
+    let identity = serde_json::json!({"source_input_policy": "doc_comment_present_v1"}).to_string();
+    let mut semantic = SimpleSemanticSearch::new_empty(2, "prepared-fixture");
+    semantic.set_embedding_identity(identity.clone()).unwrap();
+    semantic.store_embeddings(vec![(
+        SymbolId::new(1).unwrap(),
+        vec![1.0, 0.0],
+        "rust".into(),
+    )]);
+    facade.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+    let server = CodeIntelligenceServer::new(facade);
+    let response = server
+        .find_symbol(Parameters(FindSymbolRequest {
+            name: "shared".into(),
+            symbol_id: None,
+            lang: None,
+            limit: 2,
+            offset: 0,
+        }))
+        .await
+        .unwrap();
+    let data = response.structured_content.unwrap();
+    let rows = data["semantic_definitions"]
+        .as_array()
+        .expect("per-definition diagnostics");
+    assert_eq!(rows.len(), 2, "diagnostics must follow pagination");
+    for (row, presence) in rows.iter().zip(["present", "missing"]) {
+        assert_eq!(row["vector_presence"], presence);
+        assert_eq!(row["eligible"], true);
+        assert_eq!(row["representation_status"], "matched");
+        assert_eq!(
+            row["embedding_identity_sha256"],
+            crate::indexing::calculate_hash(&identity)
+        );
+        assert_eq!(row["generation_alignment"], "unknown_untracked");
+        assert_eq!(row["freshness"], "unknown");
+        assert!(row["vector_code_generation"].is_null());
+        assert!(row["file_path"].as_str().unwrap().starts_with("definition"));
+    }
+    let response = server
+        .find_symbol(Parameters(FindSymbolRequest {
+            name: String::new(),
+            symbol_id: Some(3),
+            lang: None,
+            limit: 10,
+            offset: 0,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.structured_content.unwrap()["semantic_definitions"][0]["eligible"],
+        false
+    );
+    let response = server
+        .find_symbol(Parameters(FindSymbolRequest {
+            name: String::new(),
+            symbol_id: Some(99),
+            lang: None,
+            limit: 10,
+            offset: 0,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.structured_content.unwrap()["semantic_definitions"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn definition_semantics_keeps_unavailable_membership_and_policy_uncertainty_explicit() {
+    let (_temp, mut facade) = fixture();
+    let symbols = [named_symbol(1, "undocumented", SymbolKind::Function)];
+    let disabled = facade.semantic_definition_status(&symbols);
+    assert_eq!(disabled[0].state, "disabled");
+    assert_eq!(disabled[0].vector_presence, "unknown");
+    assert!(!disabled[0].eligible);
+    for (identity, expected) in [
+        (None, "unknown_legacy_or_absent"),
+        (
+            Some(serde_json::json!({"source_input_policy": "another-policy"}).to_string()),
+            "mismatch",
+        ),
+    ] {
+        let mut metadata = crate::semantic::SemanticMetadata::new("prepared-fixture".into(), 2, 0);
+        metadata.embedding_identity = identity;
+        metadata.embedding_count = 100;
+        facade.semantic_metadata_snapshot = Some(metadata);
+        let rows = facade.semantic_definition_status(&symbols);
+        assert_eq!(rows[0].vector_presence, "unknown");
+        assert_eq!(rows[0].vector_count, None);
+        assert_eq!(rows[0].state, "metadata_only");
+        assert_eq!(rows[0].representation_status, expected);
+        assert_eq!(rows[0].generation_alignment, "unknown_untracked");
+    }
+    facade.semantic_incompatible = true;
+    assert_eq!(
+        facade.semantic_definition_status(&symbols)[0].state,
+        "incompatible"
+    );
+}
+
 #[tokio::test]
 async fn unavailable_semantic_query_names_lexical_fallback_without_rebuilding() {
     let (_temp, facade) = fixture();
     let server = CodeIntelligenceServer::new(facade);
     let response = server
         .semantic_search_docs(Parameters(SemanticSearchRequest {
+            view: Default::default(),
+            max_output_bytes: Default::default(),
+
             query: "calendar settings".into(),
             limit: 5,
             threshold: None,

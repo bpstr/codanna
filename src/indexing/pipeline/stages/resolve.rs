@@ -226,6 +226,33 @@ impl ResolveStage {
         let from_kind = caller_symbol.as_deref().map(|sym| sym.kind);
         drop(caller_symbol);
 
+        if let Some(target) = unresolved.composition_target.as_ref() {
+            if unresolved.kind != RelationKind::Uses
+                || !matches!(caller.language_id.as_str(), "typescript" | "javascript")
+            {
+                return None;
+            }
+            let extensions = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+            if let crate::parsing::ExportResolution::Found(to_id) =
+                self.symbol_cache.resolve_export(
+                    context.file_id,
+                    &target.module_path,
+                    &target.export_name,
+                    extensions,
+                )
+                && self.is_compatible(
+                    from_kind,
+                    to_id,
+                    unresolved.kind,
+                    caller.file_id,
+                    &caller.language_id,
+                )
+            {
+                return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
+            }
+            return None;
+        }
+
         if unresolved.kind == RelationKind::Extends && caller.language_id.as_str() == "python" {
             let to_id = self.resolve_parent_class(&unresolved.to_name, context, &caller)?;
             return Some(ResolvedRelationship {
@@ -2268,6 +2295,7 @@ mod tests {
             kind,
             metadata: None,
             to_range: Some(Range::new(5, 4, 5, 20)),
+            composition_target: None,
         }
     }
 
@@ -3198,6 +3226,7 @@ mod tests {
             kind: RelationKind::Extends,
             metadata: None,
             to_range: None,
+            composition_target: None,
         }
     }
 
@@ -3526,6 +3555,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: None,
+            composition_target: None,
         };
 
         let context = make_context(1, LanguageId::new("rust"), vec![], vec![unresolved]);
@@ -3589,6 +3619,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: Some(Range::new(12, 4, 12, 20)), // Call at line 12
+            composition_target: None,
         };
 
         // Call at line 25 - should resolve to helper2 (defined at line 15, closer to call)
@@ -3600,6 +3631,7 @@ mod tests {
             kind: RelationKind::Calls,
             metadata: None,
             to_range: Some(Range::new(25, 4, 25, 20)), // Call at line 25
+            composition_target: None,
         };
 
         let context = make_context(

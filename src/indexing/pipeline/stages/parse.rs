@@ -231,7 +231,7 @@ fn parse_with_parser(
 
     // One behavior instance serves module_path computation and import
     // normalization below
-    let behavior = create_behavior(language_id);
+    let behavior = create_behavior(language_id, settings);
 
     // Compute module_path using the language behavior
     let module_path = behavior
@@ -347,11 +347,14 @@ fn attach_symbol_sources(
 }
 
 /// Create the language behavior for a registered language.
-fn create_behavior(language_id: LanguageId) -> Option<Box<dyn LanguageBehavior>> {
+fn create_behavior(
+    language_id: LanguageId,
+    settings: &Settings,
+) -> Option<Box<dyn LanguageBehavior>> {
     let registry = get_registry();
     let registry_guard = registry.lock().ok()?;
     let definition = registry_guard.get(language_id)?;
-    Some(definition.create_behavior())
+    Some(definition.create_behavior_with_settings(settings))
 }
 
 /// Compute module_path for a file using the language behavior.
@@ -432,6 +435,28 @@ fn select_strip_base<'a>(
 /// For legacy find_* methods: range typically points to the reference site.
 fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<RawRelationship> {
     let mut relationships = Vec::new();
+    let deferred = parser.find_deferred_compositions(content);
+    let claimed_uses: HashSet<_> = deferred.iter().map(|item| item.usage_range).collect();
+
+    for item in deferred {
+        let Some(target) = item.target else {
+            continue;
+        };
+        relationships.push(
+            RawRelationship::new(
+                item.owner,
+                item.usage_range,
+                item.local_binding,
+                item.usage_range,
+                crate::RelationKind::Uses,
+            )
+            .with_metadata(
+                crate::relationship::RelationshipMetadata::new()
+                    .at_position(item.usage_range.start_line, item.usage_range.start_column),
+            )
+            .with_composition_target(target.module_path, target.export_name),
+        );
+    }
 
     // Function/method calls - MethodCall provides caller_range for precise lookup
     for call in parser.find_method_calls(content) {
@@ -537,6 +562,9 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
 
     // Type usage - range is the usage site
     for (context, used_type, usage_range) in parser.find_uses(content) {
+        if claimed_uses.contains(&usage_range) {
+            continue;
+        }
         relationships.push(
             RawRelationship::new(
                 context,
@@ -599,7 +627,36 @@ pub fn compute_hash(content: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::TypeScriptParser;
     use crate::types::Range;
+
+    #[test]
+    fn incomplete_deferred_validation_claims_jsx_before_ordinary_fallback() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let nested_assignment = format!(
+                    "{}pending = import('./other');{}",
+                    "{".repeat(510),
+                    "}".repeat(510)
+                );
+                let code = format!(
+                    "import {{ lazy }} from 'react';\nlet pending;\nconst Calendar = lazy(() => (pending ??= import('./provider')).then(module => ({{ default: module.Calendar }})));\n{nested_assignment}\nexport function Picker() {{ return <Calendar />; }}"
+                );
+                let mut parser = TypeScriptParser::new().unwrap();
+                let relationships = extract_relationships(&mut parser, &code);
+                assert!(
+                    relationships.iter().all(|relationship| {
+                        relationship.kind != crate::RelationKind::Uses
+                            || relationship.to_name.as_ref() != "Calendar"
+                    }),
+                    "depth exhaustion must not re-enable a namesake Uses fallback: {relationships:?}"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn test_select_strip_base_workspace_wins_in_tree() {

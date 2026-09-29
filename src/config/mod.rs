@@ -437,6 +437,18 @@ impl Default for GuidanceConfig {
 }
 
 impl Settings {
+    /// Directory that owns persisted resolver indices for this workspace.
+    pub fn resolution_dir(&self) -> PathBuf {
+        let index_base = self.workspace_root.as_ref().map_or_else(
+            || self.index_path.clone(),
+            |root| root.join(&self.index_path),
+        );
+        index_base
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(crate::init::local_dir_name()))
+    }
+
     /// Create settings specifically for init_config_file
     /// This populates all dynamic fields based on the current environment
     pub fn for_init() -> Result<Self, Box<dyn std::error::Error>> {

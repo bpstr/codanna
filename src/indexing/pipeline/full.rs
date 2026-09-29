@@ -81,7 +81,7 @@ impl Pipeline {
         )?;
 
         // Save embeddings
-        self.persist_embeddings(semantic.as_ref(), semantic_path)?;
+        self.persist_embeddings(semantic.as_ref(), semantic_path, index.as_ref())?;
 
         Ok(IncrementalStats {
             new_files: index_stats.files_indexed,

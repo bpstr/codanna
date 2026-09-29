@@ -75,9 +75,24 @@ Retrieval, representation, document support, corpus drift, and isolated-project
 fixtures remain independent; fixture presence alone does not establish a passing
 qualification or shipped behavior.
 
+### September 29 fork integration
+
+Fork main `b60032fb` includes the previously pending PRs #74-#79 and #81-#83,
+and compact output PR #85. PR #84 is the sole remaining open fork PR at this
+integration checkpoint. Its TypeScript import-presence classification is combined
+with main's exact project/export binding; the emission stamp advances to v9.
+This is a fork lifecycle update, not a new upstream review.
+
+The first full-test and reliability runs on `0bf5e932` failed two watcher fixtures:
+the facade and watcher used different index paths, so metadata publication failed.
+Both fixtures now use their facade's explicit index path; local watcher validation
+passes 49 tests. Original failing GitHub runs remain part of the evidence.
+See the [release testing manual](contributing/release-testing.md) for the retained
+nonretryable-wave recovery limitation and the separate Assign readiness gate.
+
 ### Compatibility and validation boundaries
 
-This adaptation advances fork emission semantics from v5 to **v6** and the
+After integration with fork main `b60032fb`, this adaptation advances fork emission semantics from v8 to **v9** and the
 project-resolution cache format from 1.0 to **1.1**. Existing indexes require
 `codanna index --force`; do not stamp old graphs as rebuilt without rebuilding.
 `resolve_deferred` / `resolve_pending` now take `&mut PendingResolution`: only

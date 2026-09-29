@@ -161,6 +161,13 @@ pub struct RawRelationship {
     pub to_range: Range,
     pub kind: RelationKind,
     pub metadata: Option<RelationshipMetadata>,
+    pub composition_target: Option<CompositionTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompositionTarget {
+    pub module_path: Arc<str>,
+    pub export_name: Arc<str>,
 }
 
 impl RawRelationship {
@@ -178,11 +185,24 @@ impl RawRelationship {
             to_range,
             kind,
             metadata: None,
+            composition_target: None,
         }
     }
 
     pub fn with_metadata(mut self, metadata: RelationshipMetadata) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_composition_target(
+        mut self,
+        module_path: impl Into<Arc<str>>,
+        export_name: impl Into<Arc<str>>,
+    ) -> Self {
+        self.composition_target = Some(CompositionTarget {
+            module_path: module_path.into(),
+            export_name: export_name.into(),
+        });
         self
     }
 }
@@ -277,6 +297,7 @@ pub struct UnresolvedRelationship {
     pub kind: RelationKind,
     pub metadata: Option<RelationshipMetadata>,
     pub to_range: Option<Range>,
+    pub composition_target: Option<CompositionTarget>,
 }
 
 /// A batch of data ready to be written to Tantivy.
@@ -361,13 +382,14 @@ impl Default for IndexBatch {
 /// Contains symbols that have doc_comments suitable for embedding.
 #[derive(Debug)]
 pub struct EmbeddingBatch {
-    /// Embedding candidates: (symbol_id, doc_comment, language)
-    pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
+    /// Embedding candidates: (symbol_id, doc_comment, language, source SHA-256)
+    pub candidates: Vec<(SymbolId, CompactString, Box<str>, String)>,
     /// Opt-in source snapshots, partitioned against the real backend input budget.
     pub body_candidates: Vec<(
         SymbolId,
         crate::symbol_representation::SymbolSource,
         Box<str>,
+        String,
     )>,
 }
 
@@ -1009,6 +1031,15 @@ impl PipelineSymbolCache for SymbolLookupCache {
         extensions: &[&str],
     ) -> crate::parsing::ExportResolution {
         SymbolLookupCache::resolve_module_export(self, module, name, extensions)
+    }
+
+    fn resolve_export_path(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        SymbolLookupCache::resolve_export_path(self, path, name, extensions)
     }
 
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {

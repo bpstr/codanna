@@ -531,6 +531,18 @@ pub enum PluginAction {
 /// Document collection management actions
 #[derive(Subcommand)]
 pub enum DocumentAction {
+    /// Compare committed document hashes with current sources without indexing
+    Drift {
+        collection: String,
+        #[arg(long, default_value_t = 100)]
+        max_files: usize,
+        #[arg(long, default_value_t = 8 * 1024 * 1024)]
+        max_bytes: usize,
+        #[arg(long, default_value_t = 10_000)]
+        max_entries: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect recent indexing runs without loading the embedding model
     Status {
         #[arg(long)]
@@ -561,7 +573,7 @@ pub enum DocumentAction {
 
     /// Search documents
     #[command(
-        about = "Search indexed documents using natural language",
+        about = "Search indexed documents using natural language or exact literal text",
         after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents search query:\"auth\" limit:3 --json"
     )]
     Search {
@@ -576,6 +588,14 @@ pub enum DocumentAction {
         /// Maximum results to return
         #[arg(short, long)]
         limit: Option<usize>,
+
+        /// Match a case-sensitive substring of indexed chunk content without embeddings
+        #[arg(long)]
+        literal: bool,
+
+        /// Inclusive floor in native retrieval score units (must be finite)
+        #[arg(long, allow_hyphen_values = true)]
+        score_floor: Option<f32>,
 
         /// Output in JSON format
         #[arg(long)]

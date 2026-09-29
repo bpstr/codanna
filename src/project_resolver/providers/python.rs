@@ -666,7 +666,7 @@ impl ProjectResolutionProvider for PythonProvider {
             return Ok(());
         }
 
-        let persistence = ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+        let persistence = ResolutionPersistence::new(&settings.resolution_dir());
         let mut index = ResolutionIndex::new();
 
         for config_path in &config_paths {

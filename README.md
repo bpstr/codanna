@@ -52,7 +52,7 @@ codanna mcp analyze_impact symbol_name:"my_function"
 codanna mcp semantic_search_with_context query:"recursively extract function calls"
 ```
 
-`codanna mcp semantic_search_with_context` is the headline command: it returns N semantic matches, and for each match the symbol identity, signature, docstring, callees, callers, and recursive impact analysis — five MCP tools fused into one query.
+`codanna mcp semantic_search_with_context` returns compact primary code matches by default. Select a symbol for focused follow-up, or request `view:detail` for bounded indexed relationships and impact. [Compact output, exact document reads and the JSON schema migration](contributing/development/compact-tool-results.md) describe the shared response budget.
 
 Exact symbol listings return up to 100 matches by default. Use `limit:1..1000` and `offset:0..` to page through common names. Language filtering and `Type.member` qualification apply before pagination, so a member stays reachable even when more than 100 other types use its name. `lang` also applies to direct `symbol_id` lookup.
 
@@ -71,46 +71,48 @@ Ticket retrieval supports scoped semantic candidates, observed facets, persisten
 
 In JavaScript and TypeScript, passing a resolved function as an argument, such as `router.get('/health', handle)`, records a `References` relationship with the argument's source location. Find registrations and their dependents with `codanna mcp analyze_impact symbol_name:handle`; inspect source evidence with `codanna retrieve describe handle --json` under `relationships.referenced_by`. Describing the registering function exposes `relationships.references`. `get_calls` and `find_callers` continue to report explicit invocations, while dependency and impact queries also traverse references.
 
+Go calls through an interface-typed struct field record possible concrete methods
+under `relationships.dispatch_candidates`. These edges are derived from the call
+site, the interface method, structural `Implements` edges and each implementor's
+`Defines` edge. They are candidates rather than `Calls`, and are rebuilt when
+method signatures change. The current parser recognizes field, interface and
+method declarations available in the same source file. Python `typing.cast`
+type arguments record `Uses` edges, including imported aliases; a same-named
+function parameter suppresses the imported type edge.
+
+In workspaces with multiple `tsconfig.json` files, path aliases bind to the
+config governing the importing file and resolve through the exact exported
+source file. A symbol's context includes `resolver_binding`: `bound` names the
+source config, while `resolver_bindings_absent` means Codanna found no project
+rules for that file and did not borrow rules from another project. Go, Python,
+and TypeScript resolver caches are stored with the selected workspace.
+
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.
 
 ## What one call returns
 
-The headline command, run against codanna's own source tree. One call, and the agent has the symbol, its documentation, signature, callees with exact call sites, callers, and blast radius:
+Search responses prioritize primary matches, retain exact identifiers and source
+locations, and share a whole-result byte budget. The default `max_output_bytes` is
+8192; this counts text and structured MCP content together, not just a preview.
+Bytes are not tokenizer tokens. `output.partial` explicitly reports omitted rows.
 
-```text
-$ codanna mcp semantic_search_with_context query:"recursively extract function calls" limit:1
+```bash
+# Discovery: no automatic graph expansion for each semantic candidate
+codanna mcp semantic_search_with_context 'query:recursively extract function calls' limit:5
 
-Found 1 results for query: 'recursively extract function calls'
+# Explicit deeper evidence, still bounded
+codanna mcp semantic_search_with_context 'query:recursively extract function calls' limit:1 view:detail
 
-1. extract_calls_recursive - Method at src/parsing/cpp/parser.rs:1002-1047 [symbol_id:1477]
-   Similarity Score: 0.833
-   Documentation:
-     Recursively extract function calls with context tracking
-   Signature: fn extract_calls_recursive<'a>(
-        node: Node,
-        code: &'a str,
-        current_function: Option<&'a str>,
-        calls: &mut Vec<(&'a str, &'a str, Range)>,
-    )
-
-   extract_calls_recursive calls 3 function(s):
-     -> Method extract_calls_recursive at src/parsing/cpp/parser.rs:1002 [symbol_id:1477] (called at src/parsing/cpp/parser.rs:1045)
-     -> Method function_name_at_def at src/parsing/cpp/parser.rs:377 [symbol_id:1451] (called at src/parsing/cpp/parser.rs:1008)
-     -> Method new at src/types/mod.rs:112 [symbol_id:7388] (called at src/parsing/cpp/parser.rs:1028)
-
-   2 function(s) call extract_calls_recursive:
-     <- Method extract_calls_recursive at src/parsing/cpp/parser.rs:1045 [symbol_id:1477]
-     <- Method find_calls at src/parsing/cpp/parser.rs:885 [symbol_id:1467]
-
-   Changing extract_calls_recursive would impact 1 symbol(s) (max depth: 2):
-
-     methods (1):
-       - find_calls [symbol_id:1467]
-
-Guidance: Found one match with full context. Review the relationships to understand how this fits into the codebase.
+# Locate an exact project-document section without rereading the whole file
+codanna mcp search_documents 'query:reconnect snapshot' document:docs/realtime.md
 ```
 
-Every result carries `file:line` coordinates the agent can open directly, `symbol_id`s it can reuse to disambiguate name collisions, and a guidance hint it can chain on. Add `--json` for the structured envelope.
+Document hits include chunk IDs, source byte ranges and an index generation.
+`get_document_chunk` reads exact stored text by those returned handles without
+embeddings and pages by the lines actually emitted. Current source freshness is
+not implied. [Read the output contract](contributing/development/compact-tool-results.md) before updating
+JSON consumers: the affected tools now return canonical objects rather than the
+legacy symbol-search arrays.
 
 ## Local-first
 
@@ -216,6 +218,68 @@ chunks without embeddings, active generation and backend/input identity. These
 counts describe committed evidence and do not establish freshness against current
 source files. Run-progress diagnostics currently cover CLI document indexing.
 
+### Search document candidates
+
+```bash
+codanna documents search "Account preferences" --collection docs --literal --json
+codanna mcp search_documents 'query:Account preferences' collection:docs literal:true score_floor:1 --json
+codanna mcp search_documents --args '{"query":"account calendar settings","authority_sources":["/absolute/path/to/current.md"]}' --json
+```
+
+`--literal` (MCP `literal:true`) matches a case-sensitive substring in indexed
+chunk content, including punctuation and Unicode. It does not load or call an
+embedding backend. Separate heading-context metadata does not participate, and
+phrases spanning chunk boundaries may not match. Search uses the indexed snapshot;
+changes to source files require indexing before they become searchable.
+
+`--score-floor` (MCP `score_floor`) is an inclusive, finite threshold applied
+before final result selection. Scores use cosine similarity for semantic retrieval,
+lexical rank for lexical retrieval, and a constant `1.0` for literal matches.
+Floors are not interchangeable between modes. Omit the option to preserve existing
+retrieval behavior: semantic search still applies bounded lookahead, its relative
+cosine cutoff and source balancing; lexical search uses bounded lookahead, term
+coverage and source balancing. Result limits and source balancing also apply to
+literal matches. Literal search scans the filtered indexed chunks and may be slower
+for large collections.
+
+MCP callers may pass `authority_sources` as exact indexed source paths. Matching
+sources receive a deterministic tiebreak after lexical term coverage. The option
+is omitted by default, never infers authority from document text, and does not
+hide other matching sources. In semantic mode the explicit prior is applied
+before cosine-score ordering. The caller remains responsible for selecting and
+validating the listed sources.
+
+MCP structured responses include `retrieval` metadata and `results`. CLI JSON puts
+the results in `data` and retrieval metadata in `meta.retrieval`, including empty
+searches. Metadata identifies the mode, score units, requested/effective floor and
+candidate count. All modes report `support_status: not_assessed`: a retrieved
+candidate, including one promoted by a caller-supplied authority prior, does not
+substantiate a claim. `authority_prior` reports whether that prior was applied,
+its caller-supplied basis and source count. Scores are not probabilities.
+
+### Inspect document source drift
+
+```bash
+codanna documents drift docs --json
+codanna documents drift docs --max-files 100 --max-bytes 8388608 --max-entries 10000
+codanna mcp document_drift collection:docs --json
+```
+
+Drift inspection compares committed source hashes with the configured collection's
+current files. It reports changed, missing, new, unchanged, unreadable and unsupported
+sources, along with the committed generation and effective limits. It reads existing
+metadata without indexing, repairing state, deleting generations or loading embeddings.
+An absent index or unknown collection is an error; inspection creates neither.
+
+Defaults are 100 files, 8 MiB of source content and 10,000 discovery entries. Maximums
+are 1,000 files, 64 MiB and 100,000 entries. Ignored entries consume the discovery
+budget; ignored directories are pruned. Discovery preserves collection globs and
+`.codannaignore` rules, with a separate 1 MiB ignore-policy budget and 64-level depth
+limit. Metadata files have a separate 128 MiB read limit. Limit exhaustion is reported
+as truncation or an explicit error. Candidate counts are not corpus totals when
+discovery is incomplete. Unsupported files, read failures and partial reports never
+establish freshness. Concurrent source edits or publication may require a retry.
+
 ## What It Does
 
 Your AI assistant gains structured knowledge of your code:
@@ -290,7 +354,7 @@ Attribution required. See [NOTICE](NOTICE).
 
 Built with Rust.
 
-### Local embedding acceleration on Apple Silicon
+## Local embedding acceleration on Apple Silicon
 
 Run `codanna embedding-info` to inspect providers compiled into the binary. This
 command does not read project configuration, initialize ONNX Runtime, or load a

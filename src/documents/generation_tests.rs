@@ -114,6 +114,7 @@ fn assert_snapshot(store: &mut DocumentStore, source: &Path, expected: Option<&s
         .build_search_results(
             candidates.iter().map(|id| (*id, 0.0)).collect(),
             &query(source),
+            &DocumentSearchOptions::default(),
         )
         .unwrap();
     match expected {

@@ -1,5 +1,7 @@
 //! MCP tool request types.
 
+pub use crate::documents::DocumentDriftRequest;
+
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
@@ -127,6 +129,17 @@ impl FindSymbolRequest {
                 None,
             ));
         }
+        if self
+            .name
+            .strip_prefix("symbol_id:")
+            .and_then(|id| id.parse::<u32>().ok())
+            == Some(0)
+        {
+            return Err(rmcp::model::ErrorData::invalid_params(
+                "symbol_id must be positive",
+                None,
+            ));
+        }
         Ok(std::borrow::Cow::Borrowed(&self.name))
     }
 }
@@ -179,6 +192,12 @@ pub struct AnalyzeImpactRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchSymbolsRequest {
+    /// Compact evidence by default; detail opts into diagnostics/graph expansion.
+    #[serde(default)]
+    pub view: crate::mcp::output::OutputView,
+    /// Ceiling for the serialized MCP result, including text and structured content.
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
     /// Search query (supports fuzzy matching)
     pub query: String,
     /// Maximum number of results (default: 10)
@@ -202,6 +221,12 @@ pub struct SearchSymbolsRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticSearchRequest {
+    /// Compact evidence by default; detail opts into diagnostics/graph expansion.
+    #[serde(default)]
+    pub view: crate::mcp::output::OutputView,
+    /// Ceiling for the serialized MCP result, including text and structured content.
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
     /// Natural language search query
     pub query: String,
     /// Maximum number of results (default: 10)
@@ -219,6 +244,12 @@ pub struct SemanticSearchRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticSearchWithContextRequest {
+    /// Compact evidence by default; detail opts into diagnostics/graph expansion.
+    #[serde(default)]
+    pub view: crate::mcp::output::OutputView,
+    /// Ceiling for the serialized MCP result, including text and structured content.
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
     /// Natural language search query
     pub query: String,
     /// Maximum number of results (default: 5, as each includes full context)
@@ -270,7 +301,25 @@ impl schemars::JsonSchema for GetIndexInfoRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchDocumentsRequest {
-    /// Natural language search query
+    /// Restrict search to this workspace-relative document. No source read/reindex.
+    #[serde(default)]
+    pub document: Option<String>,
+    /// Compact evidence by default; detail opts into diagnostics/graph expansion.
+    #[serde(default)]
+    pub view: crate::mcp::output::OutputView,
+    /// Ceiling for the serialized MCP result, including text and structured content.
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
+    /// Match a case-sensitive literal substring in indexed chunk content, without embeddings.
+    #[serde(default)]
+    pub literal: bool,
+    /// Inclusive floor in native score units (cosine, lexical rank, or literal match 1).
+    pub score_floor: Option<f32>,
+    /// Exact indexed source paths that receive an authority tiebreak after
+    /// query-term coverage. Omitted by default; authority is never inferred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authority_sources: Vec<std::path::PathBuf>,
+    /// Natural language query, or exact case-sensitive substring when literal is true
     pub query: String,
     /// Filter by collection name (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,6 +337,18 @@ pub struct SearchDocumentsRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchContextRequest {
+    /// Historical conversation retrieval is explicit, not part of every discovery.
+    #[serde(default)]
+    pub include_conversations: bool,
+    /// Restrict the document section to this workspace-relative source.
+    #[serde(default)]
+    pub document: Option<String>,
+    /// Compact evidence by default; detail opts into diagnostics/graph expansion.
+    #[serde(default)]
+    pub view: crate::mcp::output::OutputView,
+    /// Ceiling for the serialized MCP result, including text and structured content.
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
     /// Topic or phrase to investigate across all available context sources.
     pub query: String,
     /// Maximum code-symbol matches (default: 5, max: 10).
@@ -317,6 +378,25 @@ pub struct SearchContextRequest {
     /// Optional workspace-relative subtree applied to the code-symbol section only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_path_prefix: Option<String>,
+}
+
+/// Exact, paged read of an immutable indexed document chunk.
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetDocumentChunkRequest {
+    #[schemars(range(min = 1))]
+    pub chunk_id: u32,
+    pub document_generation: String,
+    #[serde(default)]
+    pub line_offset: usize,
+    #[serde(default = "default_chunk_lines")]
+    #[schemars(range(min = 1, max = 200))]
+    pub line_limit: u32,
+    #[serde(default)]
+    pub max_output_bytes: crate::mcp::output::OutputBudget,
+}
+fn default_chunk_lines() -> u32 {
+    80
 }
 
 fn default_depth() -> u32 {

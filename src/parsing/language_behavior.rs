@@ -1065,7 +1065,7 @@ pub fn default_relationship_compatibility(
                 _ => unreachable!(),
             }
         }
-        References | ReferencedBy => {
+        References | ReferencedBy | DispatchCandidate | DispatchCandidateOf => {
             // Very permissive - almost anything can reference anything
             true
         }

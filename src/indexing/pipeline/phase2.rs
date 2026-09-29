@@ -169,8 +169,9 @@ impl Pipeline {
         }
 
         let structural = context_stage.rebuild_go_implementations()?;
-        stats.total_relationships += structural;
-        stats.other_resolved += structural;
+        let dispatch_candidates = context_stage.rebuild_go_dispatch_candidates()?;
+        stats.total_relationships += structural + dispatch_candidates;
+        stats.other_resolved += structural + dispatch_candidates;
         stats.unresolved = stats.total_relationships
             - stats.defines_resolved
             - stats.calls_resolved

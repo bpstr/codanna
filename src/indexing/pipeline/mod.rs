@@ -174,14 +174,16 @@ impl Pipeline {
         &self,
         semantic: Option<&Arc<Mutex<SimpleSemanticSearch>>>,
         semantic_path: &Path,
+        index: &DocumentIndex,
     ) -> PipelineResult<()> {
         let Some(sem) = semantic else {
             return Ok(());
         };
-        let guard = sem.lock().map_err(|_| PipelineError::Parse {
+        let mut guard = sem.lock().map_err(|_| PipelineError::Parse {
             path: PathBuf::new(),
             reason: "Failed to lock semantic search".to_string(),
         })?;
+        guard.bind_code_generation(index.commit_opstamp()?);
         let save = guard.save_snapshot().map_err(|e| PipelineError::Parse {
             path: semantic_path.to_path_buf(),
             reason: e.to_string(),

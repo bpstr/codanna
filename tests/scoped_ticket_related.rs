@@ -101,7 +101,8 @@ fn fixture(dense: bool) -> (tempfile::TempDir, CodeIntelligenceServer) {
 
 async fn pair(server: &CodeIntelligenceServer, scope: &str) -> Value {
     for attempt in 0..3 {
-        let query = json!({"query":"scopeRouter", "code_limit":1, "code_path_prefix":scope});
+        let query = json!({"query":"scopeRouter", "code_limit":1, "code_path_prefix":scope,
+            "view":"detail", "max_output_bytes":65536});
         let original = server
             .search_ticket_context(Parameters(serde_json::from_value(query.clone()).unwrap()))
             .await

@@ -83,6 +83,7 @@ fn qualified_call(
         kind: RelationKind::Calls,
         metadata: Some(meta),
         to_range: None,
+        composition_target: None,
     }
 }
 

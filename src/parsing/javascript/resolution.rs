@@ -430,8 +430,8 @@ impl ResolutionScope for JavaScriptResolutionContext {
                     matches!(to_kind, Trait | Interface | Module | Struct | Enum | Class);
                 member && container
             }
-            References => true,
-            ReferencedBy => true,
+            References | DispatchCandidate => true,
+            ReferencedBy | DispatchCandidateOf => true,
             // JavaScript doesn't support Implements/ImplementedBy (no interfaces)
             Implements | ImplementedBy => false,
         }

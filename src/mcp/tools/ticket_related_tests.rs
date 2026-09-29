@@ -25,7 +25,18 @@ fn fixture_with_public_symbol(
         ..Default::default()
     };
     settings.semantic_search.enabled = false;
-    let index = IndexFacade::new(Arc::new(settings)).unwrap();
+    let settings = Arc::new(settings);
+    let storage =
+        crate::storage::DocumentIndex::new(settings.index_path.join("tantivy"), &settings)
+            .unwrap()
+            .with_manual_reload_for_test()
+            .unwrap();
+    let index = IndexFacade::from_components(
+        Arc::new(storage),
+        crate::indexing::Pipeline::with_settings(settings.clone()),
+        None,
+        settings,
+    );
     let storage = index.document_index();
     storage.start_batch().unwrap();
     for id in 1..=count {
@@ -235,7 +246,7 @@ async fn ticket_related_sidecar_preserves_direct_items_and_default_response_shap
     assert_eq!(data["graph"]["query_status"], "completed_bounded");
     let encoded = serde_json::to_value(&response).unwrap();
     let rendered = encoded["content"][0]["text"].as_str().unwrap();
-    assert!(rendered.contains("Related implementations"));
+    assert!(rendered.contains("code.related_code.items"));
     assert!(rendered.contains("implementation2"));
     assert!(!rendered.contains("implementation4"));
     assert!(!rendered.contains("Graph traversal was not run"));
@@ -263,7 +274,7 @@ async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches()
     let first = server
         .search_ticket_context(Parameters(
             serde_json::from_value(
-                json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10}),
+                json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10, "max_output_bytes":65536}),
             )
             .unwrap(),
         ))
@@ -274,7 +285,7 @@ async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches()
     let coverage = &first["code"]["coverage"];
     assert_eq!(coverage["total_candidates"], 18);
     assert_eq!(coverage["items"].as_array().unwrap().len(), 10);
-    let next = server.search_ticket_context(Parameters(serde_json::from_value(json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10, "coverage_offset":10, "coverage_snapshot":coverage["snapshot"]})).unwrap())).await.unwrap().structured_content.unwrap();
+    let next = server.search_ticket_context(Parameters(serde_json::from_value(json!({"query":"requestHandler", "profile":"coverage", "coverage_limit":10, "max_output_bytes":65536, "coverage_offset":10, "coverage_snapshot":coverage["snapshot"]})).unwrap())).await.unwrap().structured_content.unwrap();
     assert_eq!(
         next["code"]["coverage"]["items"].as_array().unwrap().len(),
         8
@@ -282,7 +293,7 @@ async fn evidence_v1_reverse_profiles_retrieve_consumers_beyond_direct_matches()
     let owner = server
         .search_ticket_context(Parameters(
             serde_json::from_value(
-                json!({"query":"requestHandler", "profile":"implementation_owner", "code_limit":1}),
+                json!({"query":"requestHandler", "profile":"implementation_owner", "code_limit":1, "view":"detail", "max_output_bytes":65536}),
             )
             .unwrap(),
         ))

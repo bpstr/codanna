@@ -110,11 +110,15 @@ pub struct SemanticCoverageStatus {
     pub dimension: Option<usize>,
     pub embedding_identity_sha256: Option<String>,
     pub embedding_input_policy: Option<String>,
-    pub code_generation: u64,
+    pub code_generation: Option<u64>,
     pub vector_code_generation: Option<u64>,
     pub generation_alignment: &'static str,
     pub freshness: &'static str,
 }
+
+#[path = "semantic_diagnostics.rs"]
+mod semantic_diagnostics;
+pub use semantic_diagnostics::SemanticDefinitionStatus;
 
 /// IndexFacade - Unified interface for code intelligence operations
 ///
@@ -587,6 +591,7 @@ impl IndexFacade {
         let mut eligible_with_vector = None;
         let mut eligible_without_vector = None;
         let mut vector_without_current_symbol = None;
+        let mut vector_code_generation = None;
 
         if let Some(semantic) = &self.semantic_search {
             match semantic.lock() {
@@ -605,6 +610,7 @@ impl IndexFacade {
                             .filter(|id| !current_ids.contains(id))
                             .count(),
                     );
+                    vector_code_generation = semantic.common_code_generation();
                 }
                 Err(_) => {
                     state = "unavailable";
@@ -635,6 +641,7 @@ impl IndexFacade {
             Some(_) => "mismatch",
             None => "unknown_legacy_or_absent",
         };
+        let code_generation = self.document_index.commit_opstamp().ok();
         SemanticCoverageStatus {
             state,
             total_symbols,
@@ -683,12 +690,22 @@ impl IndexFacade {
             dimension: metadata.as_ref().map(|metadata| metadata.dimension),
             embedding_identity_sha256,
             embedding_input_policy,
-            code_generation: self.document_index.generation(),
-            // Semantic metadata does not currently persist a corresponding code
-            // generation. Timestamp proximity is not sufficient evidence.
-            vector_code_generation: None,
-            generation_alignment: "unknown_untracked",
-            freshness: "unknown",
+            code_generation,
+            vector_code_generation,
+            generation_alignment: match (vector_code_generation, code_generation) {
+                (Some(generation), Some(code_generation)) if generation == code_generation => {
+                    "matched"
+                }
+                (Some(_), Some(_)) => "stale",
+                _ => "unknown_untracked",
+            },
+            freshness: match (vector_code_generation, code_generation) {
+                (Some(generation), Some(code_generation)) if generation == code_generation => {
+                    "generation_aligned"
+                }
+                (Some(_), Some(_)) => "stale_generation",
+                _ => "unknown",
+            },
         }
     }
 
@@ -840,6 +857,44 @@ impl IndexFacade {
             .unwrap_or_default()
     }
 
+    /// Get possible dynamic-dispatch targets with their source evidence.
+    pub fn get_dispatch_candidates_with_metadata(
+        &self,
+        symbol_id: SymbolId,
+    ) -> Vec<(Symbol, Option<crate::relationship::RelationshipMetadata>)> {
+        self.graph_neighbors(symbol_id, RelationKind::DispatchCandidate, false, None)
+            .unwrap_or_default()
+    }
+
+    pub fn get_resolver_binding(
+        &self,
+        symbol: &Symbol,
+    ) -> Option<crate::project_resolver::persist::ResolverBindingDiagnostic> {
+        let language = symbol.language_id?.as_str();
+        let path = std::path::Path::new(symbol.file_path.as_ref());
+        let file_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Some(root) = self.settings.workspace_root.as_ref() {
+            root.join(path)
+        } else {
+            path.to_path_buf()
+        };
+        let mut diagnostic = crate::project_resolver::persist::ResolutionPersistence::new(
+            &self.settings.resolution_dir(),
+        )
+        .diagnose_file(language, &file_path)
+        .ok()
+        .flatten()?;
+        if let (Some(root), Some(config)) = (
+            self.settings.workspace_root.as_ref(),
+            diagnostic.config_path.as_ref(),
+        ) && let Ok(relative) = config.strip_prefix(root)
+        {
+            diagnostic.config_path = Some(relative.to_path_buf());
+        }
+        Some(diagnostic)
+    }
+
     /// Get implementations of a trait/interface.
     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol> {
         self.graph_neighbors(trait_id, RelationKind::Implements, true, None)
@@ -905,6 +960,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -919,6 +975,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Extends,
@@ -950,7 +1007,10 @@ impl IndexFacade {
             .map(|p| self.document_index.to_portable_file_path(&p).unwrap_or(p))
             .unwrap_or_else(|| symbol.file_path.to_string());
 
-        let mut relationships = SymbolRelationships::default();
+        let mut relationships = SymbolRelationships {
+            resolver_binding: self.get_resolver_binding(&symbol),
+            ..Default::default()
+        };
 
         if include.contains(ContextIncludes::IMPLEMENTATIONS) {
             let impls = self.get_implementations(symbol_id);
@@ -1000,6 +1060,10 @@ impl IndexFacade {
             if !referenced_by.is_empty() {
                 relationships.referenced_by = Some(referenced_by);
             }
+            let dispatch_candidates = self.get_dispatch_candidates_with_metadata(symbol_id);
+            if !dispatch_candidates.is_empty() {
+                relationships.dispatch_candidates = Some(dispatch_candidates);
+            }
         }
 
         if include.contains(ContextIncludes::EXTENDS) {
@@ -1038,6 +1102,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
             RelationKind::Defines,
@@ -1063,6 +1128,7 @@ impl IndexFacade {
         for kind in &[
             RelationKind::Calls,
             RelationKind::References,
+            RelationKind::DispatchCandidate,
             RelationKind::Uses,
             RelationKind::Implements,
         ] {

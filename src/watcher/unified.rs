@@ -1684,6 +1684,7 @@ mod tests {
             workspace_root: None,
             ..Default::default()
         };
+        settings.semantic_search.enabled = false;
         settings
             .add_indexed_path(root.to_path_buf())
             .expect("register indexed path");
@@ -1694,6 +1695,7 @@ mod tests {
             .handler(handler)
             .broadcaster(Arc::new(NotificationBroadcaster::new(16)))
             .indexer(facade)
+            .index_path(dir.join("index"))
             .workspace_root(dir.to_path_buf())
             .build()
             .unwrap()
@@ -2088,6 +2090,7 @@ mod document_collection_tests {
             DocumentFileHandler::new(store.clone(), root.to_path_buf()).with_config(&config);
         let watcher = UnifiedWatcher::builder()
             .indexer(facade)
+            .index_path(root.join("code-index"))
             .document_store(store.clone())
             .workspace_root(root.to_path_buf())
             .broadcaster(Arc::new(NotificationBroadcaster::new(8)))

@@ -421,7 +421,7 @@ impl Pipeline {
         self.finish_resolution_cache(&index, &symbol_cache)?;
 
         // Save embeddings
-        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+        self.persist_embeddings(semantic.as_ref(), &semantic_path, index.as_ref())?;
 
         Ok(SingleFileStats {
             file_id,
@@ -964,7 +964,7 @@ impl Pipeline {
         }
 
         // Save embeddings
-        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+        self.persist_embeddings(semantic.as_ref(), &semantic_path, index.as_ref())?;
 
         // Clearing follows successful relationship and embedding commits;
         // file cleanup alone is never sufficient to discharge this work.

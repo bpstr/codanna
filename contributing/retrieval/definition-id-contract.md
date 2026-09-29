@@ -12,6 +12,10 @@ Language and pagination filters apply to both forms. Unknown IDs and mismatched
 languages return zero matches; they never fall back to same-name definitions.
 Conflicting targets, zero IDs and requests with no target are invalid.
 IDs belong to one index/workspace and are not stable identities across rebuilds.
+An ID with multiple live definitions is an index error with a rebuild instruction.
+Name results retain their selected definition and omit context that cannot be
+verified against that definition. Exact-name pages retain bounded ordering state
+and report the filtered total; restart paging after reindexing.
 Responses contain indexed signature, documentation, locations and relationship
 context, rather than complete implementation bodies. Indexed coordinates can be
 stale; ID disambiguation does not establish source freshness.
@@ -31,14 +35,16 @@ a floor preserves existing nearest-neighbor behavior; the configured value is
 not implicitly applied. Graph counts describe distinct indexed symbols, with
 call-site totals and unresolved/external-call coverage explicitly unreported.
 Impact metadata remains present alongside the new record. A deterministic unit
-test verifies the distinction between omitted and explicit score floors.
+test verifies the distinction between omitted and explicit score floors. MCP
+responses expose this record as `structured_content.retrieval`; one-shot CLI JSON
+exposes it as `meta.retrieval`, including empty results. Prepared endpoint and CLI
+fixtures cover omitted and explicit floors without invoking a paid provider.
 
 The object-method emission fix is tracked separately. Other open work needs
 independent evidence before broad changes:
 
 | Area | Prepared next step | Acceptance boundary |
 | --- | --- | --- |
-| Code semantic score floors | Report requested/effective floor and ranking mode; keep omitted-floor behavior compatible | No configured-floor or probability claim when no filter applied |
 | Document support | Add literal/phrase controls and explicitly separate similarity from support | Negative controls must not certify nearest neighbors as authoritative evidence |
 | Lazy components | Synthetic dynamic import, promise cache, exported-member projection and JSX consumers with decoys | Composition evidence must remain separate from immediate Calls |
 | Interface dispatch | Go interface/provider fixtures with multiple implementations | Candidate dependencies must not assert definite runtime callees |
