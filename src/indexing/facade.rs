@@ -866,6 +866,35 @@ impl IndexFacade {
             .unwrap_or_default()
     }
 
+    pub fn get_resolver_binding(
+        &self,
+        symbol: &Symbol,
+    ) -> Option<crate::project_resolver::persist::ResolverBindingDiagnostic> {
+        let language = symbol.language_id?.as_str();
+        let path = std::path::Path::new(symbol.file_path.as_ref());
+        let file_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Some(root) = self.settings.workspace_root.as_ref() {
+            root.join(path)
+        } else {
+            path.to_path_buf()
+        };
+        let mut diagnostic = crate::project_resolver::persist::ResolutionPersistence::new(
+            &self.settings.resolution_dir(),
+        )
+        .diagnose_file(language, &file_path)
+        .ok()
+        .flatten()?;
+        if let (Some(root), Some(config)) = (
+            self.settings.workspace_root.as_ref(),
+            diagnostic.config_path.as_ref(),
+        ) && let Ok(relative) = config.strip_prefix(root)
+        {
+            diagnostic.config_path = Some(relative.to_path_buf());
+        }
+        Some(diagnostic)
+    }
+
     /// Get implementations of a trait/interface.
     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol> {
         self.graph_neighbors(trait_id, RelationKind::Implements, true, None)
@@ -978,7 +1007,10 @@ impl IndexFacade {
             .map(|p| self.document_index.to_portable_file_path(&p).unwrap_or(p))
             .unwrap_or_else(|| symbol.file_path.to_string());
 
-        let mut relationships = SymbolRelationships::default();
+        let mut relationships = SymbolRelationships {
+            resolver_binding: self.get_resolver_binding(&symbol),
+            ..Default::default()
+        };
 
         if include.contains(ContextIncludes::IMPLEMENTATIONS) {
             let impls = self.get_implementations(symbol_id);

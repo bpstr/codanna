@@ -160,7 +160,7 @@ impl ParserFactory {
         &self,
         language_id: LanguageId,
     ) -> IndexResult<Box<dyn LanguageBehavior>> {
-        behavior_from_registry(get_registry(), language_id)
+        behavior_from_registry(get_registry(), language_id, &self.settings)
     }
 
     /// Returns list of all enabled languages from configuration.
@@ -503,6 +503,7 @@ mod review_factory_tests {
 fn behavior_from_registry(
     registry: &std::sync::Mutex<super::registry::LanguageRegistry>,
     language_id: LanguageId,
+    settings: &Settings,
 ) -> IndexResult<Box<dyn LanguageBehavior>> {
     let definition = {
         let registry = registry.lock().map_err(|_| IndexError::MutexPoisoned)?;
@@ -513,7 +514,7 @@ fn behavior_from_registry(
             })?
     };
     // Constructors may do I/O. Do not hold the process-wide registry lock.
-    Ok(definition.create_behavior())
+    Ok(definition.create_behavior_with_settings(settings))
 }
 
 #[cfg(test)]
@@ -537,7 +538,7 @@ mod review_behavior_errors {
             panic!("isolated registry failure fixture");
         }));
         assert!(matches!(
-            behavior_from_registry(&registry, LanguageId::new("rust")),
+            behavior_from_registry(&registry, LanguageId::new("rust"), &Settings::default(),),
             Err(IndexError::MutexPoisoned)
         ));
     }

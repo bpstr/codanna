@@ -28,15 +28,23 @@ impl ExportTraversal {
 impl SymbolLookupCache {
     pub fn register_file_exports(&self, exports: FileExports) {
         if let Some((_, old)) = self.file_exports.remove(&exports.file_id) {
-            self.export_file_paths.remove(Path::new(&old.file_path));
+            let old_path = Path::new(&old.file_path);
+            self.export_file_paths.remove(old_path);
+            if let Ok(canonical) = old_path.canonicalize() {
+                self.export_file_paths.remove(&canonical);
+            }
             if let Some(module) = old.module_path {
                 if let Some(mut ids) = self.export_modules.get_mut(&module) {
                     ids.retain(|id| *id != old.file_id);
                 }
             }
         }
+        let file_path = PathBuf::from(&exports.file_path);
         self.export_file_paths
-            .insert(PathBuf::from(&exports.file_path), exports.file_id);
+            .insert(file_path.clone(), exports.file_id);
+        if let Ok(canonical) = file_path.canonicalize() {
+            self.export_file_paths.insert(canonical, exports.file_id);
+        }
         if let Some(module) = &exports.module_path {
             self.export_modules
                 .entry(module.clone())
@@ -103,6 +111,15 @@ impl SymbolLookupCache {
             [file] => self.export_slot(*file, name, extensions, &mut ExportTraversal::new()),
             _ => ExportResolution::Ambiguous,
         }
+    }
+
+    pub fn resolve_export_path(
+        &self,
+        path: &Path,
+        name: &str,
+        extensions: &[&str],
+    ) -> ExportResolution {
+        self.export_from_path(path, name, extensions, &mut ExportTraversal::new())
     }
 
     fn export_from_path(

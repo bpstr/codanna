@@ -42,6 +42,21 @@ pub struct ResolutionRules {
     pub paths: HashMap<String, Vec<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolverBindingStatus {
+    Bound,
+    ResolverBindingsAbsent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolverBindingDiagnostic {
+    pub status: ResolverBindingStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<PathBuf>,
+}
+
 impl Default for ResolutionIndex {
     fn default() -> Self {
         Self::new()
@@ -91,7 +106,6 @@ impl ResolutionIndex {
         let resolved_file = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
-        let file_str = resolved_file.to_str()?;
 
         // Find all matching patterns
         let mut matches: Vec<(&String, &PathBuf)> = self
@@ -113,12 +127,7 @@ impl ResolutionIndex {
                     .canonicalize()
                     .unwrap_or_else(|_| pattern_path.to_path_buf());
 
-                // Convert to string, return false if conversion fails
-                let Some(canon_pattern_str) = canon_pattern.to_str() else {
-                    return false;
-                };
-
-                file_str.starts_with(canon_pattern_str)
+                resolved_file.starts_with(canon_pattern)
             })
             .collect();
 
@@ -126,6 +135,21 @@ impl ResolutionIndex {
         matches.sort_by_key(|(pattern, _)| -(pattern.len() as i32));
 
         matches.first().map(|(_, config)| *config)
+    }
+
+    pub fn diagnose_file(&self, file_path: &Path) -> ResolverBindingDiagnostic {
+        let config_path = self
+            .get_config_for_file(file_path)
+            .filter(|config| self.rules.contains_key(*config))
+            .cloned();
+        ResolverBindingDiagnostic {
+            status: if config_path.is_some() {
+                ResolverBindingStatus::Bound
+            } else {
+                ResolverBindingStatus::ResolverBindingsAbsent
+            },
+            config_path,
+        }
     }
 }
 
@@ -177,6 +201,17 @@ impl ResolutionPersistence {
         }
 
         Ok(index)
+    }
+
+    pub fn diagnose_file(
+        &self,
+        language_id: &str,
+        file_path: &Path,
+    ) -> ResolutionResult<Option<ResolverBindingDiagnostic>> {
+        if !self.index_path(language_id).exists() {
+            return Ok(None);
+        }
+        Ok(Some(self.load(language_id)?.diagnose_file(file_path)))
     }
 
     /// Save resolution index for a language

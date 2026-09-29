@@ -1002,6 +1002,15 @@ impl PipelineSymbolCache for SymbolLookupCache {
         SymbolLookupCache::resolve_module_export(self, module, name, extensions)
     }
 
+    fn resolve_export_path(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        SymbolLookupCache::resolve_export_path(self, path, name, extensions)
+    }
+
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {
         SymbolLookupCache::symbols_in_file(self, file_id)
     }

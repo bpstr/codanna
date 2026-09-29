@@ -80,6 +80,13 @@ method declarations available in the same source file. Python `typing.cast`
 type arguments record `Uses` edges, including imported aliases; a same-named
 function parameter suppresses the imported type edge.
 
+In workspaces with multiple `tsconfig.json` files, path aliases bind to the
+config governing the importing file and resolve through the exact exported
+source file. A symbol's context includes `resolver_binding`: `bound` names the
+source config, while `resolver_bindings_absent` means Codanna found no project
+rules for that file and did not borrow rules from another project. Go, Python,
+and TypeScript resolver caches are stored with the selected workspace.
+
 The one-shot CLI is also what makes codanna skill-friendly: an Agent Skill can wrap `codanna mcp` commands directly in Claude Code, Cursor, Windsurf, Codex, Gemini, or any harness that runs shell commands — no MCP plumbing required.
 
 ## What one call returns

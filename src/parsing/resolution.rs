@@ -765,6 +765,15 @@ pub trait PipelineSymbolCache: Send + Sync {
     ) -> crate::parsing::ExportResolution {
         crate::parsing::ExportResolution::Unknown
     }
+
+    fn resolve_export_path(
+        &self,
+        _path: &std::path::Path,
+        _name: &str,
+        _extensions: &[&str],
+    ) -> crate::parsing::ExportResolution {
+        crate::parsing::ExportResolution::Unknown
+    }
 }
 
 /// Result of multi-tier symbol resolution.
