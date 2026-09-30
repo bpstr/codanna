@@ -43,7 +43,7 @@ $ codanna serve --https --watch     # HTTPS server with TLS"#;
     help.push('\n');
 
     // Learn More section
-    let learn_more = r#"GitHub: https://github.com/bartolli/codanna"#;
+    let learn_more = r#"GitHub: https://github.com/bpstr/codanna"#;
 
     help.push_str(&format_help_section("LEARN MORE", learn_more, true));
 

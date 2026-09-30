@@ -180,12 +180,21 @@ impl MmapVectorStorage {
         vectors: &[(VectorId, &[f32])],
     ) -> Result<(), VectorStorageError> {
         self.validate_vectors(vectors)?;
+        let vector_count = self
+            .vector_count
+            .checked_add(vectors.len())
+            .and_then(|count| u32::try_from(count).ok())
+            .ok_or_else(|| {
+                VectorStorageError::InvalidFormat(
+                    "Vector count exceeds storage format capacity".into(),
+                )
+            })?;
         self.ensure_storage_ready()?;
         // Drop the map before any file write: mutating a mapped file is
         // undefined behavior per the memmap2 contract. The next read remaps.
         self.invalidate_cache();
         self.append_vectors(vectors)?;
-        self.update_metadata(vectors.len())?;
+        self.update_metadata(vector_count)?;
         Ok(())
     }
 
@@ -288,9 +297,9 @@ impl MmapVectorStorage {
     }
 
     /// Updates metadata after writing vectors.
-    fn update_metadata(&mut self, vector_count: usize) -> Result<(), VectorStorageError> {
-        self.vector_count += vector_count;
-        self.update_header_count()?;
+    fn update_metadata(&mut self, vector_count: u32) -> Result<(), VectorStorageError> {
+        self.update_header_count(vector_count)?;
+        self.vector_count = vector_count as usize;
         Ok(())
     }
 
@@ -799,7 +808,7 @@ impl MmapVectorStorage {
         Ok(())
     }
 
-    fn update_header_count(&self) -> Result<(), VectorStorageError> {
+    fn update_header_count(&self, vector_count: u32) -> Result<(), VectorStorageError> {
         use std::io::{Seek, SeekFrom};
 
         debug_assert!(
@@ -813,7 +822,7 @@ impl MmapVectorStorage {
         file.seek(SeekFrom::Start(12))?;
 
         // Write updated count
-        file.write_all(&(self.vector_count as u32).to_le_bytes())?;
+        file.write_all(&vector_count.to_le_bytes())?;
         file.flush()?;
 
         Ok(())
@@ -916,6 +925,41 @@ impl std::fmt::Debug for ConcurrentVectorStorage {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn append_capacity_failure_preserves_file_and_count() {
+        let root = TempDir::new().unwrap();
+        let mut storage = MmapVectorStorage::new(
+            &root,
+            SegmentOrdinal::new(0),
+            VectorDimension::new(2).unwrap(),
+        )
+        .unwrap();
+        let values = [1.0, 0.0];
+        let batch = [(VectorId::new(1).unwrap(), values.as_slice())];
+        storage.write_batch(&batch).unwrap();
+        let before = std::fs::read(&storage.path).unwrap();
+        for count in [u32::MAX as usize, usize::MAX] {
+            storage.vector_count = count;
+            assert!(storage.write_batch(&batch).is_err());
+            assert_eq!(storage.vector_count, count);
+            assert_eq!(std::fs::read(&storage.path).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn header_failure_preserves_in_memory_count() {
+        let root = TempDir::new().unwrap();
+        let mut storage = MmapVectorStorage::new(
+            &root,
+            SegmentOrdinal::new(0),
+            VectorDimension::new(2).unwrap(),
+        )
+        .unwrap();
+        // No file exists yet, so the actual header-open operation must fail.
+        assert!(storage.update_metadata(1).is_err());
+        assert_eq!(storage.vector_count, 0);
+    }
 
     #[test]
     fn test_storage_create_and_open() {

@@ -5,6 +5,7 @@
 //! `CODANNA_EMBED_CPU_THREADS` bounds the shared ORT intra-op pool, NOT the whole
 //! process: callers, tokenizers, parsers and index writers have their own threads.
 
+use crate::memory::MemoryBudget;
 use fastembed::ExecutionProviderDispatch;
 use std::str::FromStr;
 
@@ -278,6 +279,12 @@ fn commit_runtime(
     builder.commit().map_err(|error| error.to_string())
 }
 
+fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> bool {
+    !strict
+        && EmbeddingExecutionProvider::from_str(raw) == Ok(EmbeddingExecutionProvider::Auto)
+        && memory.headroom < 4 * 1024 * 1024 * 1024
+}
+
 /// Configure providers and optional shared CPU workers before creating models.
 ///
 /// Unset CPU controls preserve the original lazy/default threading behavior.
@@ -289,9 +296,21 @@ pub fn configure_embedding_runtime() -> Result<(), String> {
     let spinning = optional_env(SPIN_ENV)?;
     let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), num_cpus::get())?;
     let provider = optional_env(PROVIDER_ENV)?.unwrap_or_else(|| "cpu".into());
+    let strict = strict_provider_registration();
+    let provider = if !strict
+        && EmbeddingExecutionProvider::from_str(&provider) == Ok(EmbeddingExecutionProvider::Auto)
+        && optional_auto_needs_cpu(&provider, strict, MemoryBudget::current())
+    {
+        eprintln!(
+            "codanna: optional auto embedding selection is using CPU because memory headroom is below 4 GiB"
+        );
+        "cpu"
+    } else {
+        &provider
+    };
     for message in configure_runtime(
-        &provider,
-        strict_provider_registration(),
+        provider,
+        strict,
         &compiled_embedding_providers(),
         cpu,
         commit_runtime,
@@ -304,6 +323,36 @@ pub fn configure_embedding_runtime() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_auto_memory_fallback_preserves_explicit_controls() {
+        let low = MemoryBudget::from_values(8 << 30, 2 << 30, 0);
+        let ample = MemoryBudget::from_values(32 << 30, 24 << 30, 0);
+        assert!(optional_auto_needs_cpu(" AUTO ", false, low));
+        assert!(!optional_auto_needs_cpu("auto", true, low));
+        assert!(!optional_auto_needs_cpu("auto", false, ample));
+        for provider in ["cpu", "coreml", "cuda", "invalid"] {
+            assert!(!optional_auto_needs_cpu(provider, false, low));
+        }
+        let selected = if optional_auto_needs_cpu("auto", false, low) {
+            "cpu"
+        } else {
+            "auto"
+        };
+        configure_runtime(
+            selected,
+            false,
+            &["cpu", "coreml"],
+            Some(quiet()),
+            |provider, strict, cpu| {
+                assert_eq!(provider, None);
+                assert!(!strict);
+                assert_eq!(cpu, Some(quiet()));
+                Ok(true)
+            },
+        )
+        .unwrap();
+    }
 
     fn quiet() -> CpuThreads {
         CpuThreads {

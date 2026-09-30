@@ -273,7 +273,7 @@ impl ServerHandler for CodeIntelligenceServer {
         .with_server_info(
             Implementation::new("codanna", env!("CARGO_PKG_VERSION"))
                 .with_title("Codanna Code Intelligence")
-                .with_website_url("https://github.com/bartolli/codanna"),
+                .with_website_url("https://github.com/bpstr/codanna"),
         )
         .with_instructions(
             "This server provides code intelligence tools for analyzing this codebase. \

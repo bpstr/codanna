@@ -80,3 +80,12 @@ CoreML is a separate manual qualification: build `--features gpu-coreml`, select
 `CODANNA_EMBED_PROVIDER=coreml` and `CODANNA_EMBED_PROVIDER_STRICT=1`, keep the model and input
 policy fixed, and verify actual device execution. Do not label registration a performance
 pass. No Mac heat, energy or speedup claim is made before those measurements.
+
+## Memory-aware optional provider selection
+
+Non-strict `CODANNA_EMBED_PROVIDER=auto` uses CPU when the sampled memory budget
+has less than 4 GiB of headroom. This is a conservative admission heuristic, not
+a measured accelerator performance threshold. Strict `auto` and explicit
+`coreml`/`cuda` requests retain their registration behavior. Explicit CPU thread
+and spinning controls still apply when optional `auto` falls back to CPU. The
+default CPU path does not sample memory for provider selection.

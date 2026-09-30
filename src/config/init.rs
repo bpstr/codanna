@@ -90,7 +90,7 @@ impl Settings {
     pub(super) fn add_config_comments(toml: String) -> String {
         let mut result = String::from(
             "# Codanna Configuration File\n\
-             # https://github.com/bartolli/codanna\n\n",
+             # https://github.com/bpstr/codanna\n\n",
         );
 
         let mut in_languages_section = false;
