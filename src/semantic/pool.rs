@@ -15,6 +15,10 @@ use super::SemanticSearchError;
 use super::remote::{RemoteEmbedder, run_async};
 use crate::embedding_input::InputBudget;
 
+#[path = "pool_scheduling.rs"]
+mod scheduling;
+use scheduling::{UsageLogGate, map_batches};
+
 // ── EmbeddingBackend ───────────────────────────────────────────────────────
 
 /// Unified embedding backend — wraps either a local fastembed pool or a remote
@@ -157,11 +161,7 @@ impl<T> InstancePool<T> {
                 .send(item)
                 .expect("bounded(size) channel cannot be full or closed during fill");
         }
-        Self {
-            sender,
-            receiver,
-            size,
-        }
+        Self { sender, receiver, size }
     }
 
     fn acquire(
@@ -189,17 +189,13 @@ impl<T> InstancePool<T> {
 impl<T> std::ops::Deref for PooledInstance<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        self.item
-            .as_ref()
-            .expect("item is Some until drop takes it")
+        self.item.as_ref().expect("item is Some until drop takes it")
     }
 }
 
 impl<T> std::ops::DerefMut for PooledInstance<T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.item
-            .as_mut()
-            .expect("item is Some until drop takes it")
+        self.item.as_mut().expect("item is Some until drop takes it")
     }
 }
 
@@ -233,6 +229,7 @@ pub struct EmbeddingPool {
     model_name: String,
     input_budget: InputBudget,
     usage_counters: Vec<AtomicUsize>,
+    usage_log: UsageLogGate,
 }
 
 /// Upper bound on waiting for a pool instance. Legitimate backpressure
@@ -245,9 +242,7 @@ fn parallel_batch_size(item_count: usize, worker_count: usize, configured_max: u
         return 1;
     }
     let active_workers = worker_count.max(1).min(item_count);
-    item_count
-        .div_ceil(active_workers)
-        .min(configured_max.max(1))
+    item_count.div_ceil(active_workers).min(configured_max.max(1))
 }
 
 impl EmbeddingPool {
@@ -264,63 +259,39 @@ impl EmbeddingPool {
         max_input_tokens: Option<usize>,
     ) -> Result<Self, SemanticSearchError> {
         let pool_size = pool_size.max(1);
-
         let cache_dir = crate::init::models_dir();
         let model_name = crate::vector::model_to_string(&model);
-
-        tracing::info!(
-            target: "semantic",
-            "Initializing embedding pool: {pool_size} instances ({model_name})"
-        );
+        tracing::info!(target: "semantic", "Initializing embedding pool: {pool_size} instances ({model_name})");
 
         let mut dimensions = 0;
-        let usage_counters: Vec<AtomicUsize> =
-            (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
+        let usage_counters: Vec<AtomicUsize> = (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
         let mut models = Vec::with_capacity(pool_size);
         let mut input_budget = None;
-
         for i in 0..pool_size {
             let mut text_model = TextEmbedding::try_new(
                 InitOptions::new(model.clone())
                     .with_cache_dir(cache_dir.clone())
                     .with_show_download_progress(i == 0),
-            )
-            .map_err(|e| {
-                SemanticSearchError::ModelInitError(format!(
-                    "Failed to initialize model instance {}: {}",
-                    i + 1,
-                    e
-                ))
+            ).map_err(|e| {
+                SemanticSearchError::ModelInitError(format!("Failed to initialize model instance {}: {}", i + 1, e))
             })?;
-
             if i == 0 {
                 input_budget = Some(
                     InputBudget::local(&text_model.tokenizer, max_input_tokens)
                         .map_err(SemanticSearchError::ModelInitError)?,
                 );
-                let test_embedding = text_model
-                    .embed(vec!["test"], None)
+                let test_embedding = text_model.embed(vec!["test"], None)
                     .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
                 dimensions = test_embedding.into_iter().next().unwrap().len();
             }
-
-            models.push(ModelInstance {
-                model: text_model,
-                id: i,
-            });
+            models.push(ModelInstance { model: text_model, id: i });
         }
-
         let embed_workers = rayon::ThreadPoolBuilder::new()
             .num_threads(pool_size)
             .thread_name(|i| format!("codanna-embed-{i}"))
             .build()
             .map_err(|e| SemanticSearchError::ModelInitError(format!("embed worker pool: {e}")))?;
-
-        tracing::info!(
-            target: "semantic",
-            "Embedding pool ready: {pool_size} instances, {dimensions} dimensions"
-        );
-
+        tracing::info!(target: "semantic", "Embedding pool ready: {pool_size} instances, {dimensions} dimensions");
         Ok(Self {
             instances: InstancePool::new(models),
             embed_workers,
@@ -328,6 +299,7 @@ impl EmbeddingPool {
             model_name,
             input_budget: input_budget.expect("pool initializes at least one model"),
             usage_counters,
+            usage_log: UsageLogGate::new(),
         })
     }
 
@@ -345,62 +317,40 @@ impl EmbeddingPool {
     }
 
     /// Get the embedding dimensions.
-    pub fn dimensions(&self) -> usize {
-        self.dimensions
-    }
+    pub fn dimensions(&self) -> usize { self.dimensions }
 
     /// Get the pool size.
-    pub fn pool_size(&self) -> usize {
-        self.instances.size
-    }
+    pub fn pool_size(&self) -> usize { self.instances.size }
 
     /// Get the model name.
-    pub fn model_name(&self) -> &str {
-        &self.model_name
-    }
+    pub fn model_name(&self) -> &str { &self.model_name }
 
     /// Generate embedding for a single text. Thread-safe via pool acquire/release.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>, SemanticSearchError> {
         if text.trim().is_empty() {
-            return Err(SemanticSearchError::EmbeddingError(
-                "Empty text".to_string(),
-            ));
+            return Err(SemanticSearchError::EmbeddingError("Empty text".to_string()));
         }
-
-        self.input_budget
-            .validate([text])
-            .map_err(SemanticSearchError::EmbeddingError)?;
-
+        self.input_budget.validate([text]).map_err(SemanticSearchError::EmbeddingError)?;
         let mut instance = self.acquire()?;
-        let result = instance
-            .model
-            .embed(vec![text], None)
+        let result = instance.model.embed(vec![text], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()));
         drop(instance);
-
         result.map(|mut v| v.remove(0))
     }
 
-    /// Log usage statistics for all model instances.
+    /// Log usage statistics for all model instances. Explicit final/progress
+    /// reports remain unthrottled, but disabled INFO logging allocates nothing.
     pub fn log_usage_stats(&self) {
-        let counts: Vec<usize> = self
-            .usage_counters
-            .iter()
-            .map(|c| c.load(Ordering::Relaxed))
-            .collect();
+        if !tracing::enabled!(target: "semantic", tracing::Level::INFO) {
+            return;
+        }
+        let counts: Vec<usize> = self.usage_counters.iter()
+            .map(|c| c.load(Ordering::Relaxed)).collect();
         let total: usize = counts.iter().sum();
-
         if total > 0 {
-            let usage_str: Vec<String> = counts
-                .iter()
-                .enumerate()
-                .map(|(i, c)| format!("model[{i}]={c}"))
-                .collect();
-            tracing::info!(
-                target: "semantic",
-                "Embedding pool usage: {} (total: {total})",
-                usage_str.join(", ")
-            );
+            let usage_str: Vec<String> = counts.iter().enumerate()
+                .map(|(i, c)| format!("model[{i}]={c}")).collect();
+            tracing::info!(target: "semantic", "Embedding pool usage: {} (total: {total})", usage_str.join(", "));
         }
     }
 
@@ -429,67 +379,43 @@ impl EmbeddingPool {
         items: &[(SymbolId, &str, &str)],
         preserve_whitespace: bool,
     ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
-        use rayon::prelude::*;
-
         const MAX_BATCH_SIZE: usize = 64;
-
-        self.input_budget
-            .validate(items.iter().map(|(_, text, _)| *text))
+        self.input_budget.validate(items.iter().map(|(_, text, _)| *text))
             .map_err(SemanticSearchError::EmbeddingError)?;
-
         let valid_items = batch_inputs(items, preserve_whitespace);
-
-        if valid_items.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // The caller already bounds the total item count with the current
-        // memory budget. Split that allowance across available instances so a
-        // 32/64-item indexing batch can actually occupy the model pool.
+        if valid_items.is_empty() { return Ok(Vec::new()); }
+        // Retain the same per-instance batch sizing and dedicated worker pool.
         let batch_size = parallel_batch_size(valid_items.len(), self.pool_size(), MAX_BATCH_SIZE);
-
-        // Failed batches warn and skip; pool exhaustion aborts the whole call.
         let results: Result<Vec<Vec<_>>, SemanticSearchError> = self.embed_workers.install(|| {
-            valid_items
-                .chunks(batch_size)
-                .par_bridge()
-                .map(|batch| {
-                    let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
-
-                    let mut instance = self.acquire()?;
-                    let embeddings_result = instance.model.embed(texts, None);
-                    drop(instance);
-
-                    match embeddings_result {
-                        Ok(embeddings) => {
-                            let mut results = Vec::with_capacity(batch.len());
-                            for (item, embedding) in batch.iter().zip(embeddings) {
-                                let (symbol_id, _, language) = *item;
-                                if embedding.len() == self.dimensions {
-                                    results.push((*symbol_id, embedding, (*language).to_string()));
-                                } else {
-                                    tracing::warn!(
-                                        target: "semantic",
-                                        "Dimension mismatch for {}: expected {}, got {}",
-                                        symbol_id.to_u32(),
-                                        self.dimensions,
-                                        embedding.len()
-                                    );
-                                }
+            map_batches(&valid_items, batch_size, |batch| {
+                let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
+                let mut instance = self.acquire()?;
+                let embeddings_result = instance.model.embed(texts, None);
+                drop(instance);
+                match embeddings_result {
+                    Ok(embeddings) => {
+                        let mut results = Vec::with_capacity(batch.len());
+                        for (item, embedding) in batch.iter().zip(embeddings) {
+                            let (symbol_id, _, language) = *item;
+                            if embedding.len() == self.dimensions {
+                                results.push((*symbol_id, embedding, (*language).to_string()));
+                            } else {
+                                tracing::warn!(target: "semantic", "Dimension mismatch for {}: expected {}, got {}", symbol_id.to_u32(), self.dimensions, embedding.len());
                             }
-                            Ok(results)
                         }
-                        Err(e) => {
-                            tracing::warn!(target: "semantic", "Batch embedding failed: {e}");
-                            Ok(Vec::new())
-                        }
+                        Ok(results)
                     }
-                })
-                .collect()
+                    Err(e) => {
+                        tracing::warn!(target: "semantic", "Batch embedding failed: {e}");
+                        Ok(Vec::new())
+                    }
+                }
+            })
         });
-
         let results = results?.into_iter().flatten().collect();
-        self.log_usage_stats();
+        if tracing::enabled!(target: "semantic", tracing::Level::INFO) && self.usage_log.should_log() {
+            self.log_usage_stats();
+        }
         Ok(results)
     }
 }
@@ -498,16 +424,9 @@ fn batch_inputs<'a, 'text>(
     items: &'a [(SymbolId, &'text str, &'text str)],
     preserve_whitespace: bool,
 ) -> Vec<&'a (SymbolId, &'text str, &'text str)> {
-    items
-        .iter()
-        .filter(|(_, text, _)| {
-            if preserve_whitespace {
-                !text.is_empty()
-            } else {
-                !text.trim().is_empty()
-            }
-        })
-        .collect()
+    items.iter().filter(|(_, text, _)| {
+        if preserve_whitespace { !text.is_empty() } else { !text.trim().is_empty() }
+    }).collect()
 }
 
 #[cfg(test)]
@@ -520,31 +439,18 @@ mod tests {
         let body = "a               b";
         let budget = InputBudget::remote(Some(3), None).unwrap();
         let ranges = budget.document_ranges("", body).unwrap();
-        let items: Vec<_> = ranges
-            .iter()
-            .enumerate()
-            .map(|(index, range)| {
-                (
-                    SymbolId::new(index as u32 + 1).unwrap(),
-                    &body[range.clone()],
-                    "document",
-                )
-            })
-            .collect();
+        let items: Vec<_> = ranges.iter().enumerate().map(|(index, range)| {
+            (SymbolId::new(index as u32 + 1).unwrap(), &body[range.clone()], "document")
+        }).collect();
         assert!(items.iter().any(|(_, text, _)| text.trim().is_empty()));
         let documents = batch_inputs(&items, true);
         assert_eq!(documents.len(), items.len());
-        assert_eq!(
-            documents
-                .iter()
-                .map(|(_, text, _)| *text)
-                .collect::<String>(),
-            body
-        );
+        assert_eq!(documents.iter().map(|(_, text, _)| *text).collect::<String>(), body);
         assert_eq!(batch_inputs(&items, false).len(), 2);
         let empty = [(SymbolId::new(1).unwrap(), "", "document")];
         assert!(batch_inputs(&empty, true).is_empty());
     }
+
     #[test]
     fn parallel_batches_fill_workers_without_exceeding_item_budget() {
         assert_eq!(parallel_batch_size(64, 4, 64), 16);
@@ -565,11 +471,7 @@ mod tests {
         let pool = InstancePool::new(vec![(), ()]);
         let _a = pool.acquire(Duration::from_millis(10)).unwrap();
         let _b = pool.acquire(Duration::from_millis(10)).unwrap();
-
-        let err = pool
-            .acquire(Duration::from_millis(50))
-            .err()
-            .expect("third acquire must time out");
+        let err = pool.acquire(Duration::from_millis(50)).err().expect("third acquire must time out");
         let msg = err.to_string();
         assert!(msg.contains("pool size 2"), "error names pool size: {msg}");
     }
@@ -580,26 +482,18 @@ mod tests {
         let guard = pool.acquire(Duration::from_millis(10));
         assert!(guard.is_ok());
         drop(guard);
-
         assert!(pool.acquire(Duration::from_millis(10)).is_ok());
     }
 
     #[test]
     fn test_panicking_holder_returns_instance_to_pool() {
         let pool = InstancePool::new(vec![()]);
-
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = pool
-                .acquire(Duration::from_millis(10))
-                .expect("acquire with instance available");
+            let _guard = pool.acquire(Duration::from_millis(10)).expect("acquire with instance available");
             panic!("simulated embed panic");
         }));
         assert!(result.is_err());
-
-        assert!(
-            pool.acquire(Duration::from_millis(50)).is_ok(),
-            "instance must return to the pool during unwind"
-        );
+        assert!(pool.acquire(Duration::from_millis(50)).is_ok(), "instance must return to the pool during unwind");
     }
 
     #[test]
