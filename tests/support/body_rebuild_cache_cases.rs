@@ -7,6 +7,47 @@ use std::path::PathBuf;
 const BODY_SOURCE: &str =
     "/// alpha owner.\npub fn alpha_owner() -> u8 { helper() }\npub fn helper() -> u8 { 1 }\n";
 
+#[test]
+fn body_v2_cross_window_rebuild_reuses_inputs_and_invalidates_one_edit() {
+    let endpoint = Endpoint::start(2);
+    let workspace = Workspace::new(&endpoint);
+    workspace.configure(
+        &endpoint,
+        "fixture-model",
+        2,
+        "code_representation = \"symbol_body_v2\"",
+    );
+    // More than the 64-input body window, all without documentation comments.
+    let source: String = (0..80)
+        .map(|index| format!("pub fn body_{index}() -> u8 {{ 1 }}\n"))
+        .collect();
+    let names: Vec<_> = (0..80).map(|index| format!("body_{index}")).collect();
+    let borrowed: Vec<_> = names.iter().map(String::as_str).collect();
+    workspace.source(&source);
+    workspace.rebuild();
+    let cold_inputs = sent(&endpoint, 80);
+    assert_eq!(cold_inputs.iter().collect::<HashSet<_>>().len(), 80);
+    let old_ids = current_ids(&workspace, &borrowed);
+
+    // New IDs and shifted byte ranges must still reuse exact body-v2 inputs.
+    let shifted = format!("pub const SHIFT_ID: u8 = 0;\n{source}");
+    workspace.source(&shifted);
+    workspace.rebuild();
+    sent(&endpoint, 0);
+    let new_ids = current_ids(&workspace, &borrowed);
+    assert_ne!(old_ids, new_ids);
+
+    workspace.source(&shifted.replace(
+        "pub fn body_37() -> u8 { 1 }",
+        "pub fn body_37() -> u8 { 2 }",
+    ));
+    workspace.rebuild();
+    let edited_inputs = sent(&endpoint, 1);
+    assert!(edited_inputs[0].contains("body_37"));
+    assert!(edited_inputs[0].contains("{ 2 }"));
+    current_ids(&workspace, &borrowed);
+}
+
 fn tree(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, Option<std::time::SystemTime>)> {
     let mut result = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];

@@ -41,9 +41,24 @@ windows and count/byte bounds. Run:
 cargo test --lib indexing::pipeline::stages::semantic_embed
 ```
 
-Also run existing body/cache-admission/source-provenance and retrieval fixtures, followed by
-the repository quick/full gates. Neither those tests nor Mac benchmarks were executed in
-the editing environment; fixture addition is not a passing qualification.
+September 30 native macOS follow-up: `cargo test --lib indexing::pipeline::stages::`
+passed 129 tests (zero failed/ignored). The prepared CLI witness
+`body_v2_cross_window_rebuild_reuses_inputs_and_invalidates_one_edit` also passed:
+80 commentless v2 parents cross the 64-input window boundary, a warm forced rebuild
+remaps IDs with zero inferred source inputs, and one body edit infers exactly one
+input. Each publication is reopened to verify parent vector coverage. The joined
+loopback transport and cleared child environments require no model or credentials.
+
+Run existing body/cache-admission/source-provenance and retrieval fixtures, followed
+by repository gates; the PR records further execution results. Native model and
+Assign throughput benchmarks remain unexecuted. This fixture does not establish
+batch-invariant model numerics, exact range mappings, or failure-window atomicity.
+
+The complete prepared `semantic_rebuild_reuse` integration suite passed 21 tests,
+zero failed/ignored, including the existing cache-pressure/identity fixtures.
+`./contributing/scripts/quick-check.sh` passed formatting and strict all-target,
+all-feature Clippy on macOS. The full repository gate has not been rerun on this
+branch; another PR's full-suite results are not qualification for this head.
 
 Compare frozen v1/v2 body-policy inputs and stored range mappings before/after, including
 collector batches larger than cache capacity, warm/cold caches, duplicates crossing windows,
