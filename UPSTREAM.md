@@ -226,3 +226,8 @@ graph-only baseline comparisons and passing default/all-feature Linux CI. The
 original resource-exhausted CI run is preserved as failed evidence. This adds
 qualification evidence only; the upstream review date and compatibility remain
 unchanged. No tag, installed binary or active Assign index changed in this step.
+
+After user approval, tag `v1.0.0-rc5` was pushed at qualified commit `be166174`
+and the tested macOS executables were installed with hash and scratch-MCP
+verification. `contributing/release-results/2026-09-30-rc5-installation.md` records
+rollback and existing-server limits. No index/schema or upstream status changed.

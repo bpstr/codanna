@@ -11,6 +11,7 @@ For the executable-level checklist and model-free scratch commands, see the
 
 Latest local binary qualification: [September 30 RC5](release-results/2026-09-30-rc5.md).
 Previous broader qualification: [September 29, 2026 — no-go](release-results/2026-09-29-qualification.md).
+Latest installation receipt: [September 30 RC5](release-results/2026-09-30-rc5-installation.md).
 Previous installation receipt: [September 29 RC4](release-results/2026-09-29-rc4.md).
 Previous baseline: [September 29 RC3](release-results/2026-09-29.md).
 
