@@ -182,3 +182,17 @@ The following areas should be assumed downstream unless deliberately proposed up
 - fork-specific review, stress, and product integration tooling.
 
 Upstream changes in these areas are inputs for comparison, not automatic replacements.
+
+### September 30 document cache follow-up
+
+September 30 scoped fork performance follow-up (the upstream review date above
+is unchanged): fork main `c5f0a93ad50babab5cae5788370baee56ec8a21d` and all open
+performance PR diffs #87 (`690fed37`), #88 (`1745582c`, then the reviewed/tested
+`cc958518` follow-up), #89 (`39f9905a`)
+were inspected, along with recent merges #79–#86. GitHub parent/source and both
+`main` defaults were rechecked; upstream main still resolved to `58295d290`.
+No full upstream issue/PR status refresh is claimed.
+
+| Fork work | State and compatibility | Evidence |
+| --- | --- | --- |
+| Preserve document starting-cache hits across embedding batches | **DOWNSTREAM, pending in this PR**; independent of the three open code/runtime performance drafts. Same body-v2/source policy, model identity, cache format and index schema; no rebuild required. Retains one bounded cache snapshot per embedding run. | `src/documents/store.rs`: `document_runs_preserve_starting_cache_hits_across_batches`; `contributing/performance/assign-indexing-2026-09-30.md`. The regression failed before the fix (65 inferred inputs instead of 64); after the fix, `cargo test --lib documents::` passed 69 tests, zero failed/ignored. Strict quick checks and the serial full gate passed (2,707 passed, 63 ignored, zero failed; CLI/docs/MCP passed). No Assign speedup or native model qualification is claimed. |
