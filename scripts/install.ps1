@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "bartolli/codanna"
+$Repo = "bpstr/codanna"
 $InstallDir = if ($env:CODANNA_INSTALL_DIR) { $env:CODANNA_INSTALL_DIR } else { "$env:USERPROFILE\.local\bin" }
 
 function Say($msg) { Write-Host "codanna: $msg" }

@@ -12,7 +12,7 @@ See our [Contributing Guide](./contributing/README.md) for:
 
 ```bash
 # Fork and clone
-git clone https://github.com/bartolli/codanna.git
+git clone https://github.com/bpstr/codanna.git
 cd codanna
 
 # Build
@@ -36,6 +36,6 @@ cargo build --release --all-features
 
 ## Getting Help
 
-- Issues: Check existing [issues](https://github.com/bartolli/codanna/issues) or create new ones
+- Issues: Check existing [issues](https://github.com/bpstr/codanna/issues) or create new ones
 - Discussions: Use GitHub Discussions for questions
 - Before implementing: Create an issue first to discuss proposed changes

@@ -571,6 +571,22 @@ impl SimpleSemanticSearch {
         }
     }
 
+    /// Create an empty local index without owning an embedding model. The
+    /// facade's shared backend performs both indexing and query inference.
+    pub fn new_empty_local(dimensions: usize, model_name: &str) -> Self {
+        let metadata =
+            crate::semantic::SemanticMetadata::new(model_name.to_string(), dimensions, 0);
+        Self {
+            embeddings: Arc::new(HashMap::new()),
+            symbol_languages: Arc::new(HashMap::new()),
+            model: None,
+            dimensions,
+            metadata: Some(metadata),
+            persistence: Arc::new(Mutex::new(super::journal::Persistence::default())),
+            persist_io: Arc::new(Mutex::new(())),
+        }
+    }
+
     /// Load symbol-to-language mappings from `languages.json`.
     pub(super) fn load_symbol_languages(
         path: &Path,

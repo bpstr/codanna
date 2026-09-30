@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-09-13
+
+First stable 1.x release.
+
+### Added
+
+- Adaptive memory budgeting scales embedding concurrency, inference batches, and byte-heavy indexing queues from currently available RAM. A busy 8 GB host stays in a constrained lane, while machines with additional headroom retain configured parallelism.
+- Automatic accelerator selection falls back from CoreML or CUDA to CPU when memory headroom is too low. Explicit provider selections remain available for operators who need them.
+
+### Changed
+
+- Code semantic indexing and queries share one embedding backend instead of constructing an additional ONNX Runtime/CoreML model session.
+- Document indexing spools chunk text to disk, writes embeddings incrementally, and no longer retains the complete vector corpus for clustering.
+- Document similarity scoring scans selected memory-mapped vectors once without allocating an owned vector for every candidate.
+- The canonical project repository and installation links now use `bpstr/codanna`.
+
+### Fixed
+
+- Prevented the multiplicative native-memory growth that could drive a CoreML indexing process into severe macOS swap pressure.
+
 ## [0.16.0] - 2026-08-29
 
 Receiver-typed call resolution reaches seven more languages: local and parameter declarations now supply receiver types for PHP, Java, Kotlin, Go, Swift, GDScript, and C#. Index format and emission semantics are unchanged (v3); receiver bindings are resolved in memory and never persisted.

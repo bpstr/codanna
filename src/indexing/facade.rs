@@ -210,8 +210,9 @@ impl IndexFacade {
         let backend = build_embedding_backend(&self.settings.semantic_search)?;
         let backend = Arc::new(backend);
 
-        // In remote mode, skip local fastembed init; use new_empty so the
-        // SemanticSearch instance carries the correct dimension from the backend.
+        // The backend is the sole model owner for both indexing and queries.
+        // Constructing another TextEmbedding here multiplies CoreML/ORT native
+        // memory by adding a session outside the configured pool.
         let is_remote = self.settings.semantic_search.remote_url.is_some()
             || std::env::var("CODANNA_EMBED_URL").is_ok();
         let semantic = if is_remote {
@@ -221,7 +222,7 @@ impl IndexFacade {
             )
         } else {
             let model = &self.settings.semantic_search.model;
-            SimpleSemanticSearch::from_model_name(model)?
+            SimpleSemanticSearch::new_empty_local(backend.dimensions(), model)
         };
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
@@ -260,13 +261,9 @@ impl IndexFacade {
     /// Embedding pool for generating new embeddings is initialized lazily.
     pub fn load_semantic_search(&mut self, path: &Path) -> FacadeResult<bool> {
         if path.join("metadata.json").exists() {
-            let is_remote = self.settings.semantic_search.remote_url.is_some()
-                || std::env::var("CODANNA_EMBED_URL").is_ok();
-            let load_result = if is_remote {
-                SimpleSemanticSearch::load_remote(path)
-            } else {
-                SimpleSemanticSearch::load(path)
-            };
+            // Query inference is already owned by embedding_pool. Loading a
+            // second local model here duplicates native runtime allocations.
+            let load_result = SimpleSemanticSearch::load_remote(path);
             match load_result {
                 Ok(semantic) => {
                     // Restore the embedding backend so query-time remote embedding
@@ -1700,7 +1697,19 @@ pub fn build_embedding_backend(
     }
 
     // Local fastembed pool
-    let pool_size = cfg.embedding_threads;
+    let requested_pool_size = cfg.embedding_threads.max(1);
+    let memory = crate::memory::MemoryBudget::current();
+    let accelerated = crate::memory::accelerated_embeddings_requested();
+    let pool_size = memory.embedding_instances(requested_pool_size, accelerated);
+    if pool_size < requested_pool_size {
+        tracing::warn!(
+            target: "semantic",
+            "memory-aware embedding pool: requested {requested_pool_size}, using {pool_size} \
+             (available={} MiB, adaptive headroom={} MiB)",
+            memory.available / (1024 * 1024),
+            memory.headroom / (1024 * 1024),
+        );
+    }
     let embedding_model = crate::vector::parse_embedding_model(&cfg.model)
         .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
     let pool = EmbeddingPool::new(pool_size, embedding_model)

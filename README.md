@@ -11,9 +11,9 @@
 <p align="center">
   <a href="https://docs.codanna.sh/" target="_blank">Documentation</a>
   ·
-  <a href="https://github.com/bartolli/codanna/issues">Report Bug</a>
+  <a href="https://github.com/bpstr/codanna/issues">Report Bug</a>
   ·
-  <a href="https://github.com/bartolli/codanna/discussions">Discussions</a>
+  <a href="https://github.com/bpstr/codanna/discussions">Discussions</a>
 </p>
 
 <h2></h2>
@@ -25,7 +25,7 @@
 </div>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/bartolli/codanna/main/assets/readme/disc-tour.webp" alt="The codanna index as an interactive disc: module wedges, call webs, symbol search, commit timeline" width="100%">
+  <img src="https://raw.githubusercontent.com/bpstr/codanna/main/assets/readme/disc-tour.webp" alt="The codanna index as an interactive disc: module wedges, call webs, symbol search, commit timeline" width="100%">
 </p>
 
 Codanna is a local code intelligence and semantic code search MCP server for AI coding agents. One MCP call returns symbol context, call graph, and impact analysis, pre-correlated — the grep-and-read loop your agent runs today, collapsed into a single response it can act on.
@@ -118,12 +118,12 @@ brew install codanna
 ### Or via Nix
 
 ```bash
-nix run github:bartolli/codanna
+nix run github:bpstr/codanna
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/bartolli/codanna/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/bpstr/codanna/main/scripts/install.ps1 | iex
 ```
 
 See [Installation Guide](https://docs.codanna.sh/installation) for Cargo and other options.
@@ -178,12 +178,12 @@ The difference: Codanna understands code structure. It knows `parseConfig` is a 
 Two skills over the index, driven by the agent: it picks the view that fits the question. **x-ray** covers scoped questions — a symbol's blast radius as a call DAG, module structure as a collapsible tree or radial poster, cross-module calls as an edge-bundle page. **graph** covers codebase shape: the module disc with hubs at the centre, a commit timeline, and a heatmap. Symbol search, detail panels with highlighted signatures, call-graph navigation. The disc renderer is adapted from [vault-graph](https://github.com/luke321/vault-graph) by Lukas Proprentner (MIT).
 
 ```
-/plugin marketplace add bartolli/codanna
+/plugin marketplace add bpstr/codanna
 /plugin install codanna-toolset@codanna
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/bartolli/codanna/main/assets/readme/xray-tree.webp" alt="The x-ray collapsible tree: module structure with symbol detail panels and call-graph navigation" width="100%">
+  <img src="https://raw.githubusercontent.com/bpstr/codanna/main/assets/readme/xray-tree.webp" alt="The x-ray collapsible tree: module structure with symbol detail panels and call-graph navigation" width="100%">
 </p>
 
 ## Integration
@@ -206,6 +206,7 @@ Add codanna to any MCP-compatible client. Project-scoped `.mcp.json` (Claude Cod
 ## Requirements
 
 - ~150MB for the default AllMiniLML6V2 embedding model (downloaded on first use)
+- Indexing adapts to currently available memory: model concurrency, inference batches, and pipeline queues shrink on a busy host and expand when the machine has headroom. With `CODANNA_EMBED_PROVIDER=auto`, constrained machines use CPU embeddings instead of starting CoreML or CUDA.
 - **Build from source:** Rust 1.85+, Linux needs `pkg-config libssl-dev`
 - Windows support is experimental
 

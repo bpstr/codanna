@@ -18,6 +18,8 @@
 use fastembed::ExecutionProviderDispatch;
 use std::str::FromStr;
 
+use crate::memory::MemoryBudget;
+
 const PROVIDER_ENV: &str = "CODANNA_EMBED_PROVIDER";
 const STRICT_ENV: &str = "CODANNA_EMBED_PROVIDER_STRICT";
 
@@ -49,6 +51,17 @@ fn strict_provider_registration() -> bool {
     std::env::var(STRICT_ENV)
         .ok()
         .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+fn adapt_provider_to_memory(
+    provider: EmbeddingExecutionProvider,
+    memory: MemoryBudget,
+) -> EmbeddingExecutionProvider {
+    if provider == EmbeddingExecutionProvider::Auto && !memory.accelerator_suitable() {
+        EmbeddingExecutionProvider::Cpu
+    } else {
+        provider
+    }
 }
 
 #[cfg(feature = "gpu-embeddings")]
@@ -149,13 +162,24 @@ pub fn configure_embedding_runtime() {
         Err(_) => return,
     };
 
-    let provider = match EmbeddingExecutionProvider::from_str(&raw) {
+    let requested_provider = match EmbeddingExecutionProvider::from_str(&raw) {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!("codanna: {error}; using CPU embeddings");
             return;
         }
     };
+
+    let memory = MemoryBudget::current();
+    let provider = adapt_provider_to_memory(requested_provider, memory);
+    if requested_provider == EmbeddingExecutionProvider::Auto
+        && provider == EmbeddingExecutionProvider::Cpu
+    {
+        eprintln!(
+            "codanna: available memory is constrained ({} MiB available); using CPU embeddings instead of an accelerator",
+            memory.available / (1024 * 1024)
+        );
+    }
 
     if provider == EmbeddingExecutionProvider::Cpu {
         return;
@@ -221,5 +245,19 @@ mod tests {
     fn rejects_unknown_execution_provider() {
         let error = EmbeddingExecutionProvider::from_str("metal").unwrap_err();
         assert!(error.contains("expected cpu, auto, coreml, or cuda"));
+    }
+
+    #[test]
+    fn auto_provider_falls_back_to_cpu_on_a_busy_small_host() {
+        let gib = 1024 * 1024 * 1024;
+        let memory = MemoryBudget::from_values(8 * gib, 2 * gib, 0);
+        assert_eq!(
+            adapt_provider_to_memory(EmbeddingExecutionProvider::Auto, memory),
+            EmbeddingExecutionProvider::Cpu
+        );
+        assert_eq!(
+            adapt_provider_to_memory(EmbeddingExecutionProvider::CoreMl, memory),
+            EmbeddingExecutionProvider::CoreMl
+        );
     }
 }

@@ -46,7 +46,7 @@ sudo dnf install pkgconfig openssl-devel
 
 1. **Fork and clone the repository:**
    ```bash
-   git clone https://github.com/bartolli/codanna.git
+   git clone https://github.com/bpstr/codanna.git
    cd codanna
    ```
 
@@ -322,7 +322,7 @@ Brief description of changes
 
 ## Getting Help
 
-- **Issues**: Check existing [issues](https://github.com/bartolli/codanna/issues) or create new ones
+- **Issues**: Check existing [issues](https://github.com/bpstr/codanna/issues) or create new ones
 - **Discussions**: Use GitHub Discussions for questions
 - **Documentation**: See `/docs` folder for detailed documentation
 - **Before implementing**: Create an issue first to discuss your proposed changes

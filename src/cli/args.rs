@@ -92,7 +92,7 @@ fn create_custom_help() -> String {
     } else {
         help.push_str(&format!("{}\n", style("Learn More:").cyan().bold()));
     }
-    help.push_str("  GitHub: https://github.com/bartolli/codanna");
+    help.push_str("  GitHub: https://github.com/bpstr/codanna");
 
     help
 }

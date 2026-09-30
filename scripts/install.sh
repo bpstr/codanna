@@ -3,7 +3,7 @@ set -eu
 
 # codanna installer - reads dist-manifest.json from GitHub releases
 
-REPO="bartolli/codanna"
+REPO="bpstr/codanna"
 INSTALL_DIR="${CODANNA_INSTALL_DIR:-$HOME/.local/bin}"
 
 # Colors (respects NO_COLOR and non-terminal output)

@@ -111,8 +111,23 @@ impl ContextStage {
                 .get(&file_id)
                 .cloned()
                 .unwrap_or_default();
-            let context = self.build_context_for_file(file_id, rels, bindings, barriers)?;
-            contexts.push(context);
+            let relationship_count = rels.len();
+            match self.build_context_for_file(file_id, rels, bindings, barriers) {
+                Ok(context) => contexts.push(context),
+                Err(IndexError::UnknownLanguage { ref language }) if language == "unknown" => {
+                    // A relationship without a surviving source symbol has no
+                    // trustworthy language behavior or caller identity. It is
+                    // unresolvable by construction, so fail closed for that
+                    // relationship group without discarding the complete index.
+                    tracing::warn!(
+                        target: "pipeline",
+                        "skipping {relationship_count} unattributed relationships for file_id={} \
+                         because no source symbol survived parsing",
+                        file_id.value(),
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         Ok(contexts)
@@ -133,11 +148,20 @@ impl ContextStage {
         // Get local symbols from cache (O(1))
         let local_symbols = self.symbol_cache.symbols_in_file(file_id);
 
-        // Get language_id from first local symbol (all symbols in file share same language)
+        // Prefer the relationship's attributed source symbol. Some parsers can
+        // emit a relationship whose source is valid even when the file-local
+        // list is empty after filtering; defaulting that context to "unknown"
+        // aborts an otherwise valid repository-wide index.
+        let mut language_cache = HashMap::new();
         let language_id = local_symbols
             .first()
             .and_then(|id| self.symbol_cache.get(*id))
             .and_then(|sym| sym.language_id)
+            .or_else(|| {
+                unresolved_rels
+                    .first()
+                    .and_then(|rel| self.language_for_rel(rel, &mut language_cache))
+            })
             .unwrap_or_else(|| LanguageId::new("unknown"));
 
         // Get behavior for this language
@@ -366,6 +390,29 @@ mod tests {
         assert_eq!(file2.unresolved_rels.len(), 1);
         assert_eq!(file2.local_symbols.len(), 1);
         assert_eq!(file2.language_id.as_str(), "typescript");
+    }
+
+    #[test]
+    fn unattributed_relationship_group_does_not_abort_indexing() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Arc::new(Settings::default());
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let stage = ContextStage::new(
+            Arc::new(SymbolLookupCache::new()),
+            index,
+            make_factory(),
+            settings,
+        );
+
+        let contexts = stage
+            .build_contexts(
+                vec![make_unresolved("removed_source", "target", 99)],
+                &HashMap::new(),
+                &HashMap::new(),
+            )
+            .unwrap();
+
+        assert!(contexts.is_empty());
     }
 
     #[test]
