@@ -19,6 +19,7 @@ use crate::storage::DocumentIndex;
 use crate::types::FileId;
 use crate::{IndexError, IndexResult, RelationKind};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 type PositionedParent = (Option<(u32, u32)>, crate::SymbolId);
@@ -373,6 +374,29 @@ impl ContextStage {
 
         // Get behavior for this language
         let behavior = self.get_behavior(language_id)?;
+
+        // Symbol cards use portable display paths. Project selection must use
+        // the registration's source identity, which is unambiguous across roots.
+        if let Some(path) = self.index.get_file_path(file_id)? {
+            let path = PathBuf::from(path);
+            let path = if path.is_relative() {
+                self.settings
+                    .workspace_root
+                    .as_ref()
+                    .map_or(path.clone(), |root| root.join(&path))
+            } else {
+                path
+            };
+            let module = local_symbols
+                .iter()
+                .find_map(|id| {
+                    self.symbol_cache
+                        .get(*id)
+                        .and_then(|symbol| symbol.module_path)
+                })
+                .unwrap_or_default();
+            behavior.register_file(path, file_id, module.to_string());
+        }
 
         // Get raw imports from Tantivy
         let raw_imports = self.index.get_imports_for_file(file_id)?;

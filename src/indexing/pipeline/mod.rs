@@ -38,6 +38,7 @@ mod incremental;
 pub mod metrics;
 mod phase1;
 mod phase2;
+mod project_changes;
 pub mod stages;
 mod stats;
 pub mod types;
@@ -86,6 +87,20 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    fn require_complete_phase1(
+        &self,
+        stats: &crate::indexing::IndexStats,
+        expected: Option<usize>,
+    ) -> PipelineResult<()> {
+        if stats.files_failed != 0 || expected.is_some_and(|count| stats.files_indexed != count) {
+            return Err(PipelineError::Index(crate::IndexError::General(format!(
+                "Incomplete indexing: {} files indexed, {} failed; pending resolution retained",
+                stats.files_indexed, stats.files_failed
+            ))));
+        }
+        Ok(())
+    }
+
     /// Create a new pipeline with the given settings and configuration.
     pub fn new(settings: Arc<Settings>, config: PipelineConfig) -> Self {
         let dependency_roots = settings.indexed_paths_cache.iter().cloned().collect();

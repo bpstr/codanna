@@ -44,6 +44,7 @@ pub struct PendingResolution {
     completed_queue: std::collections::HashSet<PathBuf>,
     /// Any failure after starting a writer requires recovery, not blind replay.
     phase2_attempted: bool,
+    project_fingerprint: Option<u64>,
 }
 
 impl PendingResolution {
@@ -144,6 +145,7 @@ impl Pipeline {
             embedding_pool: embedding_pool.clone(),
             ..PendingResolution::default()
         };
+        pending.project_fingerprint = self.refresh_project_bindings(&index)?;
         let mut stats = self.index_file_content(
             path,
             Arc::clone(&index),
@@ -172,6 +174,7 @@ impl Pipeline {
         pending: &mut PendingResolution,
     ) -> PipelineResult<SingleFileStats> {
         pending.bounded_inventory = true;
+        pending.project_fingerprint = self.refresh_project_bindings(&index)?;
         let mut settings = (*self.settings).clone();
         settings.indexed_paths_cache.push(root.to_path_buf());
         Self::with_settings(Arc::new(settings)).index_file_content(
@@ -196,6 +199,7 @@ impl Pipeline {
     ) -> PipelineResult<SingleFileStats> {
         let path = content.path.clone();
         pending.bounded_inventory = true;
+        pending.project_fingerprint = self.refresh_project_bindings(&index)?;
         self.index_file_content(
             &path,
             index,
@@ -513,6 +517,7 @@ impl Pipeline {
             )));
         }
         self.register_dependency_root(root);
+        pending.project_fingerprint = self.refresh_project_bindings(&index)?;
         pending.embedding_pool = embedding_pool.clone();
         use crate::io::status_line::{
             ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
@@ -694,10 +699,6 @@ impl Pipeline {
                 .cloned()
                 .collect();
 
-            pending
-                .processed_paths
-                .extend(files_to_index.iter().cloned());
-
             // Validate parser construction for every language in the
             // change set BEFORE removing the modified files' old rows: a
             // config error must fail the run with the rows still in place.
@@ -765,6 +766,7 @@ impl Pipeline {
                 }),
                 _ => None,
             };
+            let expected = files_to_index.len();
             let (stats, unresolved, bindings, barriers, _run_cache, metrics) = self.run_phase1(
                 FileSource::List(files_to_index),
                 Arc::clone(&index),
@@ -785,6 +787,20 @@ impl Pipeline {
                 eprintln!("{bar}");
             }
 
+            self.require_complete_phase1(&stats, Some(expected))?;
+            pending
+                .processed_paths
+                .extend(discover_result.new_files.iter().cloned());
+            pending
+                .processed_paths
+                .extend(discover_result.modified_files.iter().cloned());
+            pending.processed_paths.extend(
+                discover_result
+                    .renamed_files
+                    .iter()
+                    .map(|(_, new)| new.clone()),
+            );
+
             let counts = (
                 discover_result.new_files.len(),
                 modified_on_disk,
@@ -804,6 +820,7 @@ impl Pipeline {
             )
         };
 
+        self.require_complete_phase1(&index_stats, None)?;
         if force {
             let normalized_root = self
                 .settings
@@ -861,19 +878,35 @@ impl Pipeline {
         }
         let semantic_path = self.settings.index_path.join("semantic");
         if !pending.prepared {
+            if pending.project_fingerprint.is_none() {
+                pending.project_fingerprint = self.refresh_project_bindings(&index)?;
+            }
             pending.phase2_attempted = true;
             let mut queued: std::collections::HashSet<_> =
                 index.get_pending_resolution_paths()?.into_iter().collect();
             if !pending.ran && (pending.bounded_inventory || queued.is_empty()) {
+                self.complete_project_bindings(&index, pending.project_fingerprint)?;
                 *pending = PendingResolution::default();
                 return Ok(Phase2Stats::default());
             }
 
             let dependency_settings = self.settings_with_dependency_roots();
+            let fresh_captures: std::collections::HashSet<_> = pending
+                .captured_inbound
+                .iter()
+                .filter_map(|edge| edge.fresh_recovery_path.clone())
+                .collect();
+            let mut dependency_changes = pending.changed_paths.clone();
+            dependency_changes.extend(
+                queued
+                    .iter()
+                    .filter(|path| !fresh_captures.contains(*path))
+                    .cloned(),
+            );
             let dependents = super::dependencies::import_dependents(
                 &index,
                 &dependency_settings,
-                &pending.changed_paths,
+                &dependency_changes,
                 &pending.processed_paths,
             )?;
             let dirty_sources = super::dependencies::invalidate_importers(&index, &dependents)?;
@@ -882,6 +915,12 @@ impl Pipeline {
                 .captured_inbound
                 .retain(|edge| !dirty_sources.contains(&edge.from));
             let mut completed_queue = std::collections::HashSet::new();
+            let rebound_paths: std::collections::HashSet<_> = pending
+                .captured_inbound
+                .iter()
+                .filter_map(|edge| edge.fresh_recovery_path.clone())
+                .collect();
+            completed_queue.extend(rebound_paths.iter().cloned());
             if pending.bounded_inventory {
                 if !dependents.is_empty() {
                     tracing::info!(target: "pipeline",
@@ -892,29 +931,66 @@ impl Pipeline {
                 let to_reparse: std::collections::BTreeSet<_> = queued
                     .iter()
                     .filter(|&path| !pending.processed_paths.contains(path))
+                    .filter(|&path| !rebound_paths.contains(path))
                     .cloned()
                     .collect();
+                let mut paths = Vec::new();
+                let mut absolute_paths = Vec::new();
                 for path in to_reparse {
                     let absolute_path = super::dependencies::absolute(&path, &self.settings);
-                    // An authoritative walk may have removed an excluded file's
-                    // registration while its pending obligation remained durable.
-                    if index.get_file_info(&path.to_string_lossy())?.is_none()
-                        || !std::fs::symlink_metadata(&absolute_path)
-                            .is_ok_and(|metadata| metadata.is_file())
-                    {
-                        completed_queue.insert(path);
-                        continue;
+                    // Cleanup can publish before the replacement registration.
+                    // A live queued source must recover even without that row.
+                    match std::fs::symlink_metadata(&absolute_path) {
+                        Ok(metadata) if metadata.is_file() => {}
+                        Ok(_) => {
+                            completed_queue.insert(path);
+                            continue;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            completed_queue.insert(path);
+                            continue;
+                        }
+                        Err(source) => {
+                            return Err(PipelineError::FileRead {
+                                path: absolute_path,
+                                source,
+                            });
+                        }
                     }
-                    let pool = pending.embedding_pool.clone();
-                    self.index_file_content(
-                        &absolute_path,
+                    paths.push(path);
+                    absolute_paths.push(absolute_path);
+                }
+                if !paths.is_empty() {
+                    super::stages::preflight_file_parsers(&absolute_paths, &self.settings)?;
+                    let cleanup = if let Some(ref sem) = semantic {
+                        CleanupStage::new(Arc::clone(&index), &semantic_path)
+                            .with_semantic(Arc::clone(sem))
+                    } else {
+                        CleanupStage::new(Arc::clone(&index), &semantic_path)
+                    };
+                    let (_, captured) = cleanup.cleanup_files_for_reindex(&paths)?;
+                    let embed = match (&semantic, &pending.embedding_pool) {
+                        (Some(sem), Some(pool)) => Some(EmbedOptions {
+                            pool: Arc::clone(pool),
+                            semantic: Arc::clone(sem),
+                        }),
+                        _ => None,
+                    };
+                    let (stats, unresolved, bindings, barriers, _, _) = self.run_phase1(
+                        FileSource::List(absolute_paths),
                         Arc::clone(&index),
-                        semantic.clone(),
-                        pool,
-                        None,
-                        Some(pending),
-                        true,
+                        Phase1Options {
+                            progress: ProgressSink::Silent,
+                            embed,
+                        },
                     )?;
+                    self.require_complete_phase1(&stats, Some(paths.len()))?;
+                    pending.unresolved.extend(unresolved);
+                    pending.variable_bindings.extend(bindings);
+                    pending.this_barriers.extend(barriers);
+                    pending.captured_inbound.extend(captured);
+                    pending.processed_paths.extend(paths);
+                    pending.ran = true;
                 }
             }
 
@@ -931,6 +1007,7 @@ impl Pipeline {
         }
         if !pending.ran {
             super::dependencies::clear_pending_paths(&index, &pending.completed_queue)?;
+            self.complete_project_bindings(&index, pending.project_fingerprint)?;
             *pending = PendingResolution::default();
             return Ok(Phase2Stats::default());
         }
@@ -968,7 +1045,14 @@ impl Pipeline {
 
         // Clearing follows successful relationship and embedding commits;
         // file cleanup alone is never sufficient to discharge this work.
+        pending.completed_queue.extend(
+            pending
+                .captured_inbound
+                .iter()
+                .filter_map(|edge| edge.fresh_recovery_path.clone()),
+        );
         super::dependencies::clear_pending_paths(&index, &pending.completed_queue)?;
+        self.complete_project_bindings(&index, pending.project_fingerprint)?;
         self.finish_resolution_cache(&index, &symbol_cache)?;
         *pending = PendingResolution::default();
 
@@ -986,6 +1070,7 @@ impl Pipeline {
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
         self.register_dependency_root(root);
+        let project_fingerprint = self.refresh_project_bindings(&index)?;
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
 
@@ -1020,6 +1105,7 @@ impl Pipeline {
             let phase2_stats = self.resolve_pending(
                 &mut PendingResolution {
                     embedding_pool,
+                    project_fingerprint,
                     ..PendingResolution::default()
                 },
                 index,
@@ -1113,6 +1199,7 @@ impl Pipeline {
             }),
             _ => None,
         };
+        let expected = files_to_index.len();
         let (index_stats, unresolved, variable_bindings, this_barriers, _run_cache, metrics) = self
             .run_phase1(
                 FileSource::List(files_to_index),
@@ -1123,6 +1210,7 @@ impl Pipeline {
                 },
             )?;
 
+        self.require_complete_phase1(&index_stats, Some(expected))?;
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
         if let Some(m) = metrics {
             m.log();
@@ -1135,6 +1223,7 @@ impl Pipeline {
             captured_inbound,
             ran: true,
             embedding_pool,
+            project_fingerprint,
             ..PendingResolution::default()
         };
         pending
