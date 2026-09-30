@@ -2253,6 +2253,9 @@ impl DocumentStore {
         let total_chunks = chunks.len();
         let mut processed = 0;
         let accelerated = crate::memory::accelerated_embeddings_requested();
+        // Pin the bounded starting cache so early admissions cannot evict hits
+        // needed by later batches. Vector storage is shared through Arc.
+        let starting_cache = self.embedding_cache.clone();
 
         on_progress(IndexProgress::GeneratingEmbeddings {
             current: 0,
@@ -2271,7 +2274,10 @@ impl DocumentStore {
             }
             let batch_size = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
             let end = (processed + batch_size).min(chunks.len());
-            self.process_embedding_batch(&chunks[processed..end])?;
+            self.process_embedding_batch_with_cache(
+                &chunks[processed..end],
+                starting_cache.as_ref(),
+            )?;
             processed = end;
 
             // Report progress
@@ -2288,7 +2294,16 @@ impl DocumentStore {
         Ok(())
     }
 
+    #[cfg(test)]
     fn process_embedding_batch(&mut self, batch: &[(ChunkId, String)]) -> StoreResult<()> {
+        self.process_embedding_batch_with_cache(batch, None)
+    }
+
+    fn process_embedding_batch_with_cache(
+        &mut self,
+        batch: &[(ChunkId, String)],
+        starting_cache: Option<&crate::embedding_cache::EmbeddingCache>,
+    ) -> StoreResult<()> {
         let Some(generator) = self.embedding_generator.clone() else {
             return Ok(());
         };
@@ -2300,10 +2315,13 @@ impl DocumentStore {
         let mut missing: Vec<(&str, Vec<ChunkId>)> = Vec::new();
         let mut missing_by_text: HashMap<&str, usize> = HashMap::new();
         for (chunk_id, text) in batch {
-            if let Some(hit) = self
-                .embedding_cache
-                .as_ref()
+            if let Some(hit) = starting_cache
                 .and_then(|cache| cache.get(text))
+                .or_else(|| {
+                    self.embedding_cache
+                        .as_ref()
+                        .and_then(|cache| cache.get(text))
+                })
             {
                 vectors.push((*chunk_id, hit));
             } else if let Some(index) = missing_by_text.get(text.as_str()).copied() {
@@ -2380,6 +2398,8 @@ impl DocumentStore {
         let accelerated = crate::memory::accelerated_embeddings_requested();
         let mut processed = 0usize;
         let mut batch = Vec::new();
+        // Keep only the bounded starting cache alive, never all spool inputs.
+        let starting_cache = self.embedding_cache.clone();
         let mut memory_sampler = crate::memory::MemorySampler::new();
         let mut memory = memory_sampler.sample();
         if memory.under_pressure() {
@@ -2419,7 +2439,7 @@ impl DocumentStore {
                 }
                 target = memory.embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated);
                 let take = target.min(batch.len());
-                self.process_embedding_batch(&batch[..take])?;
+                self.process_embedding_batch_with_cache(&batch[..take], starting_cache.as_ref())?;
                 batch.drain(..take);
                 processed += take;
                 on_progress(IndexProgress::GeneratingEmbeddings {
@@ -2441,7 +2461,7 @@ impl DocumentStore {
             let take = memory
                 .embedding_batch_size(EMBEDDING_BATCH_SIZE, accelerated)
                 .min(batch.len());
-            self.process_embedding_batch(&batch[..take])?;
+            self.process_embedding_batch_with_cache(&batch[..take], starting_cache.as_ref())?;
             batch.drain(..take);
             processed += take;
             on_progress(IndexProgress::GeneratingEmbeddings {
@@ -3127,6 +3147,62 @@ mod tests {
             )])
             .unwrap();
         assert_eq!(reopened_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn document_runs_preserve_starting_cache_hits_across_batches() {
+        for spooled in [false, true] {
+            let temp = TempDir::new().unwrap();
+            let dimension = test_dimension();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut store = DocumentStore::new(temp.path(), dimension)
+                .unwrap()
+                .with_embeddings(Box::new(CountingGenerator {
+                    calls: Arc::clone(&calls),
+                    dimension,
+                }))
+                .unwrap();
+            // Fill the bounded cache. The first new admission evicts cached-0.
+            for index in 0..4096 {
+                store.embedding_cache.as_mut().unwrap().insert(
+                    &format!("cached-{index}"),
+                    Arc::from(vec![0.25; dimension.get()]),
+                );
+            }
+            let mut chunks: Vec<_> = (1..=64)
+                .map(|id| (ChunkId::from_u32(id).unwrap(), format!("new-{id}")))
+                .collect();
+            chunks.push((ChunkId::from_u32(65).unwrap(), "cached-0".into()));
+            chunks.push((ChunkId::from_u32(66).unwrap(), "new-1".into()));
+            if spooled {
+                let mut spool = tempfile::NamedTempFile::new().unwrap();
+                for (id, text) in &chunks {
+                    serde_json::to_writer(&mut spool, &(id.get(), text)).unwrap();
+                    spool.write_all(b"\n").unwrap();
+                }
+                store
+                    .process_embedding_spool(&mut spool, chunks.len(), &mut |_| {})
+                    .unwrap();
+            } else {
+                store
+                    .process_embeddings_batched(&chunks, &mut |_| {})
+                    .unwrap();
+            }
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::Relaxed),
+                64,
+                "spooled={spooled}"
+            );
+            let storage = &mut store.vector_staging.as_mut().unwrap().storage;
+            assert_eq!(
+                storage.read_vector(VectorId::new(65).unwrap()).unwrap(),
+                vec![0.25; dimension.get()]
+            );
+            assert_eq!(
+                storage.read_vector(VectorId::new(66).unwrap()).unwrap(),
+                vec![0.5; dimension.get()]
+            );
+        }
     }
 
     #[test]
