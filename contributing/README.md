@@ -8,6 +8,7 @@ Thank you for your interest in contributing to Codanna! This guide focuses on th
 - **[Adding Language Support](./development/language-support.md)** - Complete language implementation guide
 - **[CI Local/Remote Parity](./development/ci-local-remote-parity.md)** - Ensuring local and remote CI match
 - **[Development Setup](#development-setup)** - Local environment setup
+- **[Local Binary Testing Manual](./local-binary-testing.md)** - Candidate build, isolated smoke, recovery and replacement checklist
 - **[Release Testing Manual](./release-testing.md)** - Qualification, performance, retrieval quality, installation and Assign rebuild gates
 - **[Testing Workflow](#testing-your-changes)** - Pre-commit and CI/CD scripts
 

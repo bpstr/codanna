@@ -6,6 +6,9 @@ binary or rebuilding a large workspace such as Assign. Record each gate as
 source revision, binary hash and evidence path. A skipped test is not a pass.
 Keep the first failed run when a repair requires a second run.
 
+For the executable-level checklist and model-free scratch commands, see the
+[local binary testing manual](local-binary-testing.md).
+
 Latest qualification: [September 29, 2026 — no-go](release-results/2026-09-29-qualification.md).
 Previous installation receipt: [September 29 RC4](release-results/2026-09-29-rc4.md).
 Previous baseline: [September 29 RC3](release-results/2026-09-29.md).
