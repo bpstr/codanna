@@ -49,7 +49,11 @@ pub struct SemanticEmbedStage {
 impl SemanticEmbedStage {
     /// Create a new semantic embed stage.
     pub fn new(pool: Arc<EmbeddingBackend>, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
-        Self { pool, semantic, progress_callback: None }
+        Self {
+            pool,
+            semantic,
+            progress_callback: None,
+        }
     }
 
     /// Add a progress callback receiving the count processed per collector batch.
@@ -113,7 +117,9 @@ impl SemanticEmbedStage {
 
         // Probe the whole comment collector batch before admitting new vectors:
         // the production batch is larger than the default cache.
-        let items: Vec<_> = batch.candidates.iter()
+        let items: Vec<_> = batch
+            .candidates
+            .iter()
             .map(|(id, doc, lang, _)| (*id, doc.as_ref(), lang.as_ref()))
             .collect();
         let missing = {
@@ -125,7 +131,8 @@ impl SemanticEmbedStage {
         };
         let mut stored = items.len() - missing.len();
         // Preserve the existing comment path's exact-input deduplication.
-        let mut group_indexes: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut group_indexes: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
         let mut groups: Vec<(&str, Vec<(crate::SymbolId, &str)>)> = Vec::new();
         for &(id, text, language) in &missing {
             if let Some(&index) = group_indexes.get(text) {
@@ -136,11 +143,15 @@ impl SemanticEmbedStage {
                 groups.push((text, vec![(id, language)]));
             }
         }
-        let unique_missing: Vec<_> = groups.iter()
+        let unique_missing: Vec<_> = groups
+            .iter()
             .map(|(text, targets)| (targets[0].0, *text, targets[0].1))
             .collect();
-        let group_by_representative: std::collections::HashMap<_, _> = unique_missing.iter()
-            .enumerate().map(|(index, (id, _, _))| (*id, index)).collect();
+        let group_by_representative: std::collections::HashMap<_, _> = unique_missing
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _, _))| (*id, index))
+            .collect();
         let mut offset = 0;
         while offset < unique_missing.len() {
             let memory = crate::memory::MemoryBudget::current();
@@ -149,13 +160,16 @@ impl SemanticEmbedStage {
                     path: Default::default(),
                     reason: format!(
                         "semantic embedding stopped before swap pressure (available={} MiB, rss={} MiB)",
-                        memory.available / (1024 * 1024), memory.process_rss / (1024 * 1024),
+                        memory.available / (1024 * 1024),
+                        memory.process_rss / (1024 * 1024),
                     ),
                 });
             }
             let batch_size = memory.embedding_batch_size(64, accelerated);
             let end = (offset + batch_size).min(unique_missing.len());
-            let embeddings = self.pool.embed_parallel(&unique_missing[offset..end])
+            let embeddings = self
+                .pool
+                .embed_parallel(&unique_missing[offset..end])
                 .map_err(|error| PipelineError::Parse {
                     path: Default::default(),
                     reason: format!("Embedding generation failed: {error}"),
@@ -166,7 +180,9 @@ impl SemanticEmbedStage {
                     reason: "Failed to lock semantic search".into(),
                 })?;
                 for (id, embedding, _) in embeddings {
-                    let Some(&group_index) = group_by_representative.get(&id) else { continue; };
+                    let Some(&group_index) = group_by_representative.get(&id) else {
+                        continue;
+                    };
                     let (input, targets) = &groups[group_index];
                     stored += semantic.store_shared_embedding(input, embedding, targets);
                 }
@@ -226,9 +242,15 @@ mod tests {
             loop {
                 let read = socket.read(&mut buffer).await.unwrap();
                 request.extend_from_slice(&buffer[..read]);
-                if request.windows(4).any(|window| window == b"\r\n\r\n") { break; }
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
             }
-            assert!(!String::from_utf8_lossy(&request).to_lowercase().contains("authorization:"));
+            assert!(
+                !String::from_utf8_lossy(&request)
+                    .to_lowercase()
+                    .contains("authorization:")
+            );
             let body = r#"{"data":[{"index":0,"embedding":[1.0,0.0]}]}"#;
             socket.write_all(format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
@@ -237,15 +259,23 @@ mod tests {
         // This fixture serves only the constructor's dimension probe. The
         // candidate itself must be satisfied without a provider request.
         let remote = crate::semantic::RemoteEmbedder::new(
-            &format!("http://{address}"), "fixture", Some(2), None,
-        ).await.unwrap();
+            &format!("http://{address}"),
+            "fixture",
+            Some(2),
+            None,
+        )
+        .await
+        .unwrap();
         mock.await.unwrap();
         let stage = SemanticEmbedStage::new(
-            Arc::new(EmbeddingBackend::Remote(Arc::new(remote))), Arc::clone(&search),
+            Arc::new(EmbeddingBackend::Remote(Arc::new(remote))),
+            Arc::clone(&search),
         );
         let source_sha256 = crate::indexing::calculate_hash("package fixture\nfunc f() {}\n");
         let mut batch = EmbeddingBatch::new();
-        batch.candidates.push((id, input.into(), "go".into(), source_sha256.clone()));
+        batch
+            .candidates
+            .push((id, input.into(), "go".into(), source_sha256.clone()));
         assert_eq!(stage.process_batch(&batch).unwrap(), 1);
         let mut search = search.lock().unwrap();
         assert!(search.symbol_provenance(id).is_none());

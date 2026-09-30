@@ -4,11 +4,11 @@
 //! Pin all existing body cache hits before any comment/body cache admission, then
 //! materialize at most one bounded window. The source policy and ranges are unchanged.
 
+use crate::SymbolId;
 use crate::indexing::pipeline::types::{EmbeddingBatch, PipelineError, PipelineResult};
 use crate::memory::{MemoryBudget, MemorySampler};
 use crate::semantic::{EmbeddingBackend, SimpleSemanticSearch, SymbolSegment};
 use crate::symbol_representation::{SymbolInput, SymbolSource};
-use crate::SymbolId;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -47,16 +47,23 @@ impl PreparedInput {
     fn capture(source: &SymbolSource, input: &SymbolInput) -> PipelineResult<Self> {
         let fragment = match &input.source_range {
             Some(range) => {
-                let body = input.text.strip_prefix(&source.header)
+                let body = input
+                    .text
+                    .strip_prefix(&source.header)
                     .ok_or_else(|| failure("prepared body input lost its header"))?;
-                let index = source.fragments.iter().position(|fragment| {
-                    range.start >= fragment.range.start
-                        && range.end <= fragment.range.end
-                        && range.start <= range.end
-                        && fragment.text.get(
-                            range.start - fragment.range.start..range.end - fragment.range.start,
-                        ) == Some(body)
-                }).ok_or_else(|| failure("prepared body input lost its source fragment"))?;
+                let index = source
+                    .fragments
+                    .iter()
+                    .position(|fragment| {
+                        range.start >= fragment.range.start
+                            && range.end <= fragment.range.end
+                            && range.start <= range.end
+                            && fragment.text.get(
+                                range.start - fragment.range.start
+                                    ..range.end - fragment.range.start,
+                            ) == Some(body)
+                    })
+                    .ok_or_else(|| failure("prepared body input lost its source fragment"))?;
                 Some(index)
             }
             None => {
@@ -81,13 +88,21 @@ impl PreparedInput {
         text.push_str(&source.header);
         match (self.fragment, &self.source_range) {
             (Some(index), Some(range)) => {
-                let fragment = source.fragments.get(index)
+                let fragment = source
+                    .fragments
+                    .get(index)
                     .ok_or_else(|| failure("prepared source fragment disappeared"))?;
-                let start = range.start.checked_sub(fragment.range.start)
+                let start = range
+                    .start
+                    .checked_sub(fragment.range.start)
                     .ok_or_else(|| failure("prepared source range is invalid"))?;
-                let end = range.end.checked_sub(fragment.range.start)
+                let end = range
+                    .end
+                    .checked_sub(fragment.range.start)
                     .ok_or_else(|| failure("prepared source range is invalid"))?;
-                let body = fragment.text.get(start..end)
+                let body = fragment
+                    .text
+                    .get(start..end)
                     .ok_or_else(|| failure("prepared source range is not a UTF-8 slice"))?;
                 text.push_str(body);
             }
@@ -97,7 +112,10 @@ impl PreparedInput {
         if text.len() != self.bytes {
             return Err(failure("prepared source byte count changed"));
         }
-        Ok(SymbolInput { text, source_range: self.source_range.clone() })
+        Ok(SymbolInput {
+            text,
+            source_range: self.source_range.clone(),
+        })
     }
 }
 
@@ -132,12 +150,15 @@ impl<'a> BodyPlan<'a> {
             }
             let inputs = source.inputs(pool.input_budget()).map_err(failure)?;
             let mut descriptors = Vec::with_capacity(inputs.len());
-            let mut semantic = semantic.lock()
+            let mut semantic = semantic
+                .lock()
                 .map_err(|_| failure("Failed to lock semantic search"))?;
             for input in inputs {
                 let prepared = PreparedInput::capture(source, &input)?;
                 if let Some(vector) = semantic.cached_symbol_input(&input.text) {
-                    plan.pinned_hits.entry(prepared.hash.clone()).or_insert(vector);
+                    plan.pinned_hits
+                        .entry(prepared.hash.clone())
+                        .or_insert(vector);
                 }
                 descriptors.push(prepared);
             }
@@ -162,7 +183,9 @@ impl<'a> BodyPlan<'a> {
             sample_memory(&mut sampler)?;
             let end = window_end(&self.symbols, offset);
             if end == offset {
-                return Err(failure("body symbol exceeds the validated input window bound"));
+                return Err(failure(
+                    "body symbol exceeds the validated input window bound",
+                ));
             }
             self.process_window(&self.symbols[offset..end], pool, semantic, &mut sampler)?;
             offset = end;
@@ -177,18 +200,28 @@ impl<'a> BodyPlan<'a> {
         semantic: &Mutex<SimpleSemanticSearch>,
         sampler: &mut MemorySampler,
     ) -> PipelineResult<()> {
-        let inputs: Vec<Vec<SymbolInput>> = symbols.iter().map(|symbol| {
-            symbol.inputs.iter().map(|input| input.materialize(symbol.source)).collect()
-        }).collect::<PipelineResult<_>>()?;
+        let inputs: Vec<Vec<SymbolInput>> = symbols
+            .iter()
+            .map(|symbol| {
+                symbol
+                    .inputs
+                    .iter()
+                    .map(|input| input.materialize(symbol.source))
+                    .collect()
+            })
+            .collect::<PipelineResult<_>>()?;
         let languages: Vec<_> = symbols.iter().map(|symbol| symbol.language).collect();
         let mut vectors: VectorSlots = inputs.iter().map(|row| vec![None; row.len()]).collect();
         {
-            let mut semantic = semantic.lock()
+            let mut semantic = semantic
+                .lock()
                 .map_err(|_| failure("Failed to lock semantic search"))?;
             for (parent, row) in inputs.iter().enumerate() {
                 for (segment, input) in row.iter().enumerate() {
-                    vectors[parent][segment] = self.pinned_hits
-                        .get(&symbols[parent].inputs[segment].hash).cloned()
+                    vectors[parent][segment] = self
+                        .pinned_hits
+                        .get(&symbols[parent].inputs[segment].hash)
+                        .cloned()
                         .or_else(|| semantic.cached_symbol_input(&input.text));
                 }
             }
@@ -203,26 +236,44 @@ impl<'a> BodyPlan<'a> {
             );
             let end = (offset + count).min(groups.len());
             // Request-local ordinals identify unique inputs, never persisted IDs.
-            let request: Vec<_> = (offset..end).map(|index| {
-                (SymbolId::new(index as u32 + 1).expect("bounded input ordinal"),
-                 groups[index].text, groups[index].language)
-            }).collect();
-            let results = pool.embed_parallel(&request)
+            let request: Vec<_> = (offset..end)
+                .map(|index| {
+                    (
+                        SymbolId::new(index as u32 + 1).expect("bounded input ordinal"),
+                        groups[index].text,
+                        groups[index].language,
+                    )
+                })
+                .collect();
+            let results = pool
+                .embed_parallel(&request)
                 .map_err(|error| failure(error.to_string()))?;
-            scatter_results(&groups, offset..end, results, &mut vectors, pool.dimensions())?;
+            scatter_results(
+                &groups,
+                offset..end,
+                results,
+                &mut vectors,
+                pool.dimensions(),
+            )?;
             offset = end;
         }
         // No model work under the semantic lock. Publish only complete parents,
         // after the entire bounded window has been checked for missing results.
-        let mut semantic = semantic.lock()
+        let mut semantic = semantic
+            .lock()
             .map_err(|_| failure("Failed to lock semantic search"))?;
         for (index, symbol) in symbols.iter().enumerate() {
-            let segments = std::mem::take(&mut vectors[index]).into_iter()
-                .zip(&inputs[index]).map(|(vector, input)| {
-                    vector.map(|vector| SymbolSegment::new(input.source_range.clone(), vector))
+            let segments = std::mem::take(&mut vectors[index])
+                .into_iter()
+                .zip(&inputs[index])
+                .map(|(vector, input)| {
+                    vector
+                        .map(|vector| SymbolSegment::new(input.source_range.clone(), vector))
                         .ok_or_else(|| failure("missing symbol segment embedding"))
-                }).collect::<PipelineResult<Vec<_>>>()?;
-            semantic.store_symbol_segments(symbol.parent, segments, &inputs[index], symbol.language)
+                })
+                .collect::<PipelineResult<Vec<_>>>()?;
+            semantic
+                .store_symbol_segments(symbol.parent, segments, &inputs[index], symbol.language)
                 .map_err(|error| failure(error.to_string()))?;
         }
         Ok(())
@@ -235,7 +286,10 @@ fn window_end(symbols: &[PreparedSymbol<'_>], start: usize) -> usize {
     let mut bytes = 0usize;
     for symbol in &symbols[start..] {
         let next_count = count.saturating_add(symbol.inputs.len());
-        let next_bytes = symbol.inputs.iter().fold(bytes, |sum, input| sum.saturating_add(input.bytes));
+        let next_bytes = symbol
+            .inputs
+            .iter()
+            .fold(bytes, |sum, input| sum.saturating_add(input.bytes));
         if next_count > MAX_WINDOW_INPUTS || next_bytes > MAX_WINDOW_BYTES {
             break;
         }
@@ -304,7 +358,9 @@ fn scatter_results(
     for (id, vector, _) in results {
         let shared: SharedVector = Arc::from(vector);
         for &(parent, segment) in &groups[id.value() as usize - 1].targets {
-            let slot = vectors.get_mut(parent).and_then(|row| row.get_mut(segment))
+            let slot = vectors
+                .get_mut(parent)
+                .and_then(|row| row.get_mut(segment))
                 .ok_or_else(|| failure("invalid body embedding target"))?;
             if slot.is_some() {
                 return Err(failure("duplicate body embedding target"));
@@ -322,7 +378,10 @@ mod tests {
     use crate::symbol_representation::{CodeEmbeddingPolicy, SourceFragment};
 
     fn input(text: &str) -> SymbolInput {
-        SymbolInput { text: text.into(), source_range: None }
+        SymbolInput {
+            text: text.into(),
+            source_range: None,
+        }
     }
 
     fn source() -> SymbolSource {
@@ -330,7 +389,10 @@ mod tests {
         let len = text.len();
         SymbolSource {
             header: "function f\n".into(),
-            fragments: vec![SourceFragment { range: 42..42 + len, text }],
+            fragments: vec![SourceFragment {
+                range: 42..42 + len,
+                text,
+            }],
             policy: CodeEmbeddingPolicy::SymbolBodyV2,
         }
     }
@@ -340,7 +402,10 @@ mod tests {
         let source = source();
         let budget = InputBudget::remote(Some(100), None).unwrap();
         let original = source.inputs(&budget).unwrap();
-        assert_eq!(original.len(), crate::symbol_representation::MAX_SYMBOL_SEGMENTS);
+        assert_eq!(
+            original.len(),
+            crate::symbol_representation::MAX_SYMBOL_SEGMENTS
+        );
         for input in &original {
             let prepared = PreparedInput::capture(&source, input).unwrap();
             let restored = prepared.materialize(&source).unwrap();
@@ -355,7 +420,10 @@ mod tests {
         let mut source = source();
         source.fragments.clear();
         let original = input(&source.header);
-        let restored = PreparedInput::capture(&source, &original).unwrap().materialize(&source).unwrap();
+        let restored = PreparedInput::capture(&source, &original)
+            .unwrap()
+            .materialize(&source)
+            .unwrap();
         assert_eq!(restored.text, source.header);
         assert_eq!(restored.source_range, None);
     }
@@ -375,7 +443,10 @@ mod tests {
         ];
         scatter_results(&groups, 0..2, results, &mut vectors, 2).unwrap();
         assert_eq!(vectors[0][1].as_deref(), Some([0.0, 1.0].as_slice()));
-        assert!(Arc::ptr_eq(vectors[0][0].as_ref().unwrap(), vectors[1][0].as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            vectors[0][0].as_ref().unwrap(),
+            vectors[1][0].as_ref().unwrap()
+        ));
     }
 
     #[test]
@@ -399,7 +470,10 @@ mod tests {
         for case in cases {
             let mut vectors = vec![vec![None, None]];
             let groups = group_missing(&inputs, &languages, &vectors);
-            let results = case.into_iter().map(|(id, vector)| (SymbolId::new(id).unwrap(), vector, "rust".into())).collect();
+            let results = case
+                .into_iter()
+                .map(|(id, vector)| (SymbolId::new(id).unwrap(), vector, "rust".into()))
+                .collect();
             assert!(scatter_results(&groups, 0..2, results, &mut vectors, 2).is_err());
             assert!(vectors[0].iter().all(Option::is_none));
         }
@@ -408,10 +482,19 @@ mod tests {
     #[test]
     fn windows_bound_both_segment_count_and_input_bytes() {
         let source = source();
-        let symbols: Vec<_> = (1..=65).map(|id| PreparedSymbol {
-            parent: SymbolId::new(id).unwrap(), source: &source, language: "rust",
-            inputs: vec![PreparedInput { fragment: None, source_range: None, bytes: 1, hash: String::new() }],
-        }).collect();
+        let symbols: Vec<_> = (1..=65)
+            .map(|id| PreparedSymbol {
+                parent: SymbolId::new(id).unwrap(),
+                source: &source,
+                language: "rust",
+                inputs: vec![PreparedInput {
+                    fragment: None,
+                    source_range: None,
+                    bytes: 1,
+                    hash: String::new(),
+                }],
+            })
+            .collect();
         assert_eq!(window_end(&symbols, 0), 64);
         assert_eq!(window_end(&symbols, 64), 65);
         let mut large = symbols;
