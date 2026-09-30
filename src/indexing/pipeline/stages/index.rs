@@ -230,6 +230,14 @@ impl IndexStage {
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+        // Publish the recovery obligation with the source hash. Phase 2 is
+        // deferred and its in-memory work can disappear after any commit.
+        for registration in &batch.file_registrations {
+            if !failed.contains(registration.path.to_string_lossy().as_ref()) {
+                self.index.store_pending_resolution(&registration.path)?;
+            }
+        }
+
         // Write file registrations in parallel, skipping failed files
         let registration_failures = AtomicUsize::new(0);
         batch

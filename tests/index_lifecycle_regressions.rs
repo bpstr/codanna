@@ -1,6 +1,99 @@
 //! Incremental graph equivalence, persistence, and bounded-inventory controls.
 //! Every fixture disables semantic search and uses only temporary local files.
 
+#[test]
+fn config_only_alias_change_rebinds_after_reopen_and_preserves_other_project() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("projects");
+    let web = root.join("web");
+    let mobile = root.join("mobile");
+    for project in [&web, &mobile] {
+        fs::create_dir_all(project).unwrap();
+        fs::write(
+            project.join("old.ts"),
+            "export function work() { return 1; }\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("new.ts"),
+            "export function work() { return 2; }\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("tsconfig.json"),
+            r#"{"extends":"./base.json"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project.join("base.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@work":["./old.ts"]}}}"#,
+        )
+        .unwrap();
+    }
+    fs::write(
+        web.join("caller.ts"),
+        "import { work } from '@work';\nexport function webCaller() { return work(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        mobile.join("caller.ts"),
+        "import { work } from '@work';\nexport function mobileCaller() { return work(); }\n",
+    )
+    .unwrap();
+    let mut config = (*settings(&temp.path().join("index"), std::slice::from_ref(&root))).clone();
+    config.languages.get_mut("typescript").unwrap().config_files =
+        vec![web.join("tsconfig.json"), mobile.join("tsconfig.json")];
+    let config = Arc::new(config);
+    let persistence = IndexPersistence::new(config.index_path.clone());
+    let mut index = IndexFacade::new(Arc::clone(&config)).unwrap();
+    index.index_directory(&root, false).unwrap();
+    for caller in ["webCaller", "mobileCaller"] {
+        let calls = index.get_called_functions(symbol(&index, caller).id);
+        assert_eq!(calls.len(), 1);
+        assert!(Path::new(calls[0].file_path.as_ref()).ends_with("old.ts"));
+    }
+    persistence.save_facade(&index).unwrap();
+    drop(index);
+    // Only inherited config changes; source bytes, hashes and mtimes stay fixed.
+    fs::write(
+        web.join("base.json"),
+        r#"{"compilerOptions":{"baseUrl":".","paths":{"@work":["./new.ts"]}}}"#,
+    )
+    .unwrap();
+    let mut index = persistence.load_facade_lite(Arc::clone(&config)).unwrap();
+    index.index_directory(&root, false).unwrap();
+    let calls = index.get_called_functions(symbol(&index, "webCaller").id);
+    assert_eq!(calls.len(), 1);
+    assert!(Path::new(calls[0].file_path.as_ref()).ends_with("web/new.ts"));
+    let calls = index.get_called_functions(symbol(&index, "mobileCaller").id);
+    assert_eq!(calls.len(), 1);
+    assert!(Path::new(calls[0].file_path.as_ref()).ends_with("mobile/old.ts"));
+    assert!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .is_empty()
+    );
+    let stable = snapshot(&index);
+    index.index_directory(&root, false).unwrap();
+    assert_eq!(snapshot(&index), stable);
+    fs::write(
+        web.join("tsconfig.json"),
+        r#"{"extends":"./base.json","compilerOptions":{"paths":{"@work":["./old.ts"]}}}"#,
+    )
+    .unwrap();
+    index.index_directory(&root, false).unwrap();
+    let calls = index.get_called_functions(symbol(&index, "webCaller").id);
+    assert_eq!(calls.len(), 1);
+    assert!(Path::new(calls[0].file_path.as_ref()).ends_with("web/old.ts"));
+    let mut fresh_config = (*config).clone();
+    fresh_config.index_path = temp.path().join("fresh");
+    let mut fresh = IndexFacade::new(Arc::new(fresh_config)).unwrap();
+    fresh.index_directory(&root, true).unwrap();
+    assert_eq!(snapshot(&index), snapshot(&fresh));
+}
+
 use codanna::indexing::facade::IndexFacade;
 use codanna::{IndexPersistence, RelationKind, Settings, Symbol};
 use std::{
@@ -454,5 +547,196 @@ fn bounded_barrel_update_invalidates_then_repairs_after_reopen_without_source_ed
         &[src],
         &temp.path().join("fresh"),
         "bounded barrel replay after reopening",
+    );
+}
+
+#[test]
+fn phase_one_publication_recovers_calls_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(
+        src.join("a.rs"),
+        "pub fn caller() { target(); }\npub fn target() {}\n",
+    )
+    .unwrap();
+    let config = settings(&temp.path().join("index"), std::slice::from_ref(&src));
+    let persistence = IndexPersistence::new(config.index_path.clone());
+    let mut index = IndexFacade::new(Arc::clone(&config)).unwrap();
+    let mut pending = codanna::indexing::pipeline::PendingResolution::default();
+    index
+        .index_directory_deferred(&src, true, &mut pending)
+        .unwrap();
+    assert!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .is_empty()
+    );
+    assert_eq!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .len(),
+        1
+    );
+    persistence.save_facade(&index).unwrap();
+    drop(pending);
+    drop(index);
+    let mut index = persistence.load_facade_lite(config).unwrap();
+    index.index_directory(&src, false).unwrap();
+    assert_eq!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .len(),
+        1
+    );
+    assert!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .is_empty()
+    );
+    assert_fresh(
+        &index,
+        &[src],
+        &temp.path().join("fresh"),
+        "Phase 1 restart",
+    );
+}
+
+#[test]
+fn recovery_retries_unregistered_outside_root_source_after_failed_parse() {
+    use codanna::indexing::pipeline::stages::CleanupStage;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let scanned = root.join("targets");
+    let outside = root.join("callers");
+    fs::create_dir(&scanned).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(scanned.join("target.rs"), "pub fn target() {}\n").unwrap();
+    let caller = outside.join("caller.rs");
+    let source = "pub fn caller() { target(); }\n";
+    fs::write(&caller, source).unwrap();
+    let roots = vec![scanned.clone(), outside.clone()];
+    let config = settings(&temp.path().join("index"), &roots);
+    let persistence = IndexPersistence::new(config.index_path.clone());
+    let mut index = IndexFacade::new(Arc::clone(&config)).unwrap();
+    for root in &roots {
+        index.index_directory(root, false).unwrap();
+    }
+    let mut pending = codanna::indexing::pipeline::PendingResolution::default();
+    index
+        .index_directory_deferred(&outside, true, &mut pending)
+        .unwrap();
+    drop(pending);
+    let documents = Arc::clone(index.document_index());
+    // Simulate process loss after cleanup and before replacement publication.
+    CleanupStage::new(Arc::clone(&documents), config.index_path.join("semantic"))
+        .cleanup_files_for_reindex(std::slice::from_ref(&caller))
+        .unwrap();
+    assert!(
+        documents
+            .get_file_info(&caller.to_string_lossy())
+            .unwrap()
+            .is_none()
+    );
+    persistence.save_facade(&index).unwrap();
+    drop(documents);
+    drop(index);
+    let mut index = persistence.load_facade_lite(config).unwrap();
+    fs::write(&caller, [0xff, 0xfe]).unwrap();
+    assert!(index.index_directory(&scanned, false).is_err());
+    assert!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .contains(&caller)
+    );
+    fs::write(&caller, source).unwrap();
+    index.index_directory(&scanned, false).unwrap();
+    assert_eq!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .len(),
+        1
+    );
+    assert!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .is_empty()
+    );
+    assert_fresh(
+        &index,
+        &roots,
+        &temp.path().join("fresh"),
+        "outside-root recovery retry",
+    );
+}
+
+#[test]
+fn phase_one_replacement_recovers_captured_incoming_calls_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("a.py"), "def target():\n    return 1\n").unwrap();
+    fs::write(
+        src.join("b.py"),
+        "from a import target\ndef caller():\n    return target()\n",
+    )
+    .unwrap();
+    let config = settings(&temp.path().join("index"), std::slice::from_ref(&src));
+    let persistence = IndexPersistence::new(config.index_path.clone());
+    let mut index = IndexFacade::new(Arc::clone(&config)).unwrap();
+    index.index_directory(&src, false).unwrap();
+    assert_eq!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .len(),
+        1
+    );
+    fs::write(src.join("a.py"), "def target():\n    return 2\n").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(src.join("a.py"))
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+    let mut pending = codanna::indexing::pipeline::PendingResolution::default();
+    index
+        .index_directory_deferred(&src, false, &mut pending)
+        .unwrap();
+    assert!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .is_empty()
+    );
+    persistence.save_facade(&index).unwrap();
+    drop(pending);
+    drop(index);
+    let mut index = persistence.load_facade_lite(config).unwrap();
+    index.index_directory(&src, false).unwrap();
+    assert_eq!(
+        index
+            .get_called_functions(symbol(&index, "caller").id)
+            .len(),
+        1
+    );
+    assert!(
+        index
+            .document_index()
+            .get_pending_resolution_paths()
+            .unwrap()
+            .is_empty()
+    );
+    assert_fresh(
+        &index,
+        &[src],
+        &temp.path().join("fresh"),
+        "incoming restart",
     );
 }

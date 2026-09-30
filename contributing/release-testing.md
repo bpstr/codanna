@@ -221,17 +221,24 @@ memory, and retain a matching rollback binary/index pair.
    unexplained missing sources, resource-budget breach or quality regression.
    If any required gate is red, blocked or unmeasured, leave Assign unchanged.
 
-Known recovery gate from the September 29 review: after a nonretryable deferred
-resolution failure, Phase 1 file hashes can already be committed while graph
-relationships are incomplete. The incremental overflow scan can skip those
-unchanged files after the in-memory wave is discarded. Until durable recovery
-obligations and failure-injection tests cover both outgoing and captured incoming
-edges, treat this state as requiring an explicit staged rebuild, not successful
-automatic recovery. Do not inject this failure into the active Assign index. For an isolated staged
-full rebuild, any indexing or resolution error must abort qualification: discard
-the failed stage and restart from empty with no concurrent writer. This contains
-the rebuild risk without claiming that incremental watcher recovery is fixed.
-Activation still requires the remaining quality, scale and recovery gates.
+RC4's September 29 qualification failed because Phase 1 hashes survived while
+call relationships did not. The repair advances emission semantics to v10:
+Phase 1 publishes durable source-path resolution obligations with registrations,
+and replacement cleanup publishes obligations for unchanged incoming callers
+before removing their edges. Incremental restart reparses queued sources in a
+batch, including live sources whose registration was lost during cleanup.
+Failed reparses retain obligations; successful resolution and embedding
+publication retire them. Authoritative deletion retires obligations with its rows.
+Old RC4 graphs lack these records and require an isolated forced rebuild.
+
+The [remediation receipt](release-results/2026-09-29-rc4-remediation.md) records
+the regression tests and observed process-crash witness; these do not establish
+recovery at every partial-write point. Do not inject failures into the active
+Assign index. Any indexing or resolution error in a staged full rebuild must
+abort qualification: preserve failed evidence and restart from empty with no
+concurrent writer. Activation still requires the remaining scale, document,
+transport and quality gates. English retrieval is the current focus;
+multilingual quality remains a separate, unqualified follow-up.
 
 The September 29 qualification reproduced missing call edges after process
 termination and a successful incremental restart. On macOS, run the bounded,

@@ -19,8 +19,10 @@ use std::path::{Path, PathBuf};
 // interface DispatchCandidate edges and Python typing.cast Uses edges. v8 binds
 // TypeScript path aliases to their exact project export instead of an ambiguous
 // module string. v9 distinguishes proven dangling imports from incomplete or
-// config-redirected evidence. Rebuild to repair missing and false relationships.
-pub const EMISSION_SEMANTICS_VERSION: u32 = 9;
+// config-redirected evidence. v10 durably records unfinished resolution and
+// tracks project rules independently of source hashes. Rebuild RC4 indexes to
+// repair gaps created before durable recovery records existed.
+pub const EMISSION_SEMANTICS_VERSION: u32 = 10;
 
 /// Short commit of the binary, `-dirty` when it was built from a modified
 /// tree. `None` when built without a work tree (release tarballs), which

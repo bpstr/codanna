@@ -9,6 +9,8 @@ pub enum MetadataKey {
     FileCounter,
     /// Counter for next symbol ID
     SymbolCounter,
+    /// Effective project rules used by the last completed resolution wave.
+    ResolutionFingerprint,
 }
 
 impl MetadataKey {
@@ -17,6 +19,7 @@ impl MetadataKey {
         match self {
             Self::FileCounter => "file_counter",
             Self::SymbolCounter => "symbol_counter",
+            Self::ResolutionFingerprint => "resolution_fingerprint",
         }
     }
 }

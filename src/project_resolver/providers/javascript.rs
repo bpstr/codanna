@@ -125,13 +125,10 @@ impl ProjectResolutionProvider for JavaScriptProvider {
         let config_paths = self.config_paths(settings);
 
         // Create persistence manager
-        let codanna_dir = std::path::Path::new(crate::init::local_dir_name());
-        let persistence = ResolutionPersistence::new(codanna_dir);
+        let persistence = ResolutionPersistence::new(&settings.resolution_dir());
 
-        // Load or create resolution index (graceful fallback if cache doesn't exist yet)
-        let mut index = persistence
-            .load("javascript")
-            .unwrap_or_else(|_| ResolutionIndex::new());
+        // Rebuild effective rules, including inherited config edits and removal.
+        let mut index = ResolutionIndex::new();
 
         // Process each config file
         for config_path in &config_paths {
@@ -140,7 +137,7 @@ impl ProjectResolutionProvider for JavaScriptProvider {
                 let sha = compute_file_sha(config_path)?;
 
                 // Check if rebuild needed
-                if index.needs_rebuild(config_path, &sha) {
+                {
                     // Parse jsconfig and resolve extends chain to get effective config
                     let mut visited = std::collections::HashSet::new();
                     let jsconfig = crate::parsing::javascript::jsconfig::resolve_extends_chain(

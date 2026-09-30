@@ -150,6 +150,9 @@ pub struct CleanupStats {
 #[derive(Debug, Clone)]
 pub struct CapturedInboundEdge {
     pub from: SymbolId,
+    /// New obligation owned by this in-memory rebind wave. Pre-existing work
+    /// must still be reparsed; after a crash all obligations are reparsed.
+    pub(crate) fresh_recovery_path: Option<PathBuf>,
     /// File the target lives in, as keyed in the index. Carried so one
     /// rebind call can serve a whole batch of re-indexed files.
     pub target_file: PathBuf,
@@ -275,6 +278,7 @@ impl CleanupStage {
         }
 
         let old_paths: Vec<PathBuf> = pairs.iter().map(|(old, _)| old.clone()).collect();
+        self.queue_inbound_recovery(&mut captured)?;
         let (stats, _) = self.cleanup_files_inner(&old_paths, false)?;
         Ok((stats, captured))
     }
@@ -307,6 +311,8 @@ impl CleanupStage {
             }
         }
 
+        self.queue_inbound_recovery(&mut captured)?;
+
         // Start batch for delete operations
         self.index.start_batch().map_err(|e| PipelineError::Parse {
             path: PathBuf::new(),
@@ -317,6 +323,12 @@ impl CleanupStage {
         // rollback cannot leave in-memory semantic state ahead of the index.
         let mut pending_embedding_removals: Vec<SymbolId> = Vec::new();
         for file in files {
+            // Authoritative deletion (including newly ignored sources) retires
+            // its obligation atomically with its rows. Reindex keeps it alive.
+            if !capture_inbound && let Err(error) = self.index.clear_pending_resolution(file) {
+                let _ = self.index.rollback_batch();
+                return Err(error.into());
+            }
             match self.cleanup_single_file(file) {
                 Ok((symbols_removed, symbol_ids)) => {
                     stats.files_cleaned += 1;
@@ -388,6 +400,32 @@ impl CleanupStage {
     /// run. Edges sourced there are excluded: their own file is re-parsed, so
     /// the re-index re-derives them against the new ids. Capturing them
     /// instead would rebind a DEAD from-id and persist an orphan edge.
+    fn queue_inbound_recovery(&self, captured: &mut [CapturedInboundEdge]) -> PipelineResult<()> {
+        let mut paths = std::collections::HashSet::new();
+        for edge in captured {
+            if let Some(symbol) = self.index.find_symbol_by_id(edge.from)?
+                && let Some(path) = self.index.get_file_path(symbol.file_id)?
+            {
+                let path = PathBuf::from(path);
+                if !self.index.has_pending_resolution(&path)? {
+                    edge.fresh_recovery_path = Some(path.clone());
+                }
+                paths.insert(path);
+            }
+        }
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.index.start_batch()?;
+        for path in paths {
+            if let Err(error) = self.index.store_pending_resolution(&path) {
+                let _ = self.index.rollback_batch();
+                return Err(error.into());
+            }
+        }
+        Ok(())
+    }
+
     fn capture_inbound_edges(
         &self,
         path: &Path,
@@ -417,6 +455,7 @@ impl CleanupStage {
                     }
                     captured.push(CapturedInboundEdge {
                         from,
+                        fresh_recovery_path: None,
                         target_file: path.to_path_buf(),
                         target_name: symbol.name.to_string(),
                         target_kind: symbol.kind,

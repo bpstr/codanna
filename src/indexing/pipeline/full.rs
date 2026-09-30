@@ -20,13 +20,34 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
     ) -> PipelineResult<(IndexStats, Phase2Stats)> {
+        let fingerprint = self.refresh_project_bindings(&index)?;
         // Phase 1: Index files
         let (index_stats, unresolved, bindings, barriers, symbol_cache) =
             self.index_directory(root, Arc::clone(&index))?;
+        self.require_complete_phase1(&index_stats, None)?;
 
         // Phase 2: Resolve relationships
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = self.run_phase2(unresolved, bindings, barriers, symbol_cache, index)?;
+        let phase2_stats = self.run_phase2(
+            unresolved,
+            bindings,
+            barriers,
+            symbol_cache,
+            Arc::clone(&index),
+        )?;
+        let normalized_root = self
+            .settings
+            .workspace_root
+            .as_ref()
+            .and_then(|workspace| root.strip_prefix(workspace).ok())
+            .unwrap_or(root);
+        let paths = index
+            .get_all_indexed_paths()?
+            .into_iter()
+            .filter(|path| path.starts_with(normalized_root))
+            .collect();
+        super::dependencies::clear_pending_paths(&index, &paths)?;
+        self.complete_project_bindings(&index, fingerprint)?;
 
         Ok((index_stats, phase2_stats))
     }
@@ -41,6 +62,7 @@ impl Pipeline {
         semantic_path: &Path,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
+        let fingerprint = self.refresh_project_bindings(&index)?;
         let start = Instant::now();
         let show_progress = progress.is_some();
 
@@ -61,6 +83,7 @@ impl Pipeline {
             },
         )?;
 
+        self.require_complete_phase1(&index_stats, None)?;
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
         if let Some(m) = metrics {
             m.log();
@@ -82,6 +105,19 @@ impl Pipeline {
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), semantic_path, index.as_ref())?;
+        let normalized_root = self
+            .settings
+            .workspace_root
+            .as_ref()
+            .and_then(|workspace| root.strip_prefix(workspace).ok())
+            .unwrap_or(root);
+        let paths = index
+            .get_all_indexed_paths()?
+            .into_iter()
+            .filter(|path| path.starts_with(normalized_root))
+            .collect();
+        super::dependencies::clear_pending_paths(&index, &paths)?;
+        self.complete_project_bindings(&index, fingerprint)?;
 
         Ok(IncrementalStats {
             new_files: index_stats.files_indexed,
