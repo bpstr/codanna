@@ -27,7 +27,9 @@ Reviewed against fork main `c5f0a93ad50babab5cae5788370baee56ec8a21d`:
 | [#88](https://github.com/bpstr/codanna/pull/88), `cc958518eca1596b98d071e1e7b9691133050de7` (initial review `1745582c`) | Cross-symbol batches and prepared body-v2 ranges | Most direct candidate for code inference throughput; bounded prepared strings do not bound all collector memory. |
 | [#89](https://github.com/bpstr/codanna/pull/89), `39f9905a53876cd573b45f4c3979de5e12cd81ec` | Indexed Rayon scheduling and throttled usage logs | Small overhead reduction; no measured full-run speedup. |
 
-All three are pending drafts, not shipped fixes. The review included complete
+All three were pending drafts at initial review; PRs #87–#89 and the document
+cache follow-up #90 were subsequently merged on September 30. See
+`../release-results/2026-09-30-branch-consolidation.md` for combined validation. The review included complete
 open diffs, comments, recent merge metadata for #79–#86, and the relevant current
 code. No proposal changes v2 schema.
 The current dirty RC4 remediation tree was inspected for overlap and left intact;

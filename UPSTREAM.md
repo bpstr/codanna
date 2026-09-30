@@ -62,14 +62,14 @@ September 30 scoped performance qualification: fork main `c5f0a93a` and all
 open fork performance diffs #87 (`690fed37`), #88 (`1745582c`), #89 (`39f9905a`)
 were inspected; GitHub parent/source remain `bartolli/codanna`, both defaults
 remain `main`, and upstream main resolved to `58295d290`. The full upstream
-review date above is unchanged. PR #88 remains **DOWNSTREAM, pending**, with
+review date above is unchanged. PR #88 is **DOWNSTREAM, merged** (verified September 30), with
 the same v2 policy, exact inputs, schema and rebuild compatibility. Its prepared
 CLI witness `body_v2_cross_window_rebuild_reuses_inputs_and_invalidates_one_edit`
 in `tests/support/body_rebuild_cache_cases.rs` covers 80 commentless parents,
 cross-window cold inference, warm rebuild with remapped IDs, and one edited body.
 That CLI witness and 129 pipeline-stage tests passed on macOS with zero failures
 or ignored tests; further execution results are recorded in the PR. Prepared vectors are not model-quality
-or Assign throughput evidence. The separate document-cache snapshot proposal
+or Assign throughput evidence. The merged document-cache snapshot change
 touches document indexing and does not duplicate #88.
 
 PRs #71 (Markdown headings) and #72 (TypeScript object methods) were already merged
@@ -195,7 +195,7 @@ No full upstream issue/PR status refresh is claimed.
 
 | Fork work | State and compatibility | Evidence |
 | --- | --- | --- |
-| Preserve document starting-cache hits across embedding batches | **DOWNSTREAM, pending in this PR**; independent of the three open code/runtime performance drafts. Same body-v2/source policy, model identity, cache format and index schema; no rebuild required. Retains one bounded cache snapshot per embedding run. | `src/documents/store.rs`: `document_runs_preserve_starting_cache_hits_across_batches`; `contributing/performance/assign-indexing-2026-09-30.md`. The regression failed before the fix (65 inferred inputs instead of 64); after the fix, `cargo test --lib documents::` passed 69 tests, zero failed/ignored. Strict quick checks and the serial full gate passed (2,707 passed, 63 ignored, zero failed; CLI/docs/MCP passed). No Assign speedup or native model qualification is claimed. |
+| Preserve document starting-cache hits across embedding batches | **DOWNSTREAM, merged as #90** (verified September 30); combined with the merged code/runtime performance PRs #87–#89. Same body-v2/source policy, model identity, cache format and index schema; no rebuild required. Retains one bounded cache snapshot per embedding run. | `src/documents/store.rs`: `document_runs_preserve_starting_cache_hits_across_batches`; `contributing/performance/assign-indexing-2026-09-30.md`. The regression failed before the fix (65 inferred inputs instead of 64); after the fix, `cargo test --lib documents::` passed 69 tests, zero failed/ignored. Strict quick checks and the serial full gate passed (2,707 passed, 63 ignored, zero failed; CLI/docs/MCP passed). No Assign speedup or native model qualification is claimed. |
 
 ### September 30 branch consolidation
 
@@ -215,3 +215,7 @@ branch dispositions, reproduced vector defects, 19 passing vector tests, 11 pass
 runtime tests, strict quick checks and the full serial gate (2,727 passed, zero
 failed, 63 ignored; CLI/docs/MCP passed). This scoped fork work does not refresh
 upstream issue statuses or claim measured Assign throughput improvements.
+
+Publication verified September 30: PRs #87–#90 are merged, the fork has zero open
+PRs, and its only remote branch is `main`. Superseded heads remain reachable in
+main history. The separate Codecase remote/branch was excluded.

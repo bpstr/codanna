@@ -129,3 +129,21 @@ fixtures and mocked transports. Ignored tests remain unqualified.
 Logs are retained at `/tmp/codanna-consolidation-20260930/`, including the original
 failing vector regression log. GitHub publication and branch retirement follow
 this validated local integration; their verified result is recorded below.
+
+## Publication and branch retirement
+
+GitHub confirmed PRs #87, #88, #89 and #90 merged after the normal fast-forward
+push of `main` through `3dee387a`. Zero open PRs remain. All 101 non-main remote
+Codanna branches were deleted atomically with exact-head leases after confirming
+every head was an ancestor of main. All 40 redundant local Codanna branches were
+also removed after their clean worktrees were detached. The original worktree
+directories remain; the primary checkout returns to `main`. The fork's sole remote
+branch is `main`. The separate Codecase branch remains outside this scope.
+
+## Session disk cleanup
+
+After the test process exited and `lsof` found no open files, removed only
+`/Users/bpstr/.codex/worktrees/assign-index-performance/codanna/target`
+(11.09 GiB allocated). Free space increased by 10.40 GiB
+to 31.20 GiB. The pre-existing primary `target` (3.0 GiB), Rust toolchains,
+indexes, model caches, logs and recovery bundle were preserved.
