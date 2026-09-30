@@ -219,3 +219,10 @@ upstream issue statuses or claim measured Assign throughput improvements.
 Publication verified September 30: PRs #87–#90 are merged, the fork has zero open
 PRs, and its only remote branch is `main`. Superseded heads remain reachable in
 main history. The separate Codecase remote/branch was excluded.
+
+RC5 executable follow-up: `contributing/release-results/2026-09-30-rc5.md` records
+the clean `be166174` macOS candidate, model-free smoke/structural/recovery checks,
+graph-only baseline comparisons and passing default/all-feature Linux CI. The
+original resource-exhausted CI run is preserved as failed evidence. This adds
+qualification evidence only; the upstream review date and compatibility remain
+unchanged. No tag, installed binary or active Assign index changed in this step.
