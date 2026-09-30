@@ -35,8 +35,10 @@ qualification receipts for a newer binary.
    SHA and dirty state, model revision/hash, input policy, emission version and
    resolver-cache version. Never qualify a dirty build as the clean commit.
 5. Record free space on the data volume and sizes of build, cache and evidence
-   directories. Pause large builds when projected usage leaves less than 50 GiB
-   free. Preserve indexes and model caches; neither is disposable test output.
+   directories. Estimate the additional space needed for the planned build and
+   tests, and pause only if available space cannot accommodate that work. There
+   is no fixed minimum free-space requirement. Preserve indexes and model
+   caches; neither is disposable test output.
 
 ## 2. Isolate tests and prohibit paid inference
 
