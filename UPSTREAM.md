@@ -196,3 +196,22 @@ No full upstream issue/PR status refresh is claimed.
 | Fork work | State and compatibility | Evidence |
 | --- | --- | --- |
 | Preserve document starting-cache hits across embedding batches | **DOWNSTREAM, pending in this PR**; independent of the three open code/runtime performance drafts. Same body-v2/source policy, model identity, cache format and index schema; no rebuild required. Retains one bounded cache snapshot per embedding run. | `src/documents/store.rs`: `document_runs_preserve_starting_cache_hits_across_batches`; `contributing/performance/assign-indexing-2026-09-30.md`. The regression failed before the fix (65 inferred inputs instead of 64); after the fix, `cargo test --lib documents::` passed 69 tests, zero failed/ignored. Strict quick checks and the serial full gate passed (2,707 passed, 63 ignored, zero failed; CLI/docs/MCP passed). No Assign speedup or native model qualification is claimed. |
+
+### September 30 branch consolidation
+
+The current fork integration combines PRs #87–#90 and the preserved RC4 repair.
+The original review date/SHAs above remain unchanged. All current PR heads were
+rechecked before integration and had not moved. Historical branches were reviewed
+for equivalent implementations; their commits are retained as ancestry while
+superseded source/workflow variants remain excluded. The affected buffered-vector
+write behavior now preflights the u32 count limit before writes and publishes the
+in-memory count only after a successful header write. The optional non-strict
+`auto` provider selection uses CPU below 4 GiB of memory headroom, retaining strict
+selection and explicit CPU controls. Neither change alters body-v2, embedding
+identity or the storage format, and neither requires an index rebuild.
+
+Evidence: `contributing/release-results/2026-09-30-branch-consolidation.md` records
+branch dispositions, reproduced vector defects, 19 passing vector tests, 11 passing
+runtime tests, strict quick checks and the full serial gate (2,727 passed, zero
+failed, 63 ignored; CLI/docs/MCP passed). This scoped fork work does not refresh
+upstream issue statuses or claim measured Assign throughput improvements.

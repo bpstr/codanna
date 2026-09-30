@@ -118,6 +118,14 @@ No inference provider was called for these checks.
 
 ## Combined validation
 
-The combined quick and full gates are in progress. Logs are retained at
-`/tmp/codanna-consolidation-20260930/`. The original failing vector regression log
-is preserved. Final counts and publication state will be recorded after completion.
+Combined source at `57c9334c` (unchanged through ancestry reconciliation
+`51176ed4`) passed both `./contributing/scripts/quick-check.sh` and the complete
+serial `./contributing/scripts/full-test.sh`: **2,727 passed, zero failed, 63 ignored
+across 69 test targets**, with CLI, documentation and scratch-workspace MCP checks
+also passing. Focused runtime tests passed 11/11; vector storage passed 19/19.
+Tests used a clean environment with no provider credentials, deterministic local
+fixtures and mocked transports. Ignored tests remain unqualified.
+
+Logs are retained at `/tmp/codanna-consolidation-20260930/`, including the original
+failing vector regression log. GitHub publication and branch retirement follow
+this validated local integration; their verified result is recorded below.
