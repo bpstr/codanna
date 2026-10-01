@@ -30,18 +30,28 @@ definition + resolution. MCP tools are split across `symbols`, `search`,
 `EMISSION_SEMANTICS_VERSION` and an advisory write lease outside the index
 directory.
 
-The product has outgrown the crate shape. `src/` is about 75k lines in one
-package. Four files carry a large fraction of the runtime:
+The product has outgrown the crate shape. `src/` is 179,747 lines of Rust
+across 386 files in one package. The largest files mix the application kernel
+with language parsers and storage queries:
 
 | File | Lines | Role |
 | --- | ---: | --- |
 | `src/indexing/facade.rs` | 5369 | Index, query, graph, semantic diagnostics |
+| `src/parsing/typescript/parser.rs` | 4188 | TypeScript parser |
+| `src/indexing/pipeline/stages/resolve.rs` | 3691 | Relationship resolution |
 | `src/documents/store.rs` | 3671 | Document RAG store |
+| `src/parsing/python/parser.rs` | 3503 | Python parser |
+| `src/parsing/go/parser.rs` | 3352 | Go parser |
+| `src/storage/tantivy/query.rs` | 3269 | Symbol and graph queries |
+| `src/parsing/rust/parser.rs` | 3084 | Rust parser |
 | `src/watcher/unified.rs` | 2400 | Watch, reload, catch-up |
 | `src/semantic/simple.rs` | 1927 | Semantic search |
 
 `IndexFacade` is used from CLI, MCP, watcher, documents, retrieve, rebuild
-planning, and HTTP paths. It is the application kernel.
+planning, and HTTP paths. It is the application kernel. The parsers above,
+`resolve.rs`, and `query.rs` are the same concentration problem: every grammar
+compiles into this binary, and query behavior sits in files that are too large
+to change in isolation.
 
 ## What to keep
 
@@ -143,7 +153,7 @@ modules under `semantic/`.
 ### 5. Global process state fights multi-workspace
 
 `get_registry()` is a `'static Mutex<LanguageRegistry>`. Provider setup is
-assembled in `main.rs`. `Settings` is a 1,200-line blob passed as
+assembled in `main.rs`. `Settings` in `src/config/mod.rs` is 1,269 lines and is passed as
 `Arc<Settings>` everywhere. Workspace design forbids mutating process-global
 cwd to route concurrent requests; a global registry and a process-wide settings
 object are the same class of problem.
