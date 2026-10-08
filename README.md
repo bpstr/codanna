@@ -126,28 +126,51 @@ Embedding inputs are validated in full, including document headings, and oversiz
 
 ### Install (macOS, Linux, WSL)
 
+Install a prebuilt binary from **bpstr/codanna** without compiling. You need
+[GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`, plus
+`tar` with xz support and `sha256sum` (or `shasum`). Linux/WSL x86_64 and macOS
+x86_64/ARM64 binaries are available; Linux ARM64 has no current prebuilt asset.
+
 ```bash
-curl -fsSL --proto '=https' --tlsv1.2 https://install.codanna.sh | sh
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/bpstr/codanna/main/scripts/install.sh | sh
 ```
 
-### Or via Homebrew
+The installer selects the newest release entry visible to your GitHub account,
+including prereleases and drafts, verifies its SHA-256 checksum, and installs
+`codanna` to `~/.local/bin`. Draft downloads require repository access. Selection
+does not imply production qualification; check the selected release's notes.
+Set `CODANNA_VERSION` to pin a tag or `CODANNA_INSTALL_DIR` to change the destination:
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/bpstr/codanna/main/scripts/install.sh | CODANNA_VERSION=v1.0.0-rc5 sh
+export PATH="$HOME/.local/bin:$PATH"
+codanna --version
+```
+
+### Upstream alternatives (bartolli/codanna)
+
+These install upstream Codanna and do not include this fork's changes.
+
+#### Homebrew
 
 ```bash
 brew install codanna
 ```
 
-### Or via Nix
+#### Nix
 
 ```bash
 nix run github:bartolli/codanna
 ```
 
-### Windows (PowerShell)
+#### Windows (PowerShell)
 ```powershell
 irm https://raw.githubusercontent.com/bartolli/codanna/main/scripts/install.ps1 | iex
 ```
 
-See [Installation Guide](https://docs.codanna.sh/installation) for Cargo and other options.
+See the upstream [Installation Guide](https://docs.codanna.sh/installation) for
+other upstream installation options. For building this fork, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Initialize and index
 

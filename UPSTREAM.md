@@ -231,3 +231,18 @@ After user approval, tag `v1.0.0-rc5` was pushed at qualified commit `be166174`
 and the tested macOS executables were installed with hash and scratch-MCP
 verification. `contributing/release-results/2026-09-30-rc5-installation.md` records
 rollback and existing-server limits. No index/schema or upstream status changed.
+
+### Fork binary installer (October 8)
+
+| Behavior | Upstream status | Downstream state and evidence |
+| --- | --- | --- |
+| One-command prebuilt installation | Not rechecked; the upstream review date remains September 28. | **DOWNSTREAM**: `README.md` points to `scripts/install.sh` in `bpstr/codanna`. The installer uses authenticated GitHub CLI to select the newest visible release entry (including drafts/prereleases), download the platform asset and verify SHA-256 before replacing the executable. `CODANNA_VERSION` pins a tag; `CODANNA_INSTALL_DIR` overrides the destination. No index rebuild is required. |
+
+GitHub release metadata was checked October 8: RC5 and RC1 remain drafts; RC4
+is a published prerelease with failed-qualification notes. Publishing the fork
+installer does not publish or qualify these binaries. Offline evidence:
+`python3 contributing/scripts/test-install.py` passed 17 tests with zero failures
+or skips; `sh -n scripts/install.sh`, ShellCheck and `git diff --check` passed.
+Rust build/test gates and live binary/model probes were not run for this shell
+installer change. Existing RC qualification receipts above remain scoped to
+their original runs.
