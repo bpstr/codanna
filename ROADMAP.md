@@ -5,6 +5,24 @@ Items remain proposals until their implementation and acceptance criteria are
 verified. Completed work should move to the changelog rather than remaining as
 an open roadmap item.
 
+## Structural architecture
+
+**Status:** Proposed; recorded against `3571b3ef` (`1.0.0-rc5`)
+
+The workspace, dry-run planner, and portable-index work below assume a smaller
+runtime kernel than the current monolith. Complete the structural splits in
+[the architecture review](docs/design/architecture-review.md) before adding
+more MCP tools, languages, or retrieval modes to `IndexFacade`.
+
+Priority for planning:
+
+1. Split `IndexFacade` into fallible reader, writer, and semantic index types.
+2. Serve both MCP frontends through one tool kernel and one query engine.
+3. Extract parse and semantic crates so language and embedding changes do not
+   share the full product blast radius.
+4. Publish vectors through one plan-embed-commit-publish path used by index,
+   watch, and reindex. Dry-run must call only the shared planner.
+
 ## Isolated coding-agent workspaces
 
 **Status:** Automatic local discovery, registry administration, explicit selection,
