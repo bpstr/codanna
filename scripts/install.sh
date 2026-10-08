@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# Install prebuilt bpstr/codanna releases, including drafts visible to gh.
+# Install public prebuilt bpstr/codanna releases; default to latest stable.
 REPO="bpstr/codanna"
 INSTALL_DIR="${CODANNA_INSTALL_DIR:-$HOME/.local/bin}"
 tmpdir=""
@@ -31,7 +31,7 @@ detect_platform() {
 }
 
 main() {
-    command -v gh >/dev/null 2>&1 || err "install GitHub CLI (gh), then run gh auth login"
+    command -v curl >/dev/null 2>&1 || err "curl is required"
     command -v tar >/dev/null 2>&1 || err "tar with xz support is required"
     if command -v sha256sum >/dev/null 2>&1; then
         checksum_tool="sha256sum"
@@ -41,25 +41,38 @@ main() {
         err "sha256sum or shasum is required"
     fi
     platform=$(detect_platform)
+    tmpdir=$(mktemp -d)
     version="${CODANNA_VERSION:-}"
     if [ -z "$version" ]; then
-        # /latest excludes prereleases and drafts; this fork publishes RCs.
-        version=$(gh api "repos/$REPO/releases?per_page=100" --jq '.[0].tag_name // empty') \
-            || err "cannot list $REPO releases; run gh auth login for draft access"
+        # GitHub's /latest endpoint excludes drafts and prereleases.
+        status=$(curl -sSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            -o "$tmpdir/release.json" -w '%{http_code}' \
+            "https://api.github.com/repos/$REPO/releases/latest") \
+            || err "cannot contact GitHub to discover the latest stable release"
+        case "$status" in
+            200) ;;
+            404) err "no published stable release is available for $REPO; publish a stable release or set CODANNA_VERSION to a published tag" ;;
+            403|429) err "GitHub API request was denied or rate limited (HTTP $status); retry later or set CODANNA_VERSION to a published tag" ;;
+            *) err "latest stable release lookup failed (HTTP $status)" ;;
+        esac
+        version=$(sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmpdir/release.json")
     fi
-    [ -n "$version" ] || err "no releases are visible for $REPO"
+    [ -n "$version" ] || err "GitHub response is missing a release tag"
     case "$version" in
         *[!a-zA-Z0-9.+_-]*) err "invalid release version: $version" ;;
     esac
     case "$version" in v*) ;; *) version="v$version" ;; esac
     directory="codanna-${version#v}-$platform"
     filename="$directory.tar.xz"
-    tmpdir=$(mktemp -d)
 
-    say "downloading $REPO $version ($platform); visible drafts and prereleases are eligible"
-    gh release download "$version" --repo "$REPO" --dir "$tmpdir" \
-        --pattern "$filename" --pattern "$filename.sha256" \
-        || err "download failed; check release assets and gh authentication (Linux ARM64 has no current binary)"
+    say "downloading $REPO $version ($platform)"
+    release_url="https://github.com/$REPO/releases/download/$version"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        "$release_url/$filename" -o "$tmpdir/$filename" \
+        || err "download failed; check that $version is published and has a $platform binary"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        "$release_url/$filename.sha256" -o "$tmpdir/$filename.sha256" \
+        || err "download failed; release checksum is unavailable"
     [ -f "$tmpdir/$filename" ] && [ -f "$tmpdir/$filename.sha256" ] \
         || err "release must contain both $filename and its .sha256 checksum"
 

@@ -13,7 +13,7 @@ import unittest
 
 
 INSTALLER = Path(__file__).resolve().parents[2] / "scripts/install.sh"
-TAG = "v1.0.0-rc5"
+TAG = "v1.0.1"
 PAYLOAD = b"#!/bin/sh\nprintf 'codanna fixture\\n'\n"
 
 
@@ -41,28 +41,34 @@ class InstallTests(unittest.TestCase):
         self.stub("uname", """import os, sys
 print(os.environ['FIXTURE_OS' if sys.argv[1] == '-s' else 'FIXTURE_ARCH'])
 """)
-        self.stub("gh", """import os, pathlib, shutil, sys
+        self.stub("gh", "raise SystemExit('GitHub CLI must not be used')\n")
+        self.stub("curl", """import json, os, pathlib, shutil, sys
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
 args = sys.argv[1:]
 with (root / 'requests').open('a') as log:
     log.write(repr(args) + '\\n')
-if os.environ.get('FIXTURE_AUTH_FAILURE'):
-    sys.exit('fixture authentication failure')
-if args[0] == 'api':
-    assert args[1] == 'repos/bpstr/codanna/releases?per_page=100'
-    assert args[2:] == ['--jq', '.[0].tag_name // empty']
-    print(os.environ['FIXTURE_TAG'])
+if os.environ.get('FIXTURE_TRANSPORT_FAILURE'):
+    sys.exit('fixture transport failure')
+url = next(arg for arg in args if arg.startswith('https://'))
+assert args[args.index('--proto') + 1] == '=https'
+assert args[args.index('--proto-redir') + 1] == '=https'
+destination = pathlib.Path(args[args.index('-o') + 1])
+if url == 'https://api.github.com/repos/bpstr/codanna/releases/latest':
+    assert args[args.index('-w') + 1] == '%{http_code}'
+    status = os.environ.get('FIXTURE_HTTP_STATUS', '200')
+    data = {'tag_name': os.environ['FIXTURE_TAG'], 'body': 'quoted "tag_name": "wrong"'}
+    if status != '200':
+        data = {'message': 'fixture HTTP failure'}
+    destination.write_text(json.dumps(data, indent=2))
+    print(status, end='')
 else:
-    assert args[:2] == ['release', 'download']
-    assert args[args.index('--repo') + 1] == 'bpstr/codanna'
-    assert args[2] == os.environ['FIXTURE_TAG']
-    destination = pathlib.Path(args[args.index('--dir') + 1])
-    for i, arg in enumerate(args):
-        if arg == '--pattern':
-            source = root / 'assets' / args[i + 1]
-            if not source.is_file():
-                sys.exit('fixture asset unavailable')
-            shutil.copyfile(source, destination / source.name)
+    tag = os.environ['FIXTURE_TAG']
+    assert url.startswith('https://github.com/bpstr/codanna/releases/download/' + tag + '/')
+    assert '-fsSL' in args
+    source = root / 'assets' / url.rsplit('/', 1)[1]
+    if not source.is_file():
+        sys.exit('fixture asset unavailable')
+    shutil.copyfile(source, destination)
 """)
         self.archive()
 
@@ -72,7 +78,7 @@ else:
         path.chmod(0o755)
 
     def archive(self, platform="linux-x64", member="codanna", symlink=False):
-        directory = f"codanna-{TAG[1:]}-{platform}"
+        directory = f"codanna-{self.env['FIXTURE_TAG'][1:]}-{platform}"
         self.package = self.assets / f"{directory}.tar.xz"
         with tarfile.open(self.package, "w:xz") as archive:
             entry = tarfile.TarInfo(f"{directory}/{member}")
@@ -103,7 +109,7 @@ else:
         self.assertIn(message, result.stderr)
         self.assertEqual(binary.read_bytes(), b"existing installation")
 
-    def test_latest_visible_release_installs_verified_executable(self):
+    def test_latest_stable_release_installs_verified_executable_without_gh(self):
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         binary = self.install_dir / "codanna"
@@ -116,7 +122,7 @@ else:
         self.env["CODANNA_VERSION"] = TAG[1:]
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("'api'", (self.root / "requests").read_text())
+        self.assertNotIn("api.github.com", (self.root / "requests").read_text())
 
     def test_default_install_directory(self):
         del self.env["CODANNA_INSTALL_DIR"]
@@ -144,13 +150,13 @@ else:
         self.archive(symlink=True)
         self.assert_failure_preserves_binary("not a regular file")
 
-    def test_authentication_failure_preserves_installation(self):
-        self.env["FIXTURE_AUTH_FAILURE"] = "1"
-        self.assert_failure_preserves_binary("gh auth login")
+    def test_transport_failure_preserves_installation(self):
+        self.env["FIXTURE_TRANSPORT_FAILURE"] = "1"
+        self.assert_failure_preserves_binary("cannot contact GitHub")
 
-    def test_no_visible_releases_preserves_installation(self):
+    def test_empty_release_tag_preserves_installation(self):
         self.env["FIXTURE_TAG"] = ""
-        self.assert_failure_preserves_binary("no releases are visible")
+        self.assert_failure_preserves_binary("missing a release tag")
 
     def test_unsupported_operating_system(self):
         self.env["FIXTURE_OS"] = "FreeBSD"
@@ -159,7 +165,7 @@ else:
 
     def test_linux_arm64_reports_missing_asset(self):
         self.env["FIXTURE_ARCH"] = "aarch64"
-        self.assert_failure_preserves_binary("Linux ARM64")
+        self.assert_failure_preserves_binary("linux-arm64 binary")
 
     def test_invalid_pinned_tag_is_rejected_before_download(self):
         self.env["CODANNA_VERSION"] = "../../unexpected"
@@ -195,6 +201,34 @@ print(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + str(path))
     def test_failed_final_rename_preserves_existing_binary(self):
         self.stub("mv", "import sys\nsys.exit('fixture rename failure')\n")
         self.assert_failure_preserves_binary("fixture rename failure")
+
+    def test_no_stable_release_stops_before_asset_download(self):
+        self.env["FIXTURE_HTTP_STATUS"] = "404"
+        self.assert_failure_preserves_binary("no published stable release")
+        self.assertNotIn("releases/download", (self.root / "requests").read_text())
+
+    def test_api_rate_limit_is_reported(self):
+        self.env["FIXTURE_HTTP_STATUS"] = "403"
+        self.assert_failure_preserves_binary("denied or rate limited")
+
+    def test_api_server_failure_is_reported(self):
+        self.env["FIXTURE_HTTP_STATUS"] = "500"
+        self.assert_failure_preserves_binary("lookup failed (HTTP 500)")
+
+    def test_version_is_discovered_dynamically(self):
+        self.env["FIXTURE_TAG"] = "v9.2.1"
+        self.archive()
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("v9.2.1", result.stdout)
+
+    def test_explicit_published_prerelease_pin_skips_stable_lookup(self):
+        self.env["FIXTURE_TAG"] = "v1.1.0-rc1"
+        self.env["CODANNA_VERSION"] = "v1.1.0-rc1"
+        self.archive()
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("api.github.com", (self.root / "requests").read_text())
 
 
 if __name__ == "__main__":

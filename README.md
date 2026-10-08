@@ -126,23 +126,27 @@ Embedding inputs are validated in full, including document headings, and oversiz
 
 ### Install (macOS, Linux, WSL)
 
-Install a prebuilt binary from **bpstr/codanna** without compiling. You need
-[GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`, plus
-`tar` with xz support and `sha256sum` (or `shasum`). Linux/WSL x86_64 and macOS
-x86_64/ARM64 binaries are available; Linux ARM64 has no current prebuilt asset.
+Install the latest stable prebuilt binary from **bpstr/codanna** without compiling.
+You need `curl`, `tar` with xz support and `sha256sum` (or `shasum`). Release
+assets support Linux/WSL x86_64 and macOS x86_64/ARM64; Linux ARM64 has no current
+prebuilt asset.
 
 ```bash
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/bpstr/codanna/main/scripts/install.sh | sh
 ```
 
-The installer selects the newest release entry visible to your GitHub account,
-including prereleases and drafts, verifies its SHA-256 checksum, and installs
-`codanna` to `~/.local/bin`. Draft downloads require repository access. Selection
-does not imply production qualification; check the selected release's notes.
-Set `CODANNA_VERSION` to pin a tag or `CODANNA_INSTALL_DIR` to change the destination:
+The installer discovers the latest stable version through GitHub's release API,
+verifies its SHA-256 checksum, and installs `codanna` to `~/.local/bin`. No GitHub
+CLI or sign-in is required. Drafts and prereleases are excluded by default.
+If no stable release is published, the installer stops with a clear message.
+As of October 8, 2026, this fork has no published stable release.
+Set `CODANNA_VERSION` to pin a published tag (including a prerelease), or
+`CODANNA_INSTALL_DIR` to change the destination. Draft assets cannot be downloaded
+with this public installer. Check the selected release's qualification notes.
+
+After installation, add the destination to your PATH:
 
 ```bash
-curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/bpstr/codanna/main/scripts/install.sh | CODANNA_VERSION=v1.0.0-rc5 sh
 export PATH="$HOME/.local/bin:$PATH"
 codanna --version
 ```
