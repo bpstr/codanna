@@ -14,6 +14,11 @@ const STRICT_ENV: &str = "CODANNA_EMBED_PROVIDER_STRICT";
 const THREADS_ENV: &str = "CODANNA_EMBED_CPU_THREADS";
 const SPIN_ENV: &str = "CODANNA_EMBED_ALLOW_SPINNING";
 
+static RUNTIME_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static RUNTIME_CONFIGURED_BY_CODANNA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static DEFAULT_CPU_POOL_ATTEMPTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingExecutionProvider {
     Cpu,
@@ -274,6 +279,9 @@ fn commit_runtime(
     strict: bool,
     cpu: Option<CpuThreads>,
 ) -> Result<bool, String> {
+    let _guard = RUNTIME_INIT_LOCK
+        .lock()
+        .map_err(|_| "embedding runtime initialization lock poisoned".to_string())?;
     let mut builder = ort::init();
     if let Some(provider) = provider {
         let dispatch = provider_dispatch(provider, strict)
@@ -291,7 +299,42 @@ fn commit_runtime(
             .map_err(|error| error.to_string())?;
         builder = builder.with_global_thread_pool(threads);
     }
-    builder.commit().map_err(|error| error.to_string())
+    let committed = builder.commit().map_err(|error| error.to_string())?;
+    if committed {
+        RUNTIME_CONFIGURED_BY_CODANNA.store(true, std::sync::atomic::Ordering::Release);
+    }
+    Ok(committed)
+}
+
+/// Lazily install the conservative CPU pool immediately before the first local
+/// embedding session. Commands that never construct a local model do not
+/// initialize ONNX Runtime. Explicit provider/thread configuration wins because
+/// it runs during CLI setup and marks the runtime as already configured.
+pub(crate) fn ensure_default_cpu_pool() {
+    if RUNTIME_CONFIGURED_BY_CODANNA.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    DEFAULT_CPU_POOL_ATTEMPTED.get_or_init(|| {
+        if RUNTIME_CONFIGURED_BY_CODANNA.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let cpu = CpuThreads::default_for_host(num_cpus::get());
+        match commit_runtime(None, false, Some(cpu)) {
+            Ok(true) => tracing::debug!(
+                target: "semantic",
+                "default shared embedding CPU pool: {} intra-op thread(s), spinning off",
+                cpu.intra
+            ),
+            Ok(false) => tracing::warn!(
+                target: "semantic",
+                "ONNX Runtime was initialized before the default embedding CPU pool; keeping the existing runtime configuration"
+            ),
+            Err(error) => tracing::warn!(
+                target: "semantic",
+                "default embedding CPU pool was not installed ({error}); keeping the existing runtime configuration"
+            ),
+        }
+    });
 }
 
 fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> bool {
@@ -300,19 +343,17 @@ fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> boo
         && memory.headroom < 4 * 1024 * 1024 * 1024
 }
 
-/// Configure providers and shared CPU workers before creating models.
+/// Configure explicitly requested providers and CPU workers before creating models.
 ///
-/// CPU embeddings use a conservative shared pool by default: up to four intra-op
-/// threads, one inter-op thread, and spinning disabled. Explicit CPU controls
-/// override that default and fail closed if the requested limit cannot be applied.
-/// The default is best-effort when another library initialized ORT first.
-/// Accelerators can still execute unsupported graph portions on the CPU.
+/// With no explicit CPU controls, the conservative shared CPU pool is installed
+/// lazily by `ensure_default_cpu_pool` immediately before the first local model.
+/// Explicit CPU controls override that default and fail closed if the requested
+/// limit cannot be applied. Accelerators can still execute unsupported graph
+/// portions on the CPU.
 pub fn configure_embedding_runtime() -> Result<(), String> {
     let threads = optional_env(THREADS_ENV)?;
     let spinning = optional_env(SPIN_ENV)?;
-    let logical_cpus = num_cpus::get();
-    let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), logical_cpus)?
-        .or_else(|| Some(CpuThreads::default_for_host(logical_cpus)));
+    let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), num_cpus::get())?;
     let provider = optional_env(PROVIDER_ENV)?.unwrap_or_else(|| "cpu".into());
     let strict = strict_provider_registration();
     let provider = if !strict
