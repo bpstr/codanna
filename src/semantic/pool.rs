@@ -548,10 +548,7 @@ mod tests {
             (SymbolId::new(4).unwrap(), "     ", "document"),
         ];
         let scheduled = length_scheduled_inputs(&items, true);
-        let scheduled_ids: Vec<_> = scheduled
-            .iter()
-            .map(|(_, item)| item.0.to_u32())
-            .collect();
+        let scheduled_ids: Vec<_> = scheduled.iter().map(|(_, item)| item.0.to_u32()).collect();
         assert_eq!(scheduled_ids, vec![2, 4, 3, 1]);
 
         let simulated = scheduled
