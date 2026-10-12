@@ -278,6 +278,7 @@ impl EmbeddingPool {
             (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
         let mut models = Vec::with_capacity(pool_size);
         let mut input_budget = None;
+        crate::embedding_runtime::ensure_default_cpu_pool();
         for i in 0..pool_size {
             let mut text_model = TextEmbedding::try_new(
                 InitOptions::new(model.clone())
