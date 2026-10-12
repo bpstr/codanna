@@ -1,9 +1,9 @@
-//! Process-wide execution providers and opt-in shared CPU threads for embeddings.
+//! Process-wide execution providers and bounded shared CPU threads for embeddings.
 //!
-//! Configure this before constructing any fastembed model. With no environment
-//! overrides, initialization remains lazy and existing behavior is unchanged.
-//! `CODANNA_EMBED_CPU_THREADS` bounds the shared ORT intra-op pool, NOT the whole
-//! process: callers, tokenizers, parsers and index writers have their own threads.
+//! Configure this before constructing any fastembed model. CPU embeddings use a
+//! bounded shared ORT pool by default with spinning disabled. Environment controls
+//! can override that pool, but they do NOT cap the whole process: callers,
+//! tokenizers, parsers and index writers have their own threads.
 
 use crate::memory::MemoryBudget;
 use fastembed::ExecutionProviderDispatch;
@@ -43,6 +43,9 @@ impl FromStr for EmbeddingExecutionProvider {
 struct CpuThreads {
     intra: usize,
     spinning: bool,
+    /// Explicit limits fail closed; the safe default may warn and fall back if
+    /// another library initialized ORT before Codanna configured the process.
+    required: bool,
 }
 
 impl CpuThreads {
@@ -72,7 +75,19 @@ impl CpuThreads {
             Some("1" | "true" | "yes") => true,
             _ => return Err(format!("{SPIN_ENV} must be 0/1, false/true, or no/yes")),
         };
-        Ok(Some(Self { intra, spinning }))
+        Ok(Some(Self {
+            intra,
+            spinning,
+            required: true,
+        }))
+    }
+
+    fn default_for_host(logical_cpus: usize) -> Self {
+        Self {
+            intra: logical_cpus.saturating_sub(2).clamp(1, 4),
+            spinning: false,
+            required: false,
+        }
     }
 }
 
@@ -243,7 +258,7 @@ fn configure_runtime(
             };
             // Explicit resource limits must never silently fall back to unbounded
             // per-session pools, even when accelerator registration is optional.
-            if strict || cpu.is_some() {
+            if strict || cpu.is_some_and(|cpu| cpu.required) {
                 return Err(error);
             }
             messages.push(format!(
@@ -285,16 +300,19 @@ fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> boo
         && memory.headroom < 4 * 1024 * 1024 * 1024
 }
 
-/// Configure providers and optional shared CPU workers before creating models.
+/// Configure providers and shared CPU workers before creating models.
 ///
-/// Unset CPU controls preserve the original lazy/default threading behavior.
-/// Setting either CPU control opts in; spinning then defaults to disabled.
-/// Explicit resource-control failures are always returned, never silently ignored.
+/// CPU embeddings use a conservative shared pool by default: up to four intra-op
+/// threads, one inter-op thread, and spinning disabled. Explicit CPU controls
+/// override that default and fail closed if the requested limit cannot be applied.
+/// The default is best-effort when another library initialized ORT first.
 /// Accelerators can still execute unsupported graph portions on the CPU.
 pub fn configure_embedding_runtime() -> Result<(), String> {
     let threads = optional_env(THREADS_ENV)?;
     let spinning = optional_env(SPIN_ENV)?;
-    let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), num_cpus::get())?;
+    let logical_cpus = num_cpus::get();
+    let cpu = CpuThreads::parse(threads.as_deref(), spinning.as_deref(), logical_cpus)?
+        .or_else(|| Some(CpuThreads::default_for_host(logical_cpus)));
     let provider = optional_env(PROVIDER_ENV)?.unwrap_or_else(|| "cpu".into());
     let strict = strict_provider_registration();
     let provider = if !strict
@@ -358,7 +376,27 @@ mod tests {
         CpuThreads {
             intra: 2,
             spinning: false,
+            required: true,
         }
+    }
+
+    #[test]
+    fn default_cpu_pool_is_bounded_nonspinning_and_best_effort() {
+        for (logical, expected) in [(1, 1), (2, 1), (4, 2), (8, 4), (64, 4)] {
+            let cpu = CpuThreads::default_for_host(logical);
+            assert_eq!(cpu.intra, expected);
+            assert!(!cpu.spinning);
+            assert!(!cpu.required);
+        }
+
+        let cpu = CpuThreads::default_for_host(8);
+        let messages = configure_runtime("cpu", false, &["cpu"], Some(cpu), |_, _, _| Ok(false))
+            .expect("default pool setup may fall back when ORT was initialized first");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("existing runtime configuration unchanged"))
+        );
     }
 
     #[test]
