@@ -401,6 +401,14 @@ CODANNA_EMBED_PROVIDER=coreml CODANNA_EMBED_PROVIDER_STRICT=1 codanna --config .
 
 The configuration command verifies selection without creating an embedding
 session. Unset `CODANNA_EMBED_PROVIDER` (or set it to `cpu`) to retain CPU behavior.
+CPU embeddings initialize one shared ONNX Runtime pool on the first local model
+session, with spinning disabled and up to four intra-op workers. Commands that
+never construct a local model do not initialize ONNX Runtime. Override the bound with
+`CODANNA_EMBED_CPU_THREADS=N`; `CODANNA_EMBED_ALLOW_SPINNING=1` explicitly
+reenables spinning. These settings bound the embedding runtime, not the whole
+Codanna process. Local inference batches are limited to eight inputs and grouped
+by input length before inference, then restored to caller order.
+
 `auto` selects the target's compiled accelerator when available. Non-strict
 selection warns and preserves the existing runtime configuration when selection
 fails. Strict selection exits with status 2 for an invalid name, unavailable

@@ -222,6 +222,7 @@ impl FastEmbedGenerator {
     pub fn with_model(model: EmbeddingModel, show_progress: bool) -> Result<Self, VectorError> {
         let model_name = model_to_string(&model);
 
+        crate::embedding_runtime::ensure_default_cpu_pool();
         let mut text_model = TextEmbedding::try_new(
             InitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())

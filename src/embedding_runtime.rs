@@ -1,9 +1,9 @@
-//! Process-wide execution providers and opt-in shared CPU threads for embeddings.
+//! Process-wide execution providers and bounded shared CPU threads for embeddings.
 //!
-//! Configure this before constructing any fastembed model. With no environment
-//! overrides, initialization remains lazy and existing behavior is unchanged.
-//! `CODANNA_EMBED_CPU_THREADS` bounds the shared ORT intra-op pool, NOT the whole
-//! process: callers, tokenizers, parsers and index writers have their own threads.
+//! Configure this before constructing any fastembed model. CPU embeddings use a
+//! bounded shared ORT pool by default with spinning disabled. Environment controls
+//! can override that pool, but they do NOT cap the whole process: callers,
+//! tokenizers, parsers and index writers have their own threads.
 
 use crate::memory::MemoryBudget;
 use fastembed::ExecutionProviderDispatch;
@@ -13,6 +13,11 @@ const PROVIDER_ENV: &str = "CODANNA_EMBED_PROVIDER";
 const STRICT_ENV: &str = "CODANNA_EMBED_PROVIDER_STRICT";
 const THREADS_ENV: &str = "CODANNA_EMBED_CPU_THREADS";
 const SPIN_ENV: &str = "CODANNA_EMBED_ALLOW_SPINNING";
+
+static RUNTIME_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static RUNTIME_CONFIGURED_BY_CODANNA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static DEFAULT_CPU_POOL_ATTEMPTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingExecutionProvider {
@@ -43,6 +48,9 @@ impl FromStr for EmbeddingExecutionProvider {
 struct CpuThreads {
     intra: usize,
     spinning: bool,
+    /// Explicit limits fail closed; the safe default may warn and fall back if
+    /// another library initialized ORT before Codanna configured the process.
+    required: bool,
 }
 
 impl CpuThreads {
@@ -72,7 +80,19 @@ impl CpuThreads {
             Some("1" | "true" | "yes") => true,
             _ => return Err(format!("{SPIN_ENV} must be 0/1, false/true, or no/yes")),
         };
-        Ok(Some(Self { intra, spinning }))
+        Ok(Some(Self {
+            intra,
+            spinning,
+            required: true,
+        }))
+    }
+
+    fn default_for_host(logical_cpus: usize) -> Self {
+        Self {
+            intra: logical_cpus.saturating_sub(2).clamp(1, 4),
+            spinning: false,
+            required: false,
+        }
     }
 }
 
@@ -243,7 +263,7 @@ fn configure_runtime(
             };
             // Explicit resource limits must never silently fall back to unbounded
             // per-session pools, even when accelerator registration is optional.
-            if strict || cpu.is_some() {
+            if strict || cpu.is_some_and(|cpu| cpu.required) {
                 return Err(error);
             }
             messages.push(format!(
@@ -259,6 +279,9 @@ fn commit_runtime(
     strict: bool,
     cpu: Option<CpuThreads>,
 ) -> Result<bool, String> {
+    let _guard = RUNTIME_INIT_LOCK
+        .lock()
+        .map_err(|_| "embedding runtime initialization lock poisoned".to_string())?;
     let mut builder = ort::init();
     if let Some(provider) = provider {
         let dispatch = provider_dispatch(provider, strict)
@@ -276,7 +299,42 @@ fn commit_runtime(
             .map_err(|error| error.to_string())?;
         builder = builder.with_global_thread_pool(threads);
     }
-    builder.commit().map_err(|error| error.to_string())
+    let committed = builder.commit().map_err(|error| error.to_string())?;
+    if committed {
+        RUNTIME_CONFIGURED_BY_CODANNA.store(true, std::sync::atomic::Ordering::Release);
+    }
+    Ok(committed)
+}
+
+/// Lazily install the conservative CPU pool immediately before the first local
+/// embedding session. Commands that never construct a local model do not
+/// initialize ONNX Runtime. Explicit provider/thread configuration wins because
+/// it runs during CLI setup and marks the runtime as already configured.
+pub(crate) fn ensure_default_cpu_pool() {
+    if RUNTIME_CONFIGURED_BY_CODANNA.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    DEFAULT_CPU_POOL_ATTEMPTED.get_or_init(|| {
+        if RUNTIME_CONFIGURED_BY_CODANNA.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let cpu = CpuThreads::default_for_host(num_cpus::get());
+        match commit_runtime(None, false, Some(cpu)) {
+            Ok(true) => tracing::debug!(
+                target: "semantic",
+                "default shared embedding CPU pool: {} intra-op thread(s), spinning off",
+                cpu.intra
+            ),
+            Ok(false) => tracing::warn!(
+                target: "semantic",
+                "ONNX Runtime was initialized before the default embedding CPU pool; keeping the existing runtime configuration"
+            ),
+            Err(error) => tracing::warn!(
+                target: "semantic",
+                "default embedding CPU pool was not installed ({error}); keeping the existing runtime configuration"
+            ),
+        }
+    });
 }
 
 fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> bool {
@@ -285,12 +343,13 @@ fn optional_auto_needs_cpu(raw: &str, strict: bool, memory: MemoryBudget) -> boo
         && memory.headroom < 4 * 1024 * 1024 * 1024
 }
 
-/// Configure providers and optional shared CPU workers before creating models.
+/// Configure explicitly requested providers and CPU workers before creating models.
 ///
-/// Unset CPU controls preserve the original lazy/default threading behavior.
-/// Setting either CPU control opts in; spinning then defaults to disabled.
-/// Explicit resource-control failures are always returned, never silently ignored.
-/// Accelerators can still execute unsupported graph portions on the CPU.
+/// With no explicit CPU controls, the conservative shared CPU pool is installed
+/// lazily by `ensure_default_cpu_pool` immediately before the first local model.
+/// Explicit CPU controls override that default and fail closed if the requested
+/// limit cannot be applied. Accelerators can still execute unsupported graph
+/// portions on the CPU.
 pub fn configure_embedding_runtime() -> Result<(), String> {
     let threads = optional_env(THREADS_ENV)?;
     let spinning = optional_env(SPIN_ENV)?;
@@ -358,7 +417,27 @@ mod tests {
         CpuThreads {
             intra: 2,
             spinning: false,
+            required: true,
         }
+    }
+
+    #[test]
+    fn default_cpu_pool_is_bounded_nonspinning_and_best_effort() {
+        for (logical, expected) in [(1, 1), (2, 1), (4, 2), (8, 4), (64, 4)] {
+            let cpu = CpuThreads::default_for_host(logical);
+            assert_eq!(cpu.intra, expected);
+            assert!(!cpu.spinning);
+            assert!(!cpu.required);
+        }
+
+        let cpu = CpuThreads::default_for_host(8);
+        let messages = configure_runtime("cpu", false, &["cpu"], Some(cpu), |_, _, _| Ok(false))
+            .expect("default pool setup may fall back when ORT was initialized first");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("existing runtime configuration unchanged"))
+        );
     }
 
     #[test]

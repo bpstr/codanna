@@ -278,6 +278,7 @@ impl EmbeddingPool {
             (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
         let mut models = Vec::with_capacity(pool_size);
         let mut input_budget = None;
+        crate::embedding_runtime::ensure_default_cpu_pool();
         for i in 0..pool_size {
             let mut text_model = TextEmbedding::try_new(
                 InitOptions::new(model.clone())
@@ -417,29 +418,36 @@ impl EmbeddingPool {
         items: &[(SymbolId, &str, &str)],
         preserve_whitespace: bool,
     ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
-        const MAX_BATCH_SIZE: usize = 64;
+        // FastEmbed pads each batch to its longest text. Keep native activation
+        // memory bounded and reduce padding waste for mixed-length inputs.
+        const MAX_BATCH_SIZE: usize = 8;
         self.input_budget
             .validate(items.iter().map(|(_, text, _)| *text))
             .map_err(SemanticSearchError::EmbeddingError)?;
-        let valid_items = batch_inputs(items, preserve_whitespace);
-        if valid_items.is_empty() {
+        let scheduled = length_scheduled_inputs(items, preserve_whitespace);
+        if scheduled.is_empty() {
             return Ok(Vec::new());
         }
-        // Retain the same per-instance batch sizing and dedicated worker pool.
-        let batch_size = parallel_batch_size(valid_items.len(), self.pool_size(), MAX_BATCH_SIZE);
+        // Retain the dedicated worker pool, but group similarly sized inputs so
+        // tokenizer padding and native activation tensors stay bounded. Results
+        // carry request-local ordinals and are restored to the caller's order.
+        let batch_size = parallel_batch_size(scheduled.len(), self.pool_size(), MAX_BATCH_SIZE);
         let results: Result<Vec<Vec<_>>, SemanticSearchError> = self.embed_workers.install(|| {
-            map_batches(&valid_items, batch_size, |batch| {
-                let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
+            map_batches(&scheduled, batch_size, |batch| {
+                let texts: Vec<&str> = batch.iter().map(|(_, item)| item.1).collect();
                 let mut instance = self.acquire()?;
                 let embeddings_result = instance.model.embed(texts, None);
                 drop(instance);
                 match embeddings_result {
                     Ok(embeddings) => {
                         let mut results = Vec::with_capacity(batch.len());
-                        for (item, embedding) in batch.iter().zip(embeddings) {
-                            let (symbol_id, _, language) = *item;
+                        for ((ordinal, item), embedding) in batch.iter().zip(embeddings) {
+                            let (symbol_id, _, language) = **item;
                             if embedding.len() == self.dimensions {
-                                results.push((*symbol_id, embedding, (*language).to_string()));
+                                results.push((
+                                    *ordinal,
+                                    (symbol_id, embedding, language.to_string()),
+                                ));
                             } else {
                                 tracing::warn!(target: "semantic", "Dimension mismatch for {}: expected {}, got {}", symbol_id.to_u32(), self.dimensions, embedding.len());
                             }
@@ -453,7 +461,7 @@ impl EmbeddingPool {
                 }
             })
         });
-        let results = results?.into_iter().flatten().collect();
+        let results = restore_input_order(results?.into_iter().flatten().collect());
         if tracing::enabled!(target: "semantic", tracing::Level::INFO)
             && self.usage_log.should_log()
         {
@@ -477,6 +485,23 @@ fn batch_inputs<'a, 'text>(
             }
         })
         .collect()
+}
+
+fn length_scheduled_inputs<'a, 'text>(
+    items: &'a [(SymbolId, &'text str, &'text str)],
+    preserve_whitespace: bool,
+) -> Vec<(usize, &'a (SymbolId, &'text str, &'text str))> {
+    let mut scheduled: Vec<_> = batch_inputs(items, preserve_whitespace)
+        .into_iter()
+        .enumerate()
+        .collect();
+    scheduled.sort_by_key(|(_, item)| std::cmp::Reverse(item.1.len()));
+    scheduled
+}
+
+fn restore_input_order<T>(mut results: Vec<(usize, T)>) -> Vec<T> {
+    results.sort_by_key(|(ordinal, _)| *ordinal);
+    results.into_iter().map(|(_, result)| result).collect()
 }
 
 #[cfg(test)]
@@ -516,18 +541,40 @@ mod tests {
     }
 
     #[test]
+    fn length_scheduling_groups_long_inputs_and_restores_caller_order() {
+        let items = [
+            (SymbolId::new(1).unwrap(), "a", "rust"),
+            (SymbolId::new(2).unwrap(), "abcdefgh", "rust"),
+            (SymbolId::new(3).unwrap(), "abc", "rust"),
+            (SymbolId::new(4).unwrap(), "     ", "document"),
+        ];
+        let scheduled = length_scheduled_inputs(&items, true);
+        let scheduled_ids: Vec<_> = scheduled.iter().map(|(_, item)| item.0.to_u32()).collect();
+        assert_eq!(scheduled_ids, vec![2, 4, 3, 1]);
+
+        let simulated = scheduled
+            .iter()
+            .map(|(ordinal, item)| (*ordinal, item.0.to_u32()))
+            .collect();
+        assert_eq!(restore_input_order(simulated), vec![1, 2, 3, 4]);
+
+        let code_only = length_scheduled_inputs(&items, false);
+        assert_eq!(code_only.len(), 3, "blank code inputs remain filtered");
+    }
+
+    #[test]
     fn parallel_batches_fill_workers_without_exceeding_item_budget() {
-        assert_eq!(parallel_batch_size(64, 4, 64), 16);
-        assert_eq!(64usize.div_ceil(parallel_batch_size(64, 4, 64)), 4);
-        assert_eq!(parallel_batch_size(32, 3, 64), 11);
-        assert_eq!(32usize.div_ceil(parallel_batch_size(32, 3, 64)), 3);
+        assert_eq!(parallel_batch_size(64, 4, 8), 8);
+        assert_eq!(64usize.div_ceil(parallel_batch_size(64, 4, 8)), 8);
+        assert_eq!(parallel_batch_size(32, 3, 8), 8);
+        assert_eq!(32usize.div_ceil(parallel_batch_size(32, 3, 8)), 4);
     }
 
     #[test]
     fn parallel_batch_size_respects_inference_ceiling() {
-        assert_eq!(parallel_batch_size(5_000, 3, 64), 64);
-        assert_eq!(parallel_batch_size(1, 8, 64), 1);
-        assert_eq!(parallel_batch_size(0, 8, 64), 1);
+        assert_eq!(parallel_batch_size(5_000, 3, 8), 8);
+        assert_eq!(parallel_batch_size(1, 8, 8), 1);
+        assert_eq!(parallel_batch_size(0, 8, 8), 1);
     }
 
     #[test]

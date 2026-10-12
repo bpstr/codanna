@@ -194,6 +194,7 @@ impl SimpleSemanticSearch {
             eprintln!("Downloading embedding model '{model_name}' (first time only)...");
         }
 
+        crate::embedding_runtime::ensure_default_cpu_pool();
         let mut text_model = TextEmbedding::try_new(
             InitOptions::new(model)
                 .with_cache_dir(cache_dir)
@@ -1149,6 +1150,7 @@ impl SimpleSemanticSearch {
         if !metadata.is_remote() {
             let model = crate::vector::parse_embedding_model(&metadata.model_name)
                 .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+            crate::embedding_runtime::ensure_default_cpu_pool();
             let text_model = TextEmbedding::try_new(
                 InitOptions::new(model)
                     .with_cache_dir(crate::init::models_dir())
