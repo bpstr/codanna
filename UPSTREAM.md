@@ -5,23 +5,21 @@ The fork intentionally carries product-oriented workspace, retrieval, hardening,
 code-intelligence work beyond upstream. It is not expected to remain a small patch
 stack that can be merged wholesale.
 
-Last reviewed: 2026-09-28
+Last reviewed: 2026-10-12
 
 - Verified GitHub parent and source: `bartolli/codanna`
 - Verified fork/upstream default branches: `main` / `main`
-- Coverage window: 2026-09-21 through 2026-09-28 (UTC)
-- Initial fork base: `705f946982437941eb845d76c524129c868c151f`
-- Rechecked and integrated fork main: `f8018e78db3eb7058141e435a7f0c4f11bbb182e`
-- Publication-time fork main comparison: `3a61d25bdf63ba9a8de0504a33b75e26da0f52f3`
-- Inspected upstream main: `58295d290f70c2ca46a5ace48fe2aab8687d7d6e`
-- Previous upstream baseline: `12e823c4d965dc8269322869df760dd12d19e415`
-- Latest inspected release: v0.16.0; the 19 later upstream commits are unreleased.
+- Coverage window: 2026-10-05 07:59 through 2026-10-12 06:44 (UTC)
+- Inspected fork main: `f6923fbbb28b071118b9c9dcc2d2d09fd9166361`
+- Inspected upstream main: `639917d868eda7dc789774c9c9d69b3753dd1b75`
+- Previous upstream main: `58295d290f70c2ca46a5ace48fe2aab8687d7d6e`
+- Latest inspected upstream release: v0.17.1 (v0.17.0 and v0.17.1 published 2026-10-11)
+- Active fork PR checked: #91 at `fd778fb31a3e0a28fd3b04ec53199fb17f83f7f0`
 - Regression gateway: `tests/upstream_regressions.rs`
 
-These SHAs describe the upstream-review inputs. **THIS-PR** marks repairs delivered
-by [fork PR #84](https://github.com/bpstr/codanna/pull/84), merged on 2026-09-29 as
-`dacade8142cc009671ae21887818dc37a6080904`. Review/CI evidence remains scoped to
-its recorded head; the September 28 upstream review date has not been advanced.
+These SHAs describe the latest upstream-review inputs. Historical sections below
+retain earlier fork qualification evidence; current adaptations must not borrow
+those passes for new runtime changes.
 
 ## Policy
 
@@ -45,16 +43,17 @@ minimal regression and implementation required for that issue.
 
 | Upstream | Actual upstream status at review | Fork coverage and action |
 | --- | --- | --- |
-| [Named import identity](https://github.com/bartolli/codanna/commit/71b6cdb3100223108f19253fe4f6bc4fe32e5563) | On main; unreleased | **ALREADY-COVERED** by explicit imported-member identity and `tests/upstream/named_import_alias.rs`. Retain fork parser/resolver behavior. |
-| [Dangling relative import evidence](https://github.com/bartolli/codanna/commit/58295d290f70c2ca46a5ace48fe2aab8687d7d6e) | On main; unreleased; broader than proposal [PR #124](https://github.com/bartolli/codanna/pull/124) | **THIS-PR** adapts complete/partial file evidence, symbol-free files, same-directory stems, directory/index targets, and TS/JS redirection guards. Preserve explicit export slots/barrels. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/unresolved_import.rs`, `tests/web_export_regressions.rs`. |
-| [PR #125: full resolution cache](https://github.com/bartolli/codanna/pull/125) | Merged 2026-09-23; unreleased | **ALREADY-COVERED** by streamed symbol hydration. Keep `tests/upstream/relationship_cache_scale.rs`; its million-symbol witness is opt-in. |
+| [Named import identity](https://github.com/bartolli/codanna/commit/71b6cdb3100223108f19253fe4f6bc4fe32e5563) | Released in upstream v0.17.0 | **ALREADY-COVERED** by explicit imported-member identity and `tests/upstream/named_import_alias.rs`. Retain fork parser/resolver behavior. |
+| [Dangling relative import evidence](https://github.com/bartolli/codanna/commit/58295d290f70c2ca46a5ace48fe2aab8687d7d6e) | Released in upstream v0.17.0; broader than proposal [PR #124](https://github.com/bartolli/codanna/pull/124) | **THIS-PR** adapts complete/partial file evidence, symbol-free files, same-directory stems, directory/index targets, and TS/JS redirection guards. Preserve explicit export slots/barrels. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/unresolved_import.rs`, `tests/web_export_regressions.rs`. |
+| [PR #125: full resolution cache](https://github.com/bartolli/codanna/pull/125) | Released in upstream v0.17.0 | **ALREADY-COVERED** by streamed symbol hydration. Keep `tests/upstream/relationship_cache_scale.rs`; its million-symbol witness is opt-in. |
 | [PR #128: macOS watcher scaling](https://github.com/bartolli/codanna/pull/128) | Closed unmerged 2026-09-22; rewritten on main in `58dd51f` and `77222c6` | Recursive/batched registration already covered. **THIS-PR** selectively adds code-event admission without gating document/config handlers; helper regression in `src/watcher/unified.rs`. Native FSEvents validation remains distinct from Linux helper tests. |
-| [Config sync](https://github.com/bartolli/codanna/commit/f4ac575619f3323e3c9c687f85c602ba59407b4d) / [reload-root persistence](https://github.com/bartolli/codanna/commit/2857d7fd56653734c129320e00b46452f3e02830) | On main; unreleased | **THIS-PR** diffs an unrecorded root instead of forcing duplicate indexing and persists accepted roots without rewriting vectors. Live watcher catch-up already used incremental indexing. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/watcher_config_reload.rs`. September 29 fork repair also fingerprints effective TS/JS rules, reloads inherited config and rebinds config-only alias changes; `tests/index_lifecycle_regressions.rs` and the remediation receipt record local evidence. Upstream status was not rechecked for this repair. |
-| [Deferred writer failure](https://github.com/bartolli/codanna/commit/46f4bbfc16e413077cc61fe7b72e142d7fa77c0d) / [watcher propagation](https://github.com/bartolli/codanna/commit/c965e49c75cb7cedbe56fd1aecf487bc0a84d968) | On main; unreleased | **THIS-PR** retains one prepared wave and retries only before the first writer acquisition. Fork store/commit errors are not blindly replayable. Evidence: `src/watcher/deferred_code.rs`, `src/indexing/pipeline/stages/write.rs`, `tests/upstream/index_state.rs`. September 29 fork repair adds durable source-path obligations for crash recovery (emission v10); local lifecycle/crash evidence is in `contributing/release-results/2026-09-29-rc4-remediation.md`. Upstream status was not rechecked for this repair. |
-| [Reload serialization](https://github.com/bartolli/codanna/commit/3039c966e3d2f8bca6dbfa31485abb28a7c875c4) | On main; unreleased | **ALREADY-COVERED**: `src/watcher/hot_reload.rs` loads/publishes inside `runtime::mutate`. No mechanical port. |
-| [PR #131: buffered vector writes](https://github.com/bartolli/codanna/pull/131) | Merged 2026-09-23; unreleased | **ALREADY-COVERED** with stronger crash-ordering safeguards; retain `tests/vector_storage_batch.rs`. |
+| [Config sync](https://github.com/bartolli/codanna/commit/f4ac575619f3323e3c9c687f85c602ba59407b4d) / [reload-root persistence](https://github.com/bartolli/codanna/commit/2857d7fd56653734c129320e00b46452f3e02830) | Released in upstream v0.17.0 | **THIS-PR** diffs an unrecorded root instead of forcing duplicate indexing and persists accepted roots without rewriting vectors. Live watcher catch-up already used incremental indexing. Evidence: `tests/upstream/index_state.rs`, `tests/upstream/watcher_config_reload.rs`. September 29 fork repair also fingerprints effective TS/JS rules, reloads inherited config and rebinds config-only alias changes; `tests/index_lifecycle_regressions.rs` and the remediation receipt record local evidence. Upstream status was not rechecked for this repair. |
+| [Deferred writer failure](https://github.com/bartolli/codanna/commit/46f4bbfc16e413077cc61fe7b72e142d7fa77c0d) / [writer release](https://github.com/bartolli/codanna/commit/35684f117335b744b5a1bad49fa718bfd0e9a5c4) | Released in upstream v0.17.0 | Fork retry and durable source-path recovery remain stronger. **THIS-PR** additionally releases the Tantivy writer after every successful Phase 2 commit, opens no writer for empty resolved batches, and reacquires only for a later store. Evidence: `src/indexing/pipeline/stages/write.rs`, `tests/upstream/writer_lifecycle.rs`, and existing crash/retry fixtures. No emission/index format change or rebuild is required. |
+| [Reload serialization](https://github.com/bartolli/codanna/commit/3039c966e3d2f8bca6dbfa31485abb28a7c875c4) | Released in upstream v0.17.0 | **ALREADY-COVERED**: `src/watcher/hot_reload.rs` loads/publishes inside `runtime::mutate`. No mechanical port. |
+| [PR #131: buffered vector writes](https://github.com/bartolli/codanna/pull/131) | Released in upstream v0.17.0 | **ALREADY-COVERED** with stronger crash-ordering safeguards; retain `tests/vector_storage_batch.rs`. |
 | [PR #134: bursts and stdio shutdown](https://github.com/bartolli/codanna/pull/134) | Closed unmerged 2026-09-24; only nonblocking delivery adopted upstream | Preserve fork bounded queue and filesystem-truth reconciliation, not upstream's unbounded channel. **THIS-PR** adds a Phase-1/cancel/Phase-2 worker-ownership regression in `src/runtime.rs`. The 32-path notification threshold is unchanged; native transport/burst behavior still requires its own witness. |
-| [PR #137: unchanged watcher events](https://github.com/bartolli/codanna/pull/137) | Merged 2026-09-23; unreleased | **ALREADY-COVERED**: cached code observations skip vector persistence and notifications. Keep the private publication regression in `src/watcher/unified.rs`. |
+| [PR #137: unchanged watcher events](https://github.com/bartolli/codanna/pull/137) | Released in upstream v0.17.0 | **ALREADY-COVERED**: cached code observations skip vector persistence and notifications. Keep the private publication regression in `src/watcher/unified.rs`. |
+| [Issue #138: bounded local embedding resources](https://github.com/bartolli/codanna/issues/138) / [released fix](https://github.com/bartolli/codanna/commit/81b92f331bcce1189610e74d44394c96e411ede8) | Released in upstream v0.17.0 | **PARTIALLY-COVERED**: fork #87 already supplies a shared ORT pool and spin control, but only when explicitly configured; current local batches remain unsorted and can reach 64 inputs. A separate downstream adaptation should make the shared CPU pool the default and add length-aware batches while preserving fork ordering/cache identity. |
 
 ### Open fork work checked before adaptation
 

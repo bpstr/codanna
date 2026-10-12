@@ -19,3 +19,5 @@ mod relationship_cache_scale;
 
 #[path = "upstream/index_state.rs"]
 mod index_state;
+#[path = "upstream/writer_lifecycle.rs"]
+mod writer_lifecycle;
