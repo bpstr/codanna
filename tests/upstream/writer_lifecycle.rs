@@ -1,4 +1,5 @@
 //! Released upstream Phase 2 writer-lifecycle regressions adapted to the fork.
+//! Tracks bartolli/codanna@35684f117335b744b5a1bad49fa718bfd0e9a5c4.
 
 use codanna::indexing::{facade::IndexFacade, pipeline::PendingResolution};
 use codanna::{RelationKind, Settings, storage::DocumentIndex};
