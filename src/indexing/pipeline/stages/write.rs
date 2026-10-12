@@ -80,22 +80,15 @@ impl WriteStage {
 
     /// Write a batch of resolved relationships.
     ///
-    /// Accumulates in memory and commits when threshold reached.
+    /// Accumulates in memory and commits when threshold reached. The writer is
+    /// acquired only when a relationship is actually stored, so an empty batch
+    /// never creates a Tantivy writer.
     pub fn write(&mut self, batch: ResolvedBatch) -> crate::storage::StorageResult<WriteStats> {
         let mut stats = WriteStats::default();
-        self.ensure_batch_started()?;
         for resolved in batch.relationships {
-            let relationship = Relationship {
-                kind: resolved.kind,
-                weight: 1.0,
-                metadata: resolved.metadata.clone(),
-            };
-            self.index
-                .store_relationship(resolved.from_id, resolved.to_id, &relationship)?;
-            self.pending.push(resolved);
+            self.stage(resolved)?;
             stats.written += 1;
-            if self.pending.len() >= self.commit_threshold {
-                self.commit_internal()?;
+            if !self.batch_started {
                 stats.commits += 1;
             }
         }
@@ -107,7 +100,17 @@ impl WriteStage {
         &mut self,
         resolved: ResolvedRelationship,
     ) -> Result<(), crate::storage::StorageError> {
-        // Ensure batch is started
+        self.stage(resolved)?;
+        Ok(())
+    }
+
+    /// Acquire the writer, stage one relationship, and release it at the
+    /// commit threshold. A failed store or commit remains non-retryable once
+    /// this stage has acquired a writer; Drop rolls back any unfinished batch.
+    fn stage(
+        &mut self,
+        resolved: ResolvedRelationship,
+    ) -> Result<(), crate::storage::StorageError> {
         self.ensure_batch_started()?;
 
         let relationship = Relationship {
@@ -120,7 +123,6 @@ impl WriteStage {
             .store_relationship(resolved.from_id, resolved.to_id, &relationship)?;
         self.pending.push(resolved);
 
-        // Auto-commit when threshold reached
         if self.pending.len() >= self.commit_threshold {
             self.commit_internal()?;
         }
@@ -138,23 +140,24 @@ impl WriteStage {
         Ok(count)
     }
 
-    /// Internal commit - clears pending buffer and restarts batch.
+    /// Commit the active batch and release the writer. The next relationship
+    /// reacquires a fresh batch. With no batch open there is nothing to commit.
     fn commit_internal(&mut self) -> Result<(), crate::storage::StorageError> {
+        if !self.batch_started {
+            return Ok(());
+        }
         self.index.commit_batch()?;
         self.pending.clear();
         self.batch_started = false;
-        // Start new batch for subsequent writes. A failure here is not replayable.
-        self.ensure_batch_started()?;
         Ok(())
     }
 
-    /// Flush any remaining pending writes.
+    /// Flush any remaining pending writes and release the writer.
     ///
     /// Call at end of Phase 2 to ensure all relationships are committed.
     pub fn flush(&mut self) -> Result<WriteStats, crate::storage::StorageError> {
         let written = self.pending.len();
-        if written > 0 && self.batch_started {
-            // Commit without restarting batch (we're done)
+        if self.batch_started {
             self.index.commit_batch()?;
             self.pending.clear();
             self.batch_started = false;
@@ -269,13 +272,22 @@ mod tests {
         let settings = Settings::default();
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
 
-        let mut stage = WriteStage::new(index);
+        let mut stage = WriteStage::new(Arc::clone(&index));
         let batch = ResolvedBatch::new();
 
         let stats = stage.write(batch).unwrap();
+        let flushed = stage.flush().unwrap();
 
         assert_eq!(stats.written, 0);
         assert_eq!(stats.failed, 0);
+        assert_eq!(flushed.written, 0);
+        assert_eq!(flushed.commits, 0);
+
+        let other = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        other
+            .start_batch()
+            .expect("empty Phase 2 work must not leave the writer acquired");
+        other.rollback_batch().unwrap();
     }
 
     #[test]
@@ -358,5 +370,34 @@ mod tests {
         assert_eq!(flush_stats.written, 1);
         assert_eq!(flush_stats.commits, 1);
         assert_eq!(stage.pending_count(), 0);
+    }
+
+    #[test]
+    fn threshold_commit_reacquires_only_for_following_rows_and_flush_releases() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let mut stage = WriteStage::with_commit_threshold(Arc::clone(&index), 2);
+
+        let mut batch = ResolvedBatch::new();
+        batch.push(make_resolved(1, 2, RelationKind::Calls));
+        batch.push(make_resolved(2, 3, RelationKind::Defines));
+        batch.push(make_resolved(3, 4, RelationKind::Calls));
+
+        let stats = stage.write(batch).unwrap();
+        assert_eq!(stats.written, 3);
+        assert_eq!(stats.commits, 1);
+        assert_eq!(stage.pending_count(), 1);
+
+        let flushed = stage.flush().unwrap();
+        assert_eq!(flushed.written, 1);
+        assert_eq!(flushed.commits, 1);
+        assert_eq!(index.count_relationships().unwrap(), 3);
+
+        let other = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        other
+            .start_batch()
+            .expect("flush must release the Phase 2 writer");
+        other.rollback_batch().unwrap();
     }
 }
