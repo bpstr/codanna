@@ -71,16 +71,30 @@ impl MockModel {
             calls: Arc::new(AtomicUsize::new(0)),
         }
     }
+
+    fn take_failure(&self) -> bool {
+        let mut remaining = self.fail_calls.load(Ordering::SeqCst);
+        loop {
+            if remaining == 0 {
+                return false;
+            }
+            match self.fail_calls.compare_exchange_weak(
+                remaining,
+                remaining - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => remaining = actual,
+            }
+        }
+    }
 }
 
 impl EmbeddingGenerator for MockModel {
     fn generate_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         self.calls.fetch_add(texts.len(), Ordering::SeqCst);
-        if self
-            .fail_calls
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok()
-        {
+        if self.take_failure() {
             return Err(VectorError::EmbeddingFailed(
                 "deterministic fixture failure".into(),
             ));
